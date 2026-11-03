@@ -1,0 +1,31 @@
+{
+  "format": "kanamemory-build-environment-v1",
+  "host": {
+    "platform": "win32",
+    "machine": "amd64",
+    "python": "3.13.16",
+    "bootstrap_uv": "0.13.0",
+    "lock": "environment/windows-py313.lock.txt",
+    "direct_requirements": ["environment/requirements-public.txt", "environment/requirements-quality.txt"]
+  },
+  "android": {
+    "python_lock": "environment/android-runtime.lock.txt",
+    "qa_extra": {"tzdata": "2026.5"},
+    "template": "https://github.com/beeware/briefcase-android-gradle-template.git",
+    "template_commit": "32244ad8bd608cc451f05718d07f2e3429541333",
+    "template_format": "0.3.27",
+    "gradle": "9.5.0",
+    "agp": "9.3.1",
+    "chaquopy": "17.0.0",
+    "python_series": "3.13",
+    "python_target_observed": "3.13.9-0",
+    "min_sdk": 26,
+    "compile_sdk": 36,
+    "target_sdk": 36,
+    "abis": ["arm64-v8a", "x86_64"],
+    "java_dependencies": ["androidx.appcompat:appcompat:1.7.1", "com.google.android.material:material:1.13.0", "com.google.mlkit:digital-ink-recognition:19.0.0"],
+    "sdk_packages": {"build-tools;36.0.0": "36.0.0", "platforms;android-36": "2.0.0", "platform-tools": "37.0.1"},
+    "jdk_pe_version": "17.0.17.0",
+    "evidence_limits": ["JDK release/build suffix unavailable in current cache; PE version checked by Windows runner", "cmdline-tools/19.0 has no package metadata; not claimed as a verified version", "target runtime observed in fixed Chaquopy cache, separate from host Python", "template cache has only a missing empty pip-options.txt; clean pinned template is canonical"]
+  }
+}

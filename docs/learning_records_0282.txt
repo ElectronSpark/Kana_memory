@@ -1,0 +1,75 @@
+Learning records, 0.28.2
+=======================
+
+One current format
+------------------
+Runtime storage remains the private progress.sqlite3 database. A single
+learner_record_meta.schema_version = 1 gates its current structure. Content
+packs, feedback, handwriting models and secure API credentials remain separate.
+docs/progress_schema.sql documents the app-owned empty schema.
+
+The primary memory units and their existing identities are retained: kana
+ability/script cards and course learning units. Vocabulary exercises used only
+to reinforce kana still contribute evidence rather than creating word cards.
+Review events retain the observed answer, assistance, rating and before/after
+scheduler states. Evidence, contextual error patterns and AI tutoring history
+remain linked by their existing identifiers. This storage change does not
+replace the scheduling algorithm or reinterpret past answers.
+
+Sessions now store their questions individually in session_question, keyed by
+(session_id, question_index). Frozen question snapshots and ordinals preserve
+the relationship to answers and checkpoints. The old session-wide JSON array
+is physically removed. An append or changed question no longer requires
+rewriting every other question. The current draft, due times and unfinished
+queues keep their existing meaning.
+
+Export always uses kanamemory-learning-records version 1: UTF-8 JSON lines,
+one app-owned table manifest, compressed bounded blocks with SHA-256 checks,
+and a final whole-payload/count check. There is no small/large format switch.
+The current file limit is 64 MiB compressed; expanded staging is bounded to
+1 GiB on disk, with a separate row size/count bound. Import never executes
+input SQL. It checks types before SQLite coercion, schemas, references and
+saved evidence consistency before touching live records. Hashes detect
+corruption; they are not encryption or proof of who produced a file.
+
+One-way transition
+------------------
+Opening an existing local database creates a private recovery copy, then
+transactionally splits the old question arrays and rebuilds the parent table.
+Foreign-key and ordinal checks run before commit. An error leaves the prior
+database intact. A subsequent startup uses only the current structure.
+The recovery copy is for rollback, not a second writable record system.
+
+设置 > 学习数据 > 转换旧版学习记录
+(Settings > Learning data > Convert old learning records) reads an
+old export, validates and converts it in a worker, and saves a new export.
+It does not replace current learning records. Restoring an old file invokes
+the same converter, previews the result and still requires restore confirmation.
+Restore is atomic, retains a previous-state recovery export, and supports
+cancellation before commit. Conversion has no effect on the input file.
+
+Old plain/envelope/stream readers are isolated in legacy_record_conversion
+and the two legacy decoder modules. They are read-only import tools; the
+normal export, restore validator and learning runtime use only the current
+format. No old writers, schema compatibility views or dual writes remain.
+Unknown newer versions are rejected instead of guessed. Retiring the converter
+later requires no change to ordinary learning operations.
+
+Validation and privacy
+----------------------
+Validate local database upgrade and file conversion against the same baseline:
+all existing non-session rows, question objects/order, drafts,
+due dates, repeated reopen/restore, and failure/cancellation rollback.
+Never regrade historical answers using a later answer checker. Strict field
+and cross-record consistency checks remain required.
+Current snapshots and old snapshots stored as JSON strings retain their raw
+object text. Legacy versions 2-9 stored parsed question lists; conversion
+preserves every object field but does not promise original JSON spacing.
+
+User-provided records are private test inputs, excluded from source exports
+and artifact repositories. Public verification reports contain only aggregate
+counts and invariants. Emulator testing uses synthetic records only.
+
+SQLite migration and backup references:
+https://www.sqlite.org/lang_altertable.html
+https://www.sqlite.org/backup.html

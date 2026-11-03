@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.test_runs/
+*.pyc
+app/src/kanamemory/resources/
+environment/artifacts/
+*.apk
+*.aab
+.env*
+*.keystore
+*.jks

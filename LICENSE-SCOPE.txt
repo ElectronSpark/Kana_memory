@@ -1,0 +1,25 @@
+KanaMemory license scope
+
+The MIT license in LICENSE covers the current KanaMemory application code,
+project-authored build tools and documentation in the clean source distribution,
+and the original demonstration material in demo/content.json. Copyright (c) 2026
+KanaMemory contributors. Keep the copyright and permission notice when copying
+or distributing these materials.
+
+Third-party libraries, Android components, fonts, models and other dependencies
+remain subject to their respective licenses and notices. Including a dependency
+in a build does not change its license to MIT.
+
+The separate personal content package, dictionaries, example corpora, research
+sources, imported media and derived third-party material are not covered by this
+MIT grant. Follow each content package's NOTICE and the applicable source license.
+An unclear or personal-use-only permission remains restricted; technical access
+to a file is not a public redistribution permission.
+
+This license does not retroactively relicense third-party corpus material that
+appeared in earlier repository history or earlier packages. Publish the clean
+allowlisted source export without that history. The original demo and the
+separate personal content package must not be represented as the same corpus.
+
+Personal learning records, saved drafts and API credentials are not source or
+demo content and are excluded from the distribution.

@@ -1,0 +1,80 @@
+Declared build environment
+
+Scope
+Windows x86-64, CPython 3.13.16, Briefcase 0.4.5 and the Android arm64-v8a/x86_64
+targets are the declared engineering target. config/build_environment.json is
+the machine-readable contract. Other operating systems are not implicitly
+covered. No dependency versions were upgraded by E7.
+
+Python recreation
+environment/windows-py313.lock.txt pins the complete current Windows package
+set, including public, build and quality dependencies. The two requirements
+files describe their direct purposes; check_python rejects missing/drifted pins.
+In a fresh source tree, select an existing bootstrap Python explicitly:
+
+  .\environment\bootstrap_windows.ps1 -BootstrapPython (Get-Command python).Source -ToolRoot C:\km-python
+  .\.venv\Scripts\python.exe -X utf8 tools\build_environment.py --host
+  .\.venv\Scripts\python.exe -m pip check
+
+The bootstrap uses uv 0.13.0, installs CPython 3.13.16 in the chosen ASCII path,
+and syncs only the project .venv. It refuses to replace an existing interpreter
+with a different version or base path; use the same ToolRoot when reusing it.
+No system Python, PATH, registry or Java installation is changed.
+Alternatively create an isolated venv with CPython 3.13.16 and install the full
+lock file. Do not use only the two direct requirements files for a declared
+rebuild. Extra developer packages are not implicitly part of this contract.
+
+Android recreation and verification
+Use an explicit short ASCII ToolchainRoot with each run_app/build_public_app
+stage. create uses the pinned template Git URL, commit and template_hash in
+app/pyproject.toml. The canonical template is the clean commit
+32244ad8bd608cc451f05718d07f2e3429541333 (format 0.3.27). An observed existing
+cache lacks the template's empty pip-options.txt; this is not a required patch
+or a claim that the cache is clean. Do not copy that local deletion into source.
+
+Generated projects must use Gradle 9.5.0, AGP 9.3.1 and Chaquopy 17.0.0; SDK
+min/compile/target are 26/36/36. Runtime Python packages, including their current
+transitive packages, are pinned in environment/android-runtime.lock.txt and
+app/pyproject.toml. QA alone adds tzdata 2026.5. The observed Android target is
+3.13.9-0 under Chaquopy, distinct from the host's Python 3.13.16.
+
+The prepared toolchain needs these SDK packages at their declared revisions:
+  build-tools;36.0.0       36.0.0
+  platforms;android-36    revision 2
+  platform-tools         37.0.1
+It also needs Eclipse Adoptium Java 17 at briefcase/tools/java17, whose Windows
+java.exe FileVersion is 17.0.17.0. The runner selects this private Java path for
+the command and restores JAVA_HOME afterwards. It does not install a system JDK.
+The existing JDK lacks its release file, so the exact build suffix is unverified.
+cmdline-tools/19.0 has no package metadata; the directory name is not evidence
+of a verified tool version. Neither is silently reported as a complete lock.
+
+Briefcase can prepare missing tools during create. Afterwards verify the SDK
+package.xml files against the contract; use the declared packages from the
+Android/Adoptium distributions or a previously verified toolchain snapshot.
+If the upstream installer now supplies different versions, preparation is not
+complete: provide the declared versions or explicitly review a contract update.
+The runner does not silently accept newer tools, rewrite caches or erase them.
+
+  .\.venv\Scripts\python.exe -X utf8 tools\build_environment.py --host --android-project C:\km\app\build\kanamemory\android\gradle --sdk-root C:\km\briefcase\tools\android_sdk
+
+Replace app with app-public or app-qa for those generated targets. build and
+package verify generated settings, SDK revisions and Java metadata before
+invoking Gradle. create checks generated settings. Public and QA exports carry
+the same checker, config and locks. A clean demo needs only its original demo
+pack; no private course, learning data, credential or developer path is required.
+
+Reproducibility limit
+These are declared versions, checked inputs and rebuild instructions, not a
+claim of bit-identical APKs or mirrored upstream repositories. Signing keys,
+timestamps and dependency-download availability remain external inputs.
+Known metadata limitations above remain explicit. Record source/content hashes
+and actual checks for each build; old successful logs are historical evidence,
+not validation of new source. E8 performs fresh-Python/demo and APK acceptance.
+
+References checked 2026-11-03
+Briefcase configuration (template_branch/template_hash), also checked against
+the installed 0.4.5 config.py and commands/create.py:
+https://briefcase.beeware.org/en/latest/reference/configuration/
+Android Gradle project configuration:
+https://briefcase.beeware.org/en/v0.4.0/reference/platforms/android/gradle/

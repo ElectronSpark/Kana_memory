@@ -1,0 +1,43 @@
+[tool.briefcase]
+project_name = "Kana Memory"
+bundle = "org.example.demo"
+version = "0.28.5"
+url = "https://example.org/kana-memory"
+license = "MIT"
+author = "Kana Memory personal project"
+author_email = "local@example.org"
+
+[tool.briefcase.app.kanamemory]
+formal_name = "KanaMemoryDemo"
+description = "Kana study with handwriting recognition and spaced repetition"
+sources = ["src/kanamemory"]
+requires = ["fsrs==6.3.2"]
+
+[tool.briefcase.app.kanamemory.android]
+requires = ["toga-android==0.5.7", "toga-core==0.5.7", "travertino==0.5.7", "typing-extensions==4.16.0"]
+template = "https://github.com/beeware/briefcase-android-gradle-template.git"
+template_branch = "32244ad8bd608cc451f05718d07f2e3429541333"
+template_hash = "sha1:32244ad8bd608cc451f05718d07f2e3429541333"
+min_os_version = "26"
+target_os_version = "36"
+android_abis = ["arm64-v8a", "x86_64"]
+base_theme = "Theme.MaterialComponents.Light.NoActionBar"
+android_manifest_extra_content = '''
+<queries>
+    <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+</queries>
+'''
+build_gradle_dependencies = [
+    "com.google.android.material:material:1.13.0",
+    "com.google.mlkit:digital-ink-recognition:19.0.0",
+]
+build_gradle_extra_content = '''
+chaquopy {
+    defaultConfig {
+        buildPython System.getenv("KANA_BUILD_PYTHON")
+    }
+}
+'''
+
+[tool.briefcase.app.kanamemory.windows]
+requires = ["toga-winforms==0.5.7"]

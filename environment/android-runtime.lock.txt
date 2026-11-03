@@ -1,0 +1,6 @@
+# Android Python packages, current two ABIs; desktop/build tools are excluded.
+fsrs==6.3.2
+toga-android==0.5.7
+toga-core==0.5.7
+travertino==0.5.7
+typing-extensions==4.16.0

@@ -1,0 +1,130 @@
+KanaMemory 工程结构与依赖契约
+版本15；2026-11-03；0.28.5反馈及结构修复；具体验证/交付以feedback_structure_fixes_20261103.txt为准。
+
+0.28.5新增职责 [I；有限验证见上文报告]
+- feedback_export_worker拥有导出准备/归档线程和独立Store连接。UI仅交付不可变载荷，
+  成功后传原回执验证归档；取消等待连接关闭。选择查询归FeedbackStore，不在页面写SQL。
+- course_planning是只读候选规划，显式查询/进度/偏好输入和具名输出；UI只装配、按需
+  物化和提交。practice_preferences是纯归一化，不导入App，也不接管会话队列策略。
+- word_blocks是纯草稿提案，调用方先保存后更新控件；answer_result_ui仅共享展示。
+- learning_dispatch_types与FinishCallback明确内存协议，不是新的数据格式或业务层。
+- material_request_outcome仅安全记录失败/刷新；预算仍由材料用例结算。provider授权
+  显式绑定且一实例一请求，错误响应usage也必须可结算。
+- adaptive_evidence仅折叠已规范化的有序事件；domain保留持久化校验/排序/cache，
+  完整回放独立作oracle，不能为去重而让两路共用同一折叠实现。
+
+导航增量[I；验证范围见docs/detail_return_20261103.txt]：learning_feedback_detail
+是DETAIL_PAGES中的独立页，以page_view保存来源PageState。返回只恢复原结果，
+不调用continue_learning/current/submit/finalize。页内返回与系统/标题返回统一go_back。
+结果及详情PAGE_BINDINGS保留题目、作答状态和结果展示模型；反馈证据含目标项与冻结答案。
+未核验材料使用同一路由及返回策略。学习提示/首次接续说明不受此增量影响。
+
+01 权威与验证状态
+本文件是现行设计规范的工程结构章节，细化01的模块职责，不替代02—04的产品、
+调度、数据和AI合同。I=生产已接入；V=所列版本和范围已验证；U=证据不足；P=提案。
+实现与验证独立。阶段记录中的数量是各次范围，存在重叠，不能相加当独立测试总数。
+开发工作树的执行入口：docs/engineering_goal_20261102.txt、config/engineering_debt_20261102.json。
+公开源码不携带私人目标、语料和完整阶段报告；以下通用工程约束仍须遵守。
+
+02 目录与依赖 [I；有限V见阶段及E8记录]
+保留app/src/kanamemory包布局。app/pyproject.toml维护Briefcase产品配置；根pyproject.toml
+和pytest.ini维护开发工具。内容包只有语料/媒体；个人学习数据库、草稿和凭证留在用户区。
+
+  app启动/装配 -> 页面及流程协调 -> 纯规则/展示模型
+                              -> 用例服务 -> 查询接口/写事务服务
+                              -> 平台接口
+  页面 -> UI基础组件 -> Toga、字体及布局适配
+
+app.py负责启动、服务装配和页面协调。新纯规则、展示模型、基础组件不得反向导入App。
+纯规则不依赖Toga、SQLite、平台或网络。优先已有明确接口，不增加只有转发作用的层。
+domain.py仍混合类型、规划和存储，不冒称已整体拆成纯领域层；保留的启动/政策边有逐项责任。
+不按文件行数拆文件，不新增任意Mixin，也不为了形式统一改动既有业务合同。
+
+03 UI、查询、事务及资源所有权 [I]
+- ui_theme.py：六个主题常量。ui_components.py：八个无状态控件构造及组合器命名空间。
+  App/页面统一模块属性查找，handler由调用方提供；基础组件不持有会话、不揭晓、不写进度。
+  answer_hint属于答题协调层；lesson_diagram_ui自己拥有画布。App旧控件别名只供历史维护工具。
+- StudyPathSelection/NodeSelectionStatus为纯选择模型；study_path_ui离屏构造树。
+  选择计算与绘制分离，提交复核最新数据，不把展示快照当写权限。
+- StudyStore.queries与LearningStore.queries提供具名StudyQueries读投影；TeachingQueries
+  提供首次教学证据。连接仍由原Store拥有，reader不开连接、不缓存、不创建事务。
+  在已有写事务中调用仍观察同一连接未提交行，不以通用DAO拆散跨表操作。
+  题型、能力、业务时间显式传入。页面不取得任意SQL执行通道或新增_db/_pending访问。
+- StudyStore/LearningStore保留正式写事务、评分和队列所有权；业务时间用app_clock。
+  iter_pending_questions保留原完整行过滤和顺序，_pending仅作内部兼容代理。
+  pending_course_headers保留诊断预约；session_question_headers含已完成前缀身份，不能混用。
+  read_revision/in_transaction封装连接状态；MaterialWorkflow.budget和个人版本服务负责本域查询。
+- StudyPathService.read_operation在一次同步动作内复用目录状态、惰性主队列及业务时刻；
+  这是有明确生命周期的读取上下文，不是数据库原子快照，也不是长期缓存。
+  上下文退出即失效；新动作重读设置、内容、队列。add_entries独立重查后提交。
+  counts题面逐行按需解码一次，空目标不规划，已知空队列不重复读。
+  原snapshot双会话缓存及revision/data_version/外部竞争检查保持不变。
+- practice_worker/backup_worker各在线程内独立创建、关闭SQLite连接。
+  取消后旧结果不能覆盖新请求；backup取消须等待回滚/提交及连接关闭。
+  后台结果应用前检查请求/页面身份，不跨线程复用控件，不无依据增加线程或常驻缓存。
+
+04 页面恢复与错误边界 [I]
+page_restore.py只共享bindings、原控件挂载和token保护的延后滚动，不依赖App、存储或网络。
+普通返回和反馈返回各保留标题/chrome/token、assisted、曝光、lane、内容版本、诊断重建、
+计时补偿及队列政策。refresh_return先于旧控件挂载；普通checkpoint/清笔画不能误入反馈返回。
+feedback_context对真实Pack从margin读取旧padding字段，保留版本1反馈格式和还原信息。
+
+diagnostic_events.py只记录操作码、阶段、异常类别、首次/末次时间和次数；进程内最多64种
+事件、每种计数9999。返回副本，不持久化，不接收密钥、路径、正文、回答、提示词或堆栈。
+自身失败不能掩盖原操作。用户主动记录的完整反馈另有合同，不能因日志脱敏而丢失还原信息。
+request_outcome.py协调一次可选生成及finish，区分请求/保存/取消/二次落盘失败；不重发，
+不管理数据库、权限或UI。控制器各自保留有效性、曝光、计时和清理政策。
+提交成功与显示成功分开，刷新失败不能声称保存失败，不能靠重复提交修复UI。
+取消尝试结算自己拥有的attempt；落盘失败记录有限诊断并保留恢复路径，不冒称成功。
+原生可选日志失败不得阻止播放或结算。
+
+05 测试与构建 [I]
+共享控件、fixture和合成场景放tests/support；fake_ui不导入App，app_fixtures及
+learning_fixtures维护替身、时钟及Store生命周期。消费者显式导入，不设全局autouse。
+历史维护工具的必要兼容导入保留；新测试禁止test模块互导或逐文件改写sys.path。
+pytest.ini统一app/src/tests/tools/environment；支持默认prepend，不强制importlib模式。
+
+config/build_environment.json及tools/build_environment.py声明Windows CPython3.13.16/AMD64
+和Android双ABI现用环境。Windows完整锁、Android运行锁、公共/个人/QA声明必须一致。
+runner限定当前进程的JDK/SDK并还原；生成依赖不符则拒绝打包，不默默升级运行版本。
+详见docs/build-environment.txt。公开源码带锁、bootstrap和原创demo，按显式清单导出，
+禁止携带私用课程、旧Git历史、凭证或学习数据；MIT范围以LICENSE-SCOPE.txt为准。
+
+统一有限入口：python -X utf8 tools/check_python.py。
+tools/run_evidence.py登记来源/输入指纹、命令结果及选定输出；未知来源明确未知。
+新输出放.test_runs。历史归档只冻结一次清单，显式复制校验，不删除源、不自动扩大范围，
+不把关联实施提交冒称历史运行HEAD。不要全量暂存environment或把合成数据库混入产物。
+
+06 不变项与自动守卫 [I；V以实际报告为准]
+重构不得改变学习/能力ID、记录格式、正式历史、题面、草稿、排序、到期、评分幂等、题型开关、
+防泄题、导航、权限或迁移语义。正式事务不得部分写入，旧回调不得重复评分。
+页面浏览曝光与正式评分/队列变化分开比较；课程追加保留未完成题目，前置不重复、不提前解锁。
+FSRS参数与辅助证据权重不属于工程重构范围。
+
+tools/check_architecture.py和architecture_policy.json按文件、作用域、符号/访问形态及次数
+拒绝新增违例和陈旧豁免，忽略行号变化。覆盖直接导入及常量动态导入，不声称拦截任意动态代码。
+豁免需owner/reason/evidence/exit_condition，不整文件放行；migration_debt不算关闭。
+当前受控私有访问属于持久化所有者，不是页面新增_db/_pending的先例。
+新增模块同时更新结构规范、相应正负例及tools/public_source_files.txt。
+
+验证分层：增量相关轻量测试→阶段契约→有限原生与分发。fake UI不证明原生排版或性能；
+测试收集不等于执行；CI配置不等于远端通过；APK静态对齐不证明16KB设备实测。
+原生由显式6.1 Sol在隔离合成数据执行，构建与模拟器串行、会话有界。没有证据不写V。
+新发现单列，不自动扩展固定目标；本轮引入的回归必须修复。
+
+07 实施与证据入口
+E1：1209测试支撑调用逐项处置，1010互导/193路径迁移、6工具导入保留；原10423节点保持。
+E2：54个冻结调用点中42迁移、1无用导入移除、11保留；11处对应12条具体启动/政策符号边。
+组件/主题与答题协调分开。
+E3：77数据库读取及2外部pending访问迁移；620持久化访问和1内部pending保留责任。
+E4：三种固定输入完整结果/数据库不变，查询26→16、43→23、834→814；不据此推断手机耗时。
+E5：机械恢复共享、政策分别保留；反馈格式不改。
+E6：187宽异常逐点处置，134保留责任、53修复。
+E7：320文件干净导出，新环境64依赖、独立120检查；历史选定36证据及索引校验归档。
+具体实施提交、实际运行范围、失败修复见docs/engineering_E1_20261103.txt至E7记录，
+逐点清单见config/engineering_e1/e2/e3/e6_dispositions.json（文件名分别展开）。
+E8当前最终候选及有限验证状态见docs/engineering_E8_20261103.txt、README和任务JSON。
+
+python-engineering.txt定义日常原则；本文件取代本章节旧版本中的目标/迁移叙述，定义当前结构。
+python-refactor-20261102.txt和E1—E7记录保留历史过程；01—06中旧版本/目标仍属历史证据。
+原四年模拟与旧G/A/M/F计划保持暂停；工程目标完成不意味着那些旧验收已经完成。

@@ -1,0 +1,75 @@
+Python 工程维护规范
+
+用途
+具体模块所有权及目标依赖方向见docs/design_current/07_engineering_structure.txt。
+开发工作树的工程债任务见config/engineering_debt_20261102.json；代理维护入口为AGENTS.md。
+这是 App 代码的维护约束，补充现有产品、调度、数据和 AI 设计规范，不替代它们。
+适用 Python 3.13、Briefcase/Toga 现有构建。包目录保持 app/src/kanamemory；
+Android/桌面配置仍在 app/pyproject.toml，根 pyproject.toml 只配置开发工具。
+不为 Android App 强行引入 PyPI wheel 发布流程。
+
+准则
+1. 保持行为和数据契约。学习 ID、到期时间、未完成题目、草稿及事务边界优先于代码简短。
+2. 纯计算不依赖原生控件、网络或全局 App。视图接收计算结果，存储层负责事务与持久化。
+   在新边界写明输入、输出与副作用；优先小函数、明确数据对象与局部类型注解。
+3. 在调用处可理解依赖。避免新增反向导入整个 app.py、跨层使用 _db 或动态挂载方法；
+   现有耦合通过表征测试逐模块迁移，不一次改名/搬目录。
+4. 配置及依赖可重复。直接依赖统一维护，平台锁有明确适用范围；开发检查不进入 APK。
+5. 测试可单独运行。纯函数、集成、原生和长期模拟分层，不能用 fake UI 宣称原生性能。
+6. 测量再优化。界面离屏组装、批量挂载，避免 UI 线程循环触发整页布局。
+   缓存必须明确失效条件；展示快照不能成为提交权限或永不过期的调度状态。
+7. 有用的异常与诊断。只在能恢复的边界捕获；不可静默吞掉事务失败。
+   日志不得包含密钥、原始私用语料、用户回答正文；已有容错不能机械删除。
+   使用diagnostic_events记录允许字段；原操作不能依赖记录成功。请求/落盘/刷新
+   分开处理，取消需结束自己拥有的持久请求；UI清理仍要核对原页面和请求身份。
+   request_outcome只负责单次可选请求及结果，不自动重发，不接管权限或评分。
+8. 工具服务于可读性。PEP 8 强调一致性和可读性，不应为了格式破坏兼容性。
+   禁止一次全仓自动格式化掩盖逻辑变化，也不靠成百上千条忽略制造“全绿”。
+
+标准入口（仓库根目录）
+  python -m pip install -r environment/requirements-public.txt -r environment/requirements-quality.txt
+  python -X utf8 tools/check_python.py
+  python -X utf8 -m pytest tests/test_study_path_selection.py -q
+
+已有 .venv 时用其 python。根 pytest.ini 设置 app/src、tests、tools、environment 搜索路径；
+无需手动设置 PYTHONPATH。共享fixture/helper已迁到tests/support，消费者显式导入；
+保留pytest默认prepend模式，不引入无需求的导入模式变更。原test模块的显式兼容导入
+只供历史维护工具使用，新测试禁止反向依赖它们。
+不同时维护 app 子目录的另一份 pytest 配置；禁止测试逐文件改写sys.path（含切片赋值）。
+
+检查层次
+- check_python.py：Ruff 确定性错误检查（E9/F63/F7/F82）覆盖引擎、tools、tests；
+  接着检查AST依赖边界，再运行架构守卫、时钟、树选择、公开demo的有限测试。无模拟器、无 API、无长期模拟。
+- 变更影响测试：对受影响 UI、业务、队列、备份等运行现有契约测试与新增回归。
+- 原生验证：隔离 QA 包、合成记录、有限场景、明确终止时间；测量调用数和耗时。
+- 长期模拟：独立授权和预算，不得由普通质量入口或 CI 隐式恢复。
+新增纯模块宜采用类型注解，格式可用 Ruff；仓库尚未达到全量严格类型检查标准。
+Windows完整依赖锁为environment/windows-py313.lock.txt，公开源码也携带该锁和
+bootstrap入口。直接requirements描述用途；build_environment检查两者与Android
+运行依赖及模板的一致性。版本/重建方法和证据限制见docs/build-environment.txt。
+只声明Windows/Python3.13.16及现有Android双ABI，不宣称跨平台相同。本轮不升级Toga/FSRS。
+requirements-quality.txt 显式保留 Windows 时钟测试所需 tzdata，不依赖构建工具间接安装。
+
+分发与测试输出
+tools/public_source_files.txt 仍为显式审查清单。新增生产 Python 模块必须更新清单；
+导出前验证完整引擎，缺少任一模块则失败，不自动公开尚未审查文件。
+公开版本只带原创 demo；CI 使用公开材料。语料、密钥、个人数据库和 Git 历史不导出。
+新增临时运行目录使用 .test_runs/<任务>/<轮次>；报告按已选文件归档，不 git add .。
+本规范不授权删除旧证据，不自动安装 Git hooks，也不执行远端发布。
+
+参考与取舍（2026-11-02 查阅，主分支可能继续变化）
+PEP 8：https://peps.python.org/pep-0008/
+PyPA src 布局：https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/
+pytest：https://docs.pytest.org/en/stable/explanation/goodpractices.html
+Ruff：https://docs.astral.sh/ruff/configuration/
+Flask：https://github.com/pallets/flask/blob/main/pyproject.toml
+  开发/测试/类型/文档依赖分组，分层检查；源码 app 继承 sansio.App，分离框架适配。
+  https://github.com/pallets/flask/blob/main/src/flask/app.py
+HTTPX：https://github.com/encode/httpx/blob/master/pyproject.toml
+  可选依赖、严格类型、显式网络测试；传输接口独立，具备资源关闭契约。
+  https://github.com/encode/httpx/blob/master/httpx/_transports/base.py
+Toga：https://github.com/beeware/toga/blob/main/pyproject.toml
+  平台适配与核心分开，平台例外有说明；dummy 后端记录操作用于可控测试。
+  https://github.com/beeware/toga/blob/main/core/src/toga/widgets/button.py
+  https://github.com/beeware/toga/blob/main/dummy/src/toga_dummy/widgets/button.py
+这些项目没有唯一相同的目录结构；借鉴的是接口、自动检查与资源责任，而非照搬框架。

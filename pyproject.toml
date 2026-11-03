@@ -1,0 +1,10 @@
+# Developer tools only. Android/desktop packaging stays in app/pyproject.toml.
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["app/src"]
+extend-exclude = ["environment", "research", ".test*", "app/src/kanamemory/resources"]
+
+[tool.ruff.lint]
+# Repository-wide correctness gate; do not bury existing style debt in noqa.
+select = ["E9", "F63", "F7", "F82"]

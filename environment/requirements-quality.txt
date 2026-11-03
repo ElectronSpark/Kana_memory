@@ -1,0 +1,4 @@
+# Separate from Android runtime/build dependencies; no runtime upgrades.
+ruff==0.14.3
+# Explicit IANA data for clock tests on Windows (not an APK dependency).
+tzdata==2026.5

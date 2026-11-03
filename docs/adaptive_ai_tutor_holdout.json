@@ -1,0 +1,125 @@
+{
+  "format": "kanamemory-adaptive-ai-tutor-evaluation",
+  "version": 1,
+  "created_at": "2026-10-29",
+  "license": "MIT",
+  "authorship": "Project-authored synthetic holdout tasks; no private corpus or learner data.",
+  "status": "preregistered_unrun",
+  "fixture_revision": 1,
+  "wire_protocol": {"format": "kanamemory-tutor-request", "version": 1},
+  "purpose": "New topics after prompt changes; keep separate from the 18 development cases and any diagnostic retries.",
+  "instructions_for_evaluator": {
+    "model_input_fields": ["intent", "context", "message"],
+    "withhold_fields": ["rubric", "topic"],
+    "judgments": ["pass", "fail", "needs_review", "not_exercised"],
+    "method": "Read actual outputs independently against these fixed checks. Structure-only validation is not semantic validation. Model self-grades are not accepted.",
+    "critical_failure_policy": "Any critical failed check fails the case; report missing or rejected responses separately.",
+    "global_checks": ["Explanations are concise Simplified Chinese; Japanese examples may remain Japanese.", "No unsupported readings or pitch numbers.", "No model-owned enrollment, scoring or scheduling changes."],
+    "coverage": {"next_generate": 2, "ask_or_explain": 2}
+  },
+  "cases": [
+    {
+      "id": "holdout_made_deadline_01",
+      "topic": "まで与までに：持续终点与完成期限",
+      "intent": "next",
+      "message": "生成一道grammar_meaning选择题，区分持续到某时与最迟在某时完成。用户把まで和までに混淆。题干给清楚的日文场景，选项为简短中文含义；只能一项符合可见意思，不在题干直接写中文答案。使用下面的基础词和表达即可。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [{"id": "holdout_time_deadline", "revision": "holdout-v1", "family": "grammar", "title": "まで与までに", "rule": "まで可标示持续动作的终点；までに可标示动作完成的期限。五時まで働きます表示工作持续至五点；五時までに仕事を終えます表示最迟五点完成工作。", "abilities": ["understanding"], "allowed_kinds": ["grammar_meaning"], "familiarity": 0.25}],
+          "background": [
+            {"id": "holdout_five", "revision": "holdout-v1", "family": "word", "title": "五時", "meaning": "五点", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.9},
+            {"id": "holdout_work", "revision": "holdout-v1", "family": "word", "title": "仕事を終える", "meaning": "完成工作", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.9},
+            {"id": "holdout_working", "revision": "holdout-v1", "family": "word", "title": "働く", "meaning": "工作", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.9}
+          ]
+        },
+        "target": {"id": "holdout_time_deadline", "revision": "holdout-v1", "family": "grammar", "title": "まで与までに", "instruction": {"rule": "まで：持续终点；までに：完成期限。完成期限允许提前完成，不要求恰好在该时刻完成。", "example": "五時までに仕事を終えます。", "translation": "最迟五点完成工作。"}},
+        "question": null,
+        "recent": [{"target_id": "holdout_time_deadline", "kind": "grammar_meaning", "outcome": "incorrect", "assisted": false, "answered_text": "恰好五点才完成", "correct": false}],
+        "candidates": []
+      },
+      "rubric": [
+        {"id": "deadline_meaning", "severity": "critical", "requirement": "若题干使用までに，正确选项表达最迟/截止前完成而非必须恰在终点；若使用まで，准确表达持续到终点。"},
+        {"id": "one_visible_answer", "severity": "critical", "requirement": "所有可见条件下仅一个选项正确；不得同时放入两种等价的‘最迟五点’汉译作为不同选项。"},
+        {"id": "target_and_format", "severity": "high", "requirement": "保持grammar_meaning、指定目标和revision；2至4个不同选项，完整日文题干不含填空或中文答案。"},
+        {"id": "feedback_language", "severity": "high", "requirement": "解释用简体中文，简要说明持续终点/完成期限，而非全部用日语。"}
+      ]
+    },
+    {
+      "id": "holdout_teiru_state_02",
+      "topic": "ている的结果状态与动作进行",
+      "intent": "explain",
+      "message": "答题后用户问：我看到ている就译成‘正在’，为什么「電気がついています」是灯亮着，而「学生が歌っています」是学生正在唱歌？请按这两个已给场景解释，别把ている说成永远只有一种意思。第一个场景明确灯已点亮并保持亮着；第二个场景明确正在进行唱歌活动。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [{"id": "holdout_teiru_state", "revision": "holdout-v1", "family": "grammar", "title": "ている：状态与进行", "rule": "ている可表达动作进行，也可表达变化完成后保持的结果状态。具体依赖谓语和语境。这里電気がつく后保持亮着；学生が歌う的动作正在发生。", "abilities": ["understanding"], "allowed_kinds": ["grammar_meaning"], "familiarity": 0.3}],
+          "background": []
+        },
+        "target": {"id": "holdout_teiru_state", "revision": "holdout-v1", "family": "grammar", "title": "ている：状态与进行", "instruction": {"rule": "在给定场景中，電気がついている表示点亮后的结果状态；歌っている表示正在进行唱歌活动。", "example": "電気がついています。", "translation": "灯亮着。"}},
+        "question": {"id": "holdout_teiru_state_q", "target_id": "holdout_teiru_state", "revision": "holdout-v1", "kind": "grammar_meaning", "prompt": "電気がついています。", "choices": ["灯亮着", "灯正在亮起来"], "answer": "灯亮着", "feedback": "这里描述点亮后保持的状态。"},
+        "recent": [{"target_id": "holdout_teiru_state", "kind": "grammar_meaning", "outcome": "incorrect", "assisted": false, "answered_text": "灯正在亮起来", "correct": false}],
+        "candidates": []
+      },
+      "rubric": [
+        {"id": "state_vs_progress", "severity": "critical", "requirement": "明确前句是点亮后保持的状态，后句是在给定场景下进行中的动作。"},
+        {"id": "avoid_universal", "severity": "critical", "requirement": "不声称ている一律译正在，也不声称它一律表示已经完成；说明要结合谓语和语境。"},
+        {"id": "direct_and_focused", "severity": "high", "requirement": "直接回答用户的两个例子，不另出题让用户继续猜，也不加入与问题无关的长篇语法分类。"},
+        {"id": "no_mastery_claim", "severity": "critical", "requirement": "不把本次阅读解释当作已经掌握，不修改既有首答或复习时间。"}
+      ]
+    },
+    {
+      "id": "holdout_ni_he_variant_03",
+      "topic": "移动目的地に与方向へ的可接受表达",
+      "intent": "ask",
+      "message": "这是答题后的问题：题目只要求表达‘去车站’，没有指定必须用哪个助词；我写駅へ行きます，界面参考是駅に行きます。我的句子必须判错吗？请解释差别，不擅自修改任何评分或时间。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [{"id": "holdout_destination_variant", "revision": "holdout-v1", "family": "grammar", "title": "移动目的地に与方向へ", "rule": "在没有额外约束的去车站情境中，駅に行きます和駅へ行きます都自然。に较强调目的地，へ较强调方向；不能据此断言用へ就不会到达。", "abilities": ["application"], "allowed_kinds": ["grammar_transform"], "familiarity": 0.4}],
+          "background": []
+        },
+        "target": {"id": "holdout_destination_variant", "revision": "holdout-v1", "family": "grammar", "title": "移动目的地に与方向へ", "instruction": {"rule": "当前情境允许に和へ。首选展示不等于其他规范表达错误。", "example": "駅へ行きます。", "translation": "去车站。"}},
+        "question": {"id": "holdout_destination_q", "target_id": "holdout_destination_variant", "revision": "holdout-v1", "kind": "grammar_transform", "prompt": "去车站。", "choices": [], "answer": "駅に行きます。", "accepted_answers": ["駅に行きます。", "駅へ行きます。"], "feedback": "当前未限定助词，两个表达都可接受。"},
+        "recent": [{"target_id": "holdout_destination_variant", "kind": "grammar_transform", "outcome": "correct", "assisted": false, "answered_text": "駅へ行きます。", "correct": true}],
+        "candidates": []
+      },
+      "rubric": [
+        {"id": "accept_variant", "severity": "critical", "requirement": "明确本题中駅へ行きます可接受，不仅因为不等于参考字符串就判错。"},
+        {"id": "nuance_not_absolute", "severity": "critical", "requirement": "区分目的地/方向倾向，但不声称へ表示不抵达或に保证现实中已抵达。"},
+        {"id": "scope", "severity": "high", "requirement": "说明接受条件是当前移动场景与无额外指定，不推广成所有に／へ都可以互换。"},
+        {"id": "no_write_claim", "severity": "critical", "requirement": "不声称已替用户改评分、延长间隔或更新记录。"}
+      ]
+    },
+    {
+      "id": "holdout_kekkou_reply_04",
+      "topic": "結構です的同意与婉拒取决于上下文",
+      "intent": "next",
+      "message": "用户只记得結構です可以表示婉拒。请生成一题vocab_meaning，让用户根据明确可见的对话判断此处是许可/同意，而不是拒绝。选项用简短中文；题干要有足够后文，不能只靠出题者未展示的语调或意图。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [{"id": "holdout_kekkou_reply", "revision": "holdout-v1", "family": "word", "title": "結構です的回应义", "meaning": "可依语境表示可以、满意，或委婉表示不需要", "rule": "回答可否采用某方案并接着要求按该方案执行时，結構です表示同意。单独回应追加食物/服务时常可婉拒，不能一概而论。", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.25}],
+          "background": [
+            {"id": "holdout_plan", "revision": "holdout-v1", "family": "word", "title": "この計画", "meaning": "这个计划", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.9},
+            {"id": "holdout_proceed", "revision": "holdout-v1", "family": "word", "title": "進める", "meaning": "推进、执行", "abilities": ["understanding"], "allowed_kinds": ["vocab_meaning"], "familiarity": 0.9}
+          ]
+        },
+        "target": {"id": "holdout_kekkou_reply", "revision": "holdout-v1", "family": "word", "title": "結構です的回应义", "meaning": "可以／满意；也可依语境婉拒", "instruction": {"rule": "按可见问答辨义：同意按某计划执行时是许可或认可；不能把所有結構です都翻成不用了。", "example": "この計画で進めてよろしいですか。結構です。その計画でお願いします。", "translation": "可以按这个计划推进吗？可以，就按这个计划办。"}},
+        "question": null,
+        "recent": [{"target_id": "holdout_kekkou_reply", "kind": "vocab_meaning", "outcome": "incorrect", "assisted": false, "answered_text": "结構です永远表示不用了", "correct": false}],
+        "candidates": []
+      },
+      "rubric": [
+        {"id": "visible_disambiguation", "severity": "critical", "requirement": "可见日文对话包含真正支持许可/同意的后文，不能只有一句結構です让用户猜隐藏语调。"},
+        {"id": "correct_sense", "severity": "critical", "requirement": "唯一正确选项表达同意/许可，干扰项不能是同一意义的另一种合理汉译。"},
+        {"id": "context_scope", "severity": "high", "requirement": "解释依据当前后文，承认其他语境可能婉拒，不宣称結構です永远同意。"},
+        {"id": "feedback_language", "severity": "high", "requirement": "解释用简体中文；不把中文答案写进日文题干或伪造读法调号。"}
+      ]
+    }
+  ]
+}

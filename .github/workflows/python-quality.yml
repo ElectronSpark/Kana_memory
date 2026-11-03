@@ -1,0 +1,16 @@
+name: Python engineering checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  public-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.16'
+      - run: python -m pip install -r environment/windows-py313.lock.txt
+      - run: python -X utf8 tools/build_environment.py --host
+      - run: python -X utf8 tools/check_python.py

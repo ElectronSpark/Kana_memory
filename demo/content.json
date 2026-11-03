@@ -1,0 +1,28 @@
+{
+  "format": "kanamemory-public-demo-v1",
+  "revision": "original-demo-1",
+  "notice": "Kana Memory original demonstration content. Copyright (c) 2026 KanaMemory contributors. Available under the MIT license reproduced below. This intentionally tiny pack contains newly written examples and explanations, basic kana facts, and no imported dictionary, audio, research corpus or learner data. It is a software demonstration, not a complete Japanese course. Third-party dependencies and separate personal content packages retain their own licenses; this grant does not relicense historical third-party corpus material.",
+  "sources": [{"id": "original-demo", "title": "原创演示材料", "url": "", "license": "MIT"}],
+  "kana": [
+    {"id": "kana-a", "hiragana": "あ", "katakana": "ア", "romaji": "a", "source_ids": ["original-demo"]},
+    {"id": "kana-i", "hiragana": "い", "katakana": "イ", "romaji": "i", "source_ids": ["original-demo"]},
+    {"id": "kana-u", "hiragana": "う", "katakana": "ウ", "romaji": "u", "source_ids": ["original-demo"]}
+  ],
+  "words": [{"id": "demo-word-ai", "form": "愛", "reading": "あい", "display_reading": "あい", "romaji": "ai", "gloss": "爱", "chinese_gloss": "爱", "source_ids": ["original-demo"], "example_ids": ["demo-example-ai"], "senses": [{"id": "demo-1", "glosses": ["爱"], "chinese_gloss": "爱"}], "pitch_accent": []}],
+  "examples": [{"id": "demo-example-ai", "text": "これは愛です。", "translation": "这是爱。", "chinese": "这是爱。", "source_ids": ["original-demo"]}],
+  "teaching_namespaces": {
+    "learning_content": {
+      "CONTENT_REVISION": "original-demo-1",
+      "_WORDS": [],
+      "SOURCES": [{"id": "original-demo", "title": "原创演示材料", "description": "仅用于验证独立构建的原创小样本。"}],
+      "_GRAMMAR": [{
+        "id": "grammar:demo:polite_noun", "content_id": "grammar:demo:polite_noun", "family": "grammar", "title": "名词后的です", "reading": "", "meaning": "礼貌地说明事物是什么", "revision": "original-demo-1", "category": "演示", "level": "入门", "depends_on": [], "prerequisites": [], "abilities": ["understanding", "application"], "accent": null, "source_ids": ["original-demo"],
+        "instruction": {"summary": "礼貌地说明事物是什么", "rule": "名词后面接です，可以礼貌地作出肯定判断。", "steps": ["爱：愛（あい）", "愛＋です→愛です"], "example": "これは愛です。", "translation": "这是爱。", "examples": [{"text": "これは愛です。", "translation": "这是爱。", "quote": "です"}, {"text": "これも愛です。", "translation": "这也是爱。", "quote": "です"}], "prerequisite": "本例中，これ指这件事物；愛（あい）是爱。", "contrast": "这里只演示名词肯定句；不同句型须分别学习。"},
+        "question_templates": {
+          "grammar_meaning": [{"prompt": "これは愛です。", "task": "这里的です有什么作用？", "answer": "礼貌地说明事物是什么", "choices": ["礼貌地说明事物是什么", "请求对方做事", "否认事物的类别"], "feedback": "愛是名词；接です，礼貌地作肯定判断。整句意思是：这是爱。", "safe": true}],
+          "grammar_cloze": [{"prompt": "これは愛（　）。", "task": "用礼貌的名词肯定句表达“这是爱”。", "answer": "です", "choices": ["です", "を", "ません"], "feedback": "名词愛后接です，得到愛です。", "safe": false}]
+        }
+      }]
+    }
+  }
+}

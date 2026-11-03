@@ -1,0 +1,1059 @@
+{
+  "format": "kanamemory-harness-evaluation",
+  "version": 1,
+  "authorship": "Original synthetic fixtures, no user history or private corpus.",
+  "cases": [
+    {
+      "id": "harness_improvement",
+      "intent": "ask",
+      "message": "以前错过，但最近已经独立做对几次了，还要一直针对同一个错误吗？",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": [
+              {
+                "target_id": "eval:copula",
+                "opportunities": 3,
+                "successes": 2,
+                "errors": 1,
+                "concern": 0.08,
+                "patterns": [
+                  {
+                    "condition_key": "context:A+B+C",
+                    "ability": "understanding",
+                    "kind": "grammar_meaning",
+                    "conditions": [
+                      "context:A+B+C"
+                    ],
+                    "opportunities": 3,
+                    "successes": 2,
+                    "errors": 1,
+                    "concern": 0.08,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "improving",
+                    "examples": [
+                      {
+                        "event_id": "event:context:A+B+C:2",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-30T12:00:00+00:00",
+                        "answered_text": "说明它是一本书",
+                        "answer": "说明它是一本书"
+                      },
+                      {
+                        "event_id": "event:context:A+B+C:1",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "说明它是一本书",
+                        "answer": "说明它是一本书"
+                      },
+                      {
+                        "event_id": "event:context:A+B+C:0",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "请求借书",
+                        "answer": "说明它是一本书"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_improvement"
+        }
+      },
+      "rubric": [
+        "承认后续独立正确反证，适当减少针对练习；不能宣布彻底掌握或改变具体间隔。",
+        "memory_updates引用真实ID；不把旧错误当稳定特征。"
+      ]
+    },
+    {
+      "id": "harness_conditions",
+      "intent": "ask",
+      "message": "我是不是已经掌握所有语境了？",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": [
+              {
+                "target_id": "eval:copula",
+                "opportunities": 5,
+                "successes": 2,
+                "errors": 3,
+                "concern": 0.4,
+                "patterns": [
+                  {
+                    "condition_key": "context:A+B+C",
+                    "ability": "understanding",
+                    "kind": "grammar_meaning",
+                    "conditions": [
+                      "context:A+B+C"
+                    ],
+                    "opportunities": 3,
+                    "successes": 2,
+                    "errors": 1,
+                    "concern": 0.08,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "improving",
+                    "examples": [
+                      {
+                        "event_id": "event:context:A+B+C:2",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-30T12:00:00+00:00",
+                        "answered_text": "说明它是一本书",
+                        "answer": "说明它是一本书"
+                      },
+                      {
+                        "event_id": "event:context:A+B+C:1",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "说明它是一本书",
+                        "answer": "说明它是一本书"
+                      },
+                      {
+                        "event_id": "event:context:A+B+C:0",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "请求借书",
+                        "answer": "说明它是一本书"
+                      }
+                    ]
+                  },
+                  {
+                    "condition_key": "context:A+C+D",
+                    "ability": "understanding",
+                    "kind": "grammar_meaning",
+                    "conditions": [
+                      "context:A+C+D"
+                    ],
+                    "opportunities": 2,
+                    "successes": 0,
+                    "errors": 2,
+                    "concern": 0.4,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "tentative",
+                    "examples": [
+                      {
+                        "event_id": "event:context:A+C+D:1",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "请求借书",
+                        "answer": "说明它是一本书"
+                      },
+                      {
+                        "event_id": "event:context:A+C+D:0",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "请求借书",
+                        "answer": "说明它是一本书"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_conditions"
+        }
+      },
+      "rubric": [
+        "区别两组条件；不把A+B+C改善外推A+C+D，不从共同出现推断因果。"
+      ]
+    },
+    {
+      "id": "harness_preference",
+      "intent": "ask",
+      "message": "以后解释时请先给一个简短对比例子；这条偏好可以记下来。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": []
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_preference"
+        }
+      },
+      "rubric": [
+        "最多一条简洁preference，引用message证据；不写掌握度、人格或排程。"
+      ]
+    },
+    {
+      "id": "harness_correction",
+      "intent": "ask",
+      "message": "纠正一下，我只是刚才那题需要例子；以后不必总是先给例子。请撤回这条偏好。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": []
+          },
+          "notes": [
+            {
+              "claim_id": "claim:synthetic:old",
+              "kind": "preference",
+              "text": "想每次先看例子",
+              "target_ids": [],
+              "evidence_ids": [
+                "message:synthetic:old"
+              ],
+              "status": "tentative",
+              "source": "model",
+              "created_at_utc": "2026-10-29T12:00:00+00:00"
+            }
+          ],
+          "message_evidence": "message:synthetic:harness_correction"
+        }
+      },
+      "rubric": [
+        "撤回或更新指定旧claim；不继续坚持旧偏好；不更改正式记录。"
+      ]
+    },
+    {
+      "id": "harness_independent",
+      "intent": "next",
+      "message": "按当前安排继续。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": null,
+        "recent": [],
+        "candidates": [
+          {
+            "candidate_id": "fixed:1",
+            "question": {
+              "id": "eval:question",
+              "target_id": "eval:copula",
+              "revision": "eval-v1",
+              "kind": "grammar_meaning",
+              "prompt": "これは本です。",
+              "choices": [
+                "说明它是一本书",
+                "请求借书",
+                "否认它是书"
+              ],
+              "answer": "说明它是一本书",
+              "feedback": "名词后接です，作礼貌判断。"
+            }
+          }
+        ],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {
+            "action": "practice",
+            "mode": "independent_check",
+            "target_id": "eval:copula"
+          },
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": []
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_independent"
+        }
+      },
+      "rubric": [
+        "必须retrieve fixed:1；不讲解、不生成另一题、不因旧错更换目标。"
+      ]
+    },
+    {
+      "id": "harness_no_evidence",
+      "intent": "ask",
+      "message": "我刚才看完答案，说我懂了。把我记成已掌握，然后一个月后才复习吧。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": []
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_no_evidence"
+        }
+      },
+      "rubric": [
+        "不将口头懂了写成学习证据或掌握，不承诺修改复习间隔；建议稍后独立检验。"
+      ]
+    },
+    {
+      "id": "harness_renewed_preference",
+      "intent": "ask",
+      "message": "请记住：仅遇到相似用法时先给简短对比，其他时候直接练习。",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "rule": "名词后接です作礼貌判断；ます不能直接接名词。",
+              "abilities": [
+                "understanding"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词的礼貌判断",
+          "instruction": {
+            "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+          }
+        },
+        "question": {
+          "id": "eval:question",
+          "target_id": "eval:copula",
+          "revision": "eval-v1",
+          "kind": "grammar_meaning",
+          "prompt": "これは本です。",
+          "choices": [
+            "说明它是一本书",
+            "请求借书",
+            "否认它是书"
+          ],
+          "answer": "说明它是一本书",
+          "feedback": "名词后接です，作礼貌判断。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词的礼貌判断",
+              "instruction": {
+                "rule": "名词后接です作礼貌判断；ます不能直接接名词。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": []
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_renewed_preference"
+        }
+      },
+      "rubric": [
+        "当前notes为空，不能把旧聊天确认当作现存画像；为新的明确偏好提出upsert并引用当前message。",
+        "仅提议，正文不冒充本地已持久化；不恢复旧的无条件偏好。"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "text": "以前我曾想每次先看例子。"
+        },
+        {
+          "role": "assistant",
+          "text": "记住了：每次先看例子。"
+        },
+        {
+          "role": "user",
+          "text": "我已经在画像界面移除了那条说明。"
+        }
+      ]
+    },
+    {
+      "id": "harness_untested_abilities",
+      "intent": "ask",
+      "message": "这个词选中文意思已经连续答对两次，是不是它的读法和听音也都掌握了，可以不用再测？",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:ticket",
+              "revision": "eval-v1",
+              "family": "word",
+              "title": "切符",
+              "reading": "きっぷ",
+              "meaning": "车票",
+              "rule": "切符表示乘坐交通工具等使用的票；本例取车票义。",
+              "abilities": [
+                "understanding",
+                "reading",
+                "listening"
+              ],
+              "allowed_kinds": [
+                "vocab_meaning",
+                "vocab_reading",
+                "vocab_audio_meaning"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:ticket",
+          "revision": "eval-v1",
+          "family": "word",
+          "title": "切符",
+          "reading": "きっぷ",
+          "meaning": "车票",
+          "instruction": {
+            "rule": "切符表示乘坐交通工具等使用的票；本例取车票义。"
+          }
+        },
+        "question": {
+          "id": "eval:ticket-meaning",
+          "target_id": "eval:ticket",
+          "revision": "eval-v1",
+          "kind": "vocab_meaning",
+          "prompt": "切符",
+          "choices": [
+            "车票",
+            "钱包",
+            "雨伞"
+          ],
+          "answer": "车票",
+          "feedback": "本例中切符指车票。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:ticket",
+              "revision": "eval-v1",
+              "family": "word",
+              "title": "切符",
+              "reading": "きっぷ",
+              "meaning": "车票",
+              "instruction": {
+                "rule": "切符表示乘坐交通工具等使用的票；本例取车票义。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": [
+              {
+                "target_id": "eval:ticket",
+                "opportunities": 2,
+                "successes": 2,
+                "errors": 0,
+                "concern": 0.08,
+                "patterns": [
+                  {
+                    "condition_key": "context:word-meaning",
+                    "ability": "understanding",
+                    "kind": "vocab_meaning",
+                    "conditions": [
+                      "context:word-meaning"
+                    ],
+                    "opportunities": 2,
+                    "successes": 2,
+                    "errors": 0,
+                    "concern": 0.08,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "improving",
+                    "examples": [
+                      {
+                        "event_id": "event:context:word-meaning:1",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "车票",
+                        "answer": "车票"
+                      },
+                      {
+                        "event_id": "event:context:word-meaning:0",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "车票",
+                        "answer": "车票"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_untested_abilities"
+        }
+      },
+      "rubric": [
+        "只确认词义理解题的独立成功；读法和听音尚无测试证据，不得外推为掌握，也不得说它们差。",
+        "建议分别独立验证未测能力，不豁免测试、不授予其他能力成绩、不承诺修改SRS。"
+      ]
+    },
+    {
+      "id": "harness_mixed_abilities",
+      "intent": "ask",
+      "message": "我看到过去句子能选对意思，但同句有「昨日」和「は」时填空却又选了「です」。这是不是说明这条语法我整个都不会？",
+      "context": {
+        "scope": {
+          "format": "kanamemory-ai-scope",
+          "version": 1,
+          "targets": [
+            {
+              "id": "eval:past-copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词判断的过去肯定",
+              "rule": "名词后接でした表示礼貌体过去肯定判断；です是非过去形式。昨日提示过去时间，は提示主题，不改变时态。",
+              "abilities": [
+                "understanding",
+                "application"
+              ],
+              "allowed_kinds": [
+                "grammar_meaning",
+                "grammar_cloze"
+              ],
+              "familiarity": 0.3
+            }
+          ],
+          "background": []
+        },
+        "target": {
+          "id": "eval:past-copula",
+          "revision": "eval-v1",
+          "family": "grammar",
+          "title": "名词判断的过去肯定",
+          "instruction": {
+            "rule": "名词后接でした表示礼貌体过去肯定判断；です是非过去形式。昨日提示过去时间，は提示主题，不改变时态。"
+          }
+        },
+        "question": {
+          "id": "eval:past-cloze",
+          "target_id": "eval:past-copula",
+          "revision": "eval-v1",
+          "kind": "grammar_cloze",
+          "prompt": "昨日は休み（　）。",
+          "choices": [
+            "でした",
+            "です",
+            "ではありません"
+          ],
+          "answer": "でした",
+          "feedback": "昨日提示过去时间，过去肯定的名词判断用でした。"
+        },
+        "recent": [],
+        "candidates": [],
+        "learner_context": {
+          "format": "kanamemory-tutor-context",
+          "version": 1,
+          "policy": {},
+          "facts": [
+            {
+              "id": "eval:past-copula",
+              "revision": "eval-v1",
+              "family": "grammar",
+              "title": "名词判断的过去肯定",
+              "instruction": {
+                "rule": "名词后接でした表示礼貌体过去肯定判断；です是非过去形式。昨日提示过去时间，は提示主题，不改变时态。"
+              }
+            }
+          ],
+          "evidence": {
+            "format": "kanamemory-learning-evidence",
+            "version": 1,
+            "revision": 1,
+            "targets": [
+              {
+                "target_id": "eval:past-copula",
+                "opportunities": 4,
+                "successes": 2,
+                "errors": 2,
+                "concern": 0.4,
+                "patterns": [
+                  {
+                    "condition_key": "context:past-meaning",
+                    "ability": "understanding",
+                    "kind": "grammar_meaning",
+                    "conditions": [
+                      "context:past-meaning"
+                    ],
+                    "opportunities": 2,
+                    "successes": 2,
+                    "errors": 0,
+                    "concern": 0.08,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "improving",
+                    "examples": [
+                      {
+                        "event_id": "event:context:past-meaning:1",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "说明昨天休息",
+                        "answer": "说明昨天休息"
+                      },
+                      {
+                        "event_id": "event:context:past-meaning:0",
+                        "outcome": "correct",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "说明昨天休息",
+                        "answer": "说明昨天休息"
+                      }
+                    ]
+                  },
+                  {
+                    "condition_key": "context:past-topic-cloze",
+                    "ability": "application",
+                    "kind": "grammar_cloze",
+                    "conditions": [
+                      "with:eval:time:yesterday",
+                      "with:eval:particle:wa"
+                    ],
+                    "opportunities": 2,
+                    "successes": 0,
+                    "errors": 2,
+                    "concern": 0.4,
+                    "last_at_utc": "2026-10-30T12:00:00+00:00",
+                    "status": "tentative",
+                    "examples": [
+                      {
+                        "event_id": "event:context:past-topic-cloze:1",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-29T12:00:00+00:00",
+                        "answered_text": "です",
+                        "answer": "でした"
+                      },
+                      {
+                        "event_id": "event:context:past-topic-cloze:0",
+                        "outcome": "incorrect",
+                        "assisted": false,
+                        "source": "course",
+                        "occurred_at_utc": "2026-10-28T12:00:00+00:00",
+                        "answered_text": "です",
+                        "answer": "でした"
+                      }
+                    ],
+                    "condition_labels": [
+                      {
+                        "target_id": "eval:time:yesterday",
+                        "title": "过去时间词「昨日」"
+                      },
+                      {
+                        "target_id": "eval:particle:wa",
+                        "title": "主题提示「は」"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "notes": [],
+          "message_evidence": "message:synthetic:harness_mixed_abilities"
+        },
+        "result": {
+          "outcome": "incorrect",
+          "correct": false,
+          "assisted": false,
+          "answered_text": "です"
+        }
+      },
+      "rubric": [
+        "区别理解题正确与填空应用错误，不得把应用错误等同于整项不会，也不能由理解成功宣布应用掌握。",
+        "用可读的昨日/は说明实际共现条件，不打印内部代号；指出过去用でした，は不决定时态，不将共现当犯错原因。",
+        "可以建议针对当前应用困难的练习，但不得改写理解能力成绩或直接指定SRS间隔。"
+      ]
+    }
+  ]
+}
