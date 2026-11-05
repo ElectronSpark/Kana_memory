@@ -2,7 +2,7 @@ Python 工程维护规范
 
 用途
 具体模块所有权及目标依赖方向见docs/design_current/07_engineering_structure.txt。
-开发工作树的工程债任务见config/engineering_debt_20261102.json；代理维护入口为AGENTS.md。
+开发工作树的工程债任务见config/engineering_debt_20261102.json；代理维护入口为CLAUDE.md。
 这是 App 代码的维护约束，补充现有产品、调度、数据和 AI 设计规范，不替代它们。
 适用 Python 3.13、Briefcase/Toga 现有构建。包目录保持 app/src/kanamemory；
 Android/桌面配置仍在 app/pyproject.toml，根 pyproject.toml 只配置开发工具。

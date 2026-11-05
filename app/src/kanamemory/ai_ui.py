@@ -17,6 +17,7 @@ from .material_study_ui import MaterialStudyUIMixin
 from .material_reference_ui import MaterialReferenceUIMixin
 from .ai_ui_state import AI_FORM_SETTING, AI_PREVIEW_SETTING
 from .navigation import page_view
+from .question_presentation import question_instruction
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role, prompt_audio_text
 from .typography import configure_text_role
 
@@ -1272,12 +1273,15 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
             source="ai", question_id=qid), compact=True, font_size=12, flex=1))
         if prompt_audio_text(question):
             actions.append(u.speaker_button(lambda w, qid=current["id"]: self.play_ai_prompt(question_id=qid), "朗读题干"))
-        children = [u.label(question.get("task") or "选择最符合本题语境的答案。", size=16),
-                    u.row(*actions)]
+        instruction = question_instruction(question)
+        children = []
         children.append(build_prompt_block(self, question,
             clean_prompt_preferences(self.store.get_setting("prompt_display_v1", {})), size=20))
-        children[-1]._feedback_fragment = {"kind": "ai_question", "question": deepcopy(question),
-                                          "question_id": current["id"], "draft": deepcopy(current.get("draft", {}))}
+        children[-1]._feedback_fragment.update({"kind": "ai_question", "question": deepcopy(question),
+                                          "question_id": current["id"], "draft": deepcopy(current.get("draft", {}))})
+        if instruction:
+            children.append(u.label(instruction, size=13, color=u.MUTED))
+        children.append(u.row(*actions))
         if question.get("input_mode", "choice") == "choice":
             children.extend(u.button(choice, lambda w, answer=choice, qid=current["id"]: self.submit_ai_answer(answer, question_id=qid),
                                      multiline=True, text_role=learning_text_role(question, "choice")) for choice in question.get("choices", []))

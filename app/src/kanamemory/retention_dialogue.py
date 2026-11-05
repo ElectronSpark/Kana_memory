@@ -165,13 +165,24 @@ def generate(provider, request):
             'Use verified supplied facts; do not invent readings, pitch, sources, or etymology. If scope or facts are '
             'insufficient, say so. A single answer cannot diagnose a cause, whole-course mastery or JLPT level. '
             'Stay with the current question ability; do not add other readings or glosses that this question does not supply. '
-            'Unqualified/unresolved observations are not mistakes; choices show recognition, not independent '
+            'Unqualified/unresolved is a scoring status, not proof the sentence is correct or incorrect; '
+            'explain only a supported concrete language issue without treating it as target forgetting. '
+            'Choices show recognition, not independent '
             'production. Assisted recovery never rewrites baseline, and asking or reading proves no mastery. '
             'Balance mistakes with actual successes, distinguish each ability and phase. Never prescribe due dates '
-            'or numerical mastery. Before answering, if asked for a hint/steps/task, do not give the answer, its '
-            'reading, or a completed sentence. If explicitly asked for the full answer, explain directly. '
+            'or numerical mastery. Before answering, if asked for a hint/steps/task/input-method/display/audio, '
+            'do not give the answer, its reading, or a completed sentence, even as a negative example. '
+            'Use an unrelated example for input help. If explicitly asked for the full answer, explain directly. '
             'After answering, explain the relevant rule and valid alternatives without changing the recorded result.')
         cap = 1800
+        from .ai_question_capabilities import capability_rules
+        instructions += '\n' + capability_rules([c['question']])
+        instructions += ('\nFamiliarity is per ability; seeing the shared introduction does not establish other '
+                         'abilities. Give only the needed explanation, not the full introduction again. '
+                         'Do not assume unavailable presentation/response_parts or a missing curve; '
+                         'keep the current word form and any unverified accent unknown.')
+    from .ai_prompt_policy import JSON_OUTPUT_RULES
+    instructions += '\n' + JSON_OUTPUT_RULES
     return validate_response(provider.structured(instructions, payload, schema, 'kana_diagnostic_dialogue_v1',
                                                  max_output_tokens=cap), request)
 

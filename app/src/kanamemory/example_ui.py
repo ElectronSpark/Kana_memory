@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import weakref
 from copy import deepcopy
+from functools import wraps
 
 from .navigation import page_view
 from .example_highlight import overlap_regions
@@ -14,6 +15,15 @@ from .lexical_example_ui import LexicalExampleUIMixin
 def ui():
     from . import ui_components as app
     return app
+
+
+def with_example_progress(render):
+    """Keep ranking, inline links and background hints in one read operation."""
+    @wraps(render)
+    def wrapped(self, *args, **kwargs):
+        with self.example_store().read_operation():
+            return render(self, *args, **kwargs)
+    return wrapped
 
 
 class ExampleUIMixin(LexicalExampleUIMixin):
@@ -285,10 +295,12 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                     break
         return rows
 
+    @with_example_progress
     def example_cards(self, item, *, limit=2):
         u = ui()
-        entries = self.example_store().for_item(item['id'])
-        if not entries:
+        page = self.example_store().for_item_page(item['id'], limit=limit)
+        entries = page['examples']
+        if not page['total']:
             instruction = item.get('instruction', {})
             result = u.col(self.annotated_sentence(instruction.get('example', ''), size=20,
                 audio=instruction.get('example_text_role', 'study') == 'study'),
@@ -300,7 +312,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                 'content_revision': item.get('revision'), 'instruction': deepcopy(instruction)}
             return result
         children = []
-        for index, example in enumerate(entries[:limit]):
+        for index, example in enumerate(entries):
             ref = example['reference']
             children.append(u.col(self.example_text(example, ref),
                 self.natural_translation_label(example['text'], example.get('translation', ''), resource=example, size=14, color=u.MUTED),
@@ -312,11 +324,11 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                          self.show_example_detail(eid, reference_id=rid), compact=True),
                 padding=10, margin_bottom=10, background_color=u.ENTRY_BACKGROUNDS[index % 3]))
         children.append(u.row(
-            u.button(f"全部例句（{len(entries)}）", lambda w: self.show_item_examples(item['id']), flex=1, compact=True),
+            u.button(f"全部例句（{page['total']}）", lambda w: self.show_item_examples(item['id']), flex=1, compact=True),
             u.button('添加例句', lambda w: self.show_example_editor(item['id']), flex=1, compact=True)))
         result = u.col(*children)
         result._feedback_fragment = {'kind': 'example_collection', 'target_id': item['id'],
-            'ordered_example_ids': [e['id'] for e in entries[:limit]], 'total': len(entries), 'offset': 0,
+            'ordered_example_ids': [e['id'] for e in entries], 'total': page['total'], 'offset': 0,
             'sort': 'learner_progress_weighted', 'limit': limit}
         return result
 
@@ -324,17 +336,19 @@ class ExampleUIMixin(LexicalExampleUIMixin):
     def show_item_examples(self, target_id, *, offset=0):
         self._render_item_examples(target_id, offset)
 
+    @with_example_progress
     def _render_item_examples(self, target_id, offset=0):
         u = ui()
         self._item_examples_state = (target_id, offset)
         service = self.example_store()
         items = {x['id']: x for x in self.example_targets_available(reference_ids={target_id})}
-        entries = service.for_item(target_id)
+        page = service.for_item_page(target_id, offset=offset, limit=8)
+        entries = page['examples']
         children = [u.label(items[target_id]['title'], size=21, bold=True)]
         children[0]._feedback_fragment = {'kind': 'example_collection', 'target_id': target_id,
-            'ordered_example_ids': [e['id'] for e in entries[offset:offset + 8]],
-            'total': len(entries), 'offset': offset, 'sort': 'learner_progress_weighted', 'limit': 8}
-        for index, entry in enumerate(entries[offset:offset + 8]):
+            'ordered_example_ids': [e['id'] for e in entries],
+            'total': page['total'], 'offset': offset, 'sort': 'learner_progress_weighted', 'limit': 8}
+        for index, entry in enumerate(entries):
             ref = entry['reference']
             children.append(u.col(self.example_text(entry, ref),
                 self.natural_translation_label(entry['text'], entry.get('translation', ''), resource=entry, color=u.MUTED),
@@ -347,7 +361,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                 padding=10, margin_bottom=10, background_color=u.ENTRY_BACKGROUNDS[index % 3]))
         if offset:
             children.append(u.button('上一页', lambda w: self._render_item_examples(target_id, offset - 8)))
-        if offset + 8 < len(entries):
+        if offset + 8 < page['total']:
             children.append(u.button('下一页', lambda w: self._render_item_examples(target_id, offset + 8)))
         children.append(u.button('添加例句', lambda w: self.show_example_editor(target_id)))
         self.screen('item_examples', '例句', *children)
@@ -356,6 +370,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
     def show_example_detail(self, example_id, *, reference_id=None):
         self._render_example_detail(example_id, reference_id)
 
+    @with_example_progress
     def _render_example_detail(self, example_id, reference_id=None, *, choices=None):
         u = ui()
         service = self.example_store()
@@ -589,6 +604,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
     def show_example_library(self, widget=None, *, query='', offset=0):
         self._render_example_library(query, offset)
 
+    @with_example_progress
     def _render_example_library(self, query='', offset=0):
         u = ui()
         self._example_library_state = (query, offset)

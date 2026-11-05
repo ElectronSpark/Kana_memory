@@ -173,6 +173,24 @@ def identity(store, content_id, skill, script):
     return unit["unit_id"] if unit else (content_id, skill, script)
 
 
+def current_identities(store, keys):
+    """Resolve one read operation's keys using current, not prospective, routes.
+
+    Returned IDs are detached scalars. A later action must resolve again; this
+    projection does not authorize queue writes or bypass transaction checks.
+    """
+    keys = set(keys)
+    if not keys:
+        return {}
+    units = active_units(store)
+    result = {}
+    for cid, skill, script in keys:
+        ability = SKILL_TO_ABILITY.get(skill)
+        unit = units.get(ability_unit_id(cid, script, ability)) if ability else None
+        result[cid, skill, script] = unit["unit_id"] if unit else (cid, skill, script)
+    return result
+
+
 def representatives(cards, now):
     """Choose one allowed actual mode per live ability; legacy rows stay apart.
 

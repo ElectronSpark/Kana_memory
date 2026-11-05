@@ -107,11 +107,13 @@ def reviewed_question(question):
         if item is None or item.get("ai_generated") or str(item["revision"]) != str(question.get("revision")):
             return False
         canonical = build_learning_question(item, question["kind"], variant=question.get("variant", 0))
+        from .multi_cloze import validate_snapshot as validate_cloze_snapshot
+        validate_cloze_snapshot(question)
         if isinstance(question.get("pitch_practice"), dict) and question["pitch_practice"].get("version") in (2, 3):
             from .pitch_practice import validate_snapshot
             validate_snapshot(question)
         fields = ("target_id", "revision", "kind", "ability", "prompt", "answer", "accepted_answers", "choices", "input_mode",
-                  "pitch_practice")
+                  "pitch_practice", "multi_cloze")
         return (all(question.get(key) == canonical.get(key) for key in fields)
             and all(question[key] == canonical.get(key) for key in ("learning_conditions", "learning_condition_source", "learning_condition_revision") if key in question))
     except (ValueError, KeyError, TypeError):

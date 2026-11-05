@@ -55,6 +55,20 @@ def for_question(question):
     from .learning_questions import learning_order_translation_source
     if question.get("ai_generated") or question.get("guided") or question.get('personal_rubric'):
         return {}
+    if question.get('input_mode') == 'multi_cloze':
+        from .learning_questions import reviewed_practice_context
+        from .multi_cloze import specification
+        if reviewed_practice_context(question) is None:
+            return {}
+        spec = specification(question)
+        backgrounds = sorted({slot['target_id'] for slot in spec['slots'] if slot['role'] == 'background'})
+        if not backgrounds or any(len(cid) > 155 for cid in backgrounds):
+            return {}
+        source = question['practice_source']
+        return {'learning_conditions': ['with:' + cid for cid in backgrounds],
+                'learning_condition_source': question['practice']['context_id'],
+                'learning_condition_revision': sha256(json.dumps([source, spec], ensure_ascii=False,
+                    sort_keys=True, separators=(',', ':')).encode()).hexdigest()}
     text = (question.get("audio_text") if question.get("requires_audio")
             else learning_order_translation_source(question))
     match = _reviewed_index().get(text) if isinstance(text, str) else None

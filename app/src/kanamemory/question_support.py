@@ -30,12 +30,20 @@ _UNSAFE_ABILITIES = frozenset({
     "reading", "listening", "spelling", "handwriting", "pitch", "pronunciation",
     "K识读", "K拼写", "K听辨", "K手写", "V读法", "V听辨理解", "P发音训练",
 })
-_GAP = re.compile(r"[_＿□■◯○]|[（(\[【]\s*[）)\]】]|\{[^}]*\}|<[^>]*>|\.\.\.|…")
-_PLAIN_PROMPT_UNIT = re.compile(r"（[^\S\r\n]*）|\([^\S\r\n]*\)|\[[^\S\r\n]*\]|【[^\S\r\n]*】|[\s\S]")
+_GAP = re.compile(r"[_＿□■◯○]|[（(\[【]\s*[）)\]】]|（[①-⑥1-6]）|［[1-6]］|\{[^}]*\}|<[^>]*>|\.\.\.|…")
+_PLAIN_PROMPT_UNIT = re.compile(r"（(?:[^\S\r\n]*|[①-⑥1-6])）|［[1-6]］|\([^\S\r\n]*\)|\[[^\S\r\n]*\]|【[^\S\r\n]*】|[\s\S]")
 _KANA = re.compile(r"[ぁ-ゖァ-ヶー]+\Z")
 _POINT_TO_DP = 96 / 72
-_BACKGROUND_SUPPORT_VERSION = 1
+_BACKGROUND_SUPPORT_VERSION = 2
 _KANJI = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff々〆]")
+
+
+def _protected_answer_forms(question):
+    forms = [question.get('answer', ''), *question.get('accepted_answers', ())]
+    if question.get('input_mode') == 'multi_cloze':
+        from .multi_cloze import specification
+        forms.extend(value for row in specification(question)['accepted_combinations'] for value in row)
+    return forms
 
 
 def clean_prompt_preferences(value):
@@ -95,12 +103,13 @@ def background_support(prompt, target, raw, kind, *, explicit=(), bundled=False,
             or raw.get("audio_only") or raw.get("has_hidden_transcript")):
         return None
     candidates = list(explicit)
-    if not candidates and bundled and kind in {"grammar_cloze", "vocab_usage"}:
+    if not candidates and bundled:
         from .sentence_annotations import sentence_annotation_plan
         plan = sentence_annotation_plan(prompt)
-        if plan.get("text") == prompt and plan.get("status") == "precomputed":
+        if (plan.get('text') == prompt and plan.get('status') == 'precomputed'
+                and (kind in {'grammar_cloze', 'vocab_usage'} or plan.get('context_projection_sha256'))):
             candidates = plan.get("segments", [])
-    protected = [raw.get("answer", ""), *raw.get("accepted_answers", ())]
+    protected = _protected_answer_forms(raw)
     if target.get("family") == "word":
         protected.extend((target.get("title", ""), target.get("reading", "")))
     valid = _aligned_segments({"prompt": prompt}, {"segments": candidates})
@@ -161,9 +170,15 @@ def _legacy_learning_question_display(question):
     if (not isinstance(support, Mapping) or support.get("reviewed") is not True
             or support.get("prompt") != question.get("prompt")
             or support.get("content_revision") != _revision(question)
-            or support.get("segments") or support.get("reading_safe") is not False
-            or support.get("accent_safe") is not False or support.get("audio_safe") is not False
+            or support.get('audio_safe') is not False
             or support.get("reading_ambiguity") is True or support.get("may_reveal_answer") is True):
+        return question
+    empty_legacy = not support.get('segments') and support.get('reading_safe') is False and support.get('accent_safe') is False
+    previous_background = (question.get('background_support_version') == 1
+                           and support.get('reading_safe') is True and support.get('accent_safe') is True
+                           and all(s.get('role') == 'background' and s.get('reading_safe') is True
+                                   and s.get('accent_safe') is True for s in support.get('segments', []) if s.get('reading')))
+    if not (empty_legacy or previous_background):
         return question
     from .learning_content import get_learning_item
     from .learning_questions import build_learning_question
@@ -193,7 +208,7 @@ def _legacy_learning_question_display(question):
             return {**question, "context_hint": rule["context_hint"]}
     # Changes to an answer or distractor can change what information is being
     # tested. Only the exact unchanged local question receives new support.
-    fields = ("prompt", "answer", "accepted_answers", "choices", "input_mode", "task")
+    fields = ('prompt', 'answer', 'accepted_answers', 'choices', 'input_mode', 'task', 'practice', 'multi_cloze')
     if (not all(question.get(key) == current.get(key) for key in fields)
             or not current.get("background_support_version")):
         return question
@@ -245,7 +260,7 @@ def _background_context(question):
     from .question_contexts import reviewed_question_context
     context = reviewed_question_context(identity, question["prompt"])
     plan = sentence_annotation_plan(question["prompt"])
-    protected = [question["answer"], *question.get("accepted_answers", ()), item["title"]]
+    protected = [*_protected_answer_forms(question), item['title']]
     senses, results, seen = _background_word_senses(), [], set()
     spans = (_aligned_segments(question, {"segments": plan.get("segments")})
              if plan.get("status") == "precomputed" and plan.get("text") == question["prompt"] else ())
@@ -319,7 +334,7 @@ def _practice_background_context(question):
             or type(span.get("start")) is not int or type(span.get("end")) is not int
             or not isinstance(span.get("quote"), str) for span in targets)):
         return {}
-    protected = [question.get("answer", ""), *question.get("accepted_answers", ())]
+    protected = _protected_answer_forms(question)
     protected.extend(span.get("quote", "") for span in targets
                      if isinstance(span, Mapping) and not _GAP.search(span.get("quote", "")))
     results = []
@@ -687,10 +702,13 @@ def learning_text_role(question, field="prompt"):
         return role if role in {"ui", "study"} else "ui"
     if field == "prompt":
         practice = question.get("practice") if isinstance(question, Mapping) else None
+        if isinstance(practice, Mapping) and practice.get('task_family') == 'translation_wordbank':
+            return 'ui'
         if (isinstance(practice, Mapping) and isinstance(practice.get("task_family"), str)
                 and (kind, practice["task_family"]) in {
                 ("vocab_orthography", "contextual_orthography"),
-                ("vocab_recall", "word_form_recall")}):
+                ("vocab_recall", "word_form_recall"),
+                ("grammar_transform", "grammar_transform")}):
             return "study"
         kinds = {"vocab_meaning", "vocab_reading", "vocab_usage", "vocab_zh_ja_contrast",
                  "grammar_meaning", "grammar_cloze", "reading_comprehension", "targeted_correction"}
@@ -725,6 +743,72 @@ def _plain_prompt_parts(question, prompt):
 
 
 def build_prompt_block(app, question, preferences=None, *, size=20, available_width=None):
+    """Render safe annotations, then emphasize only exact public target text."""
+    from .question_presentation import question_presentation
+
+    if 'prosody_cue' in question:
+        from .prosody_cue_ui import cue_widget
+        return cue_widget(question, width=available_width or 320)
+
+    block = _build_prompt_block(app, question, preferences, size=size, available_width=available_width)
+    presentation = question_presentation(question)
+    fragment = block._feedback_fragment
+    fragment["instruction"] = presentation["instruction"]
+    spans = presentation["target_spans"]
+    return _emphasize_prompt_block(block, question.get('prompt', ''), spans)
+
+
+def _emphasize_prompt_block(block, prompt, spans, *, selected=False):
+    from .example_highlight import configure_example_text, EMPHASIS_COLOR
+    from .typography import configure_study_ranges
+
+    fragment = block._feedback_fragment
+    if not spans:
+        return block
+    if fragment.get("lines"):
+        bodies = [cell.children[-1] for row in block.children for cell in row.children]
+    else:
+        bodies = list(block.children) if getattr(block, "children", ()) else [block]
+    offset, aligned = 0, []
+    for body in bodies:
+        text = str(body.text)
+        start = prompt.find(text, offset)
+        if start < 0 or prompt[offset:start].strip(" \n\r\t·"):
+            return block
+        end = start + len(text)
+        local = [{"start": max(start, span["start"]) - start,
+                  "end": min(end, span["end"]) - start,
+                  "quote": prompt[max(start, span["start"]):min(end, span["end"])]}
+                 for span in spans if max(start, span["start"]) < min(end, span["end"])]
+        aligned.append((body, local))
+        offset = end
+    if prompt[offset:].strip():
+        return block
+    for body, local in aligned:
+        if local:
+            configure_study_ranges(body, [(span["start"], span["end"]) for span in local],
+                                   font_family='sans-serif' if selected else 'serif')
+            configure_example_text(body, local)
+            if len(local) == 1 and local[0]["start"] == 0 and local[0]["end"] == len(str(body.text)):
+                if getattr(body, "style", None) is not None:
+                    body.style.font_weight = "bold"
+                    body.style.color = EMPHASIS_COLOR
+    if selected:
+        block._cloze_selected_spans = deepcopy(spans)
+        fragment['selected_spans'] = deepcopy(spans)
+    else:
+        block._practice_target_spans = deepcopy(spans)
+        fragment["target_spans"] = deepcopy(spans)
+    return block
+
+
+def render_prompt_plan(app, question, plan, *, size=20, available_width=None):
+    """Render an already safety-filtered plan, including selected gap text."""
+    block = _build_prompt_block(app, question, size=size, available_width=available_width, plan=plan)
+    return _emphasize_prompt_block(block, plan['prompt'], plan.get('selected_spans', ()), selected=True)
+
+
+def _build_prompt_block(app, question, preferences=None, *, size=20, available_width=None, plan=None):
     """Native wrapping word cells: annotation above body, no hidden answer links.
 
     All sizes can grow with the system font setting, and no fixed height clips
@@ -734,10 +818,10 @@ def build_prompt_block(app, question, preferences=None, *, size=20, available_wi
     from .ui_components import label, col, row, INK, MUTED
     from .text_layout import font_scale
 
-    plan = prompt_support(question, preferences)
+    plan = prompt_support(question, preferences) if plan is None else plan
     if not plan["furigana_visible"] and not plan["accent_visible"]:
         parts = _plain_prompt_parts(question, plan["prompt"])
-        labels = [label(text, size=size, text_role=role) for text, role in parts]
+        labels = [label(text, size=size, text_role=role, wrap=False) for text, role in parts]
         result = labels[0] if len(labels) == 1 else col(*labels)
         result._prompt_support = plan
         result._feedback_fragment = {"kind": "question_prompt", "question_id": question.get("id"),

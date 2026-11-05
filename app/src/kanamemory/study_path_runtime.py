@@ -28,6 +28,9 @@ class StudyPathRuntimeMixin:
         enabled = self.learning_preferences()["enabled"]
         result = {"ready": 0, "waiting": 0, "instruction": 0, "blocked": 0,
                   "blocked_content": 0, "blocked_material": 0, "next_due": None}
+        from .practice_round import planned_round_running
+        if planned_round_running(self.store):
+            return result
         if not enabled:
             return result
         visible_rows = self.store.queries.pending_course_headers(enabled)
@@ -41,21 +44,30 @@ class StudyPathRuntimeMixin:
         abilities = sorted({KIND_ABILITIES[kind] for kind in enabled})
         missing = self.store.queries.unqueued_course_ids(abilities)
         ready_ids, teaching, future = independent_ready_ids(self.learning_store), set(), []
+        system_input = system_japanese_enabled(self.store)
+        exposures = self.learning_store.content_exposure_times(now=now)
+        prerequisites = {}
         for row in missing:
             item = self.learning_store.get_item(row[0])
             # Already assessed lessons are grandfathered by the dependency
             # contract. Only new lessons need a fresh prerequisite inspection.
             for unit, plan in iter_question_plans(item, enabled_kinds=enabled,
                     queries=self.store.queries, learning_store=self.learning_store,
-                    system_japanese_input=system_japanese_enabled(self.store)):
+                    system_japanese_input=system_input,
+                    unit_states={u['ability']: u for u in item['units']}):
                 if unit["suspended"]:
                     continue
                 if self.learning_store.content_question_blocked(item, plan):
                     result['blocked_material'] += 1
                     continue
                 content_row = self.learning_store.ability_instruction_row(item['id'], unit['ability'])
-                blocked = self.learning_store.prerequisite_status(item['id'],
-                    dict(content_row).get('instruction_scope'), ready_ids=ready_ids)['blocked']
+                scope = dict(content_row).get('instruction_scope')
+                key = item['id'], scope
+                if key not in prerequisites:
+                    prerequisites[key] = (self.learning_store.prerequisite_status(item['id'], scope,
+                        ready_ids=ready_ids) if scope else prerequisite_status(self.learning_store, item,
+                        ready_ids=ready_ids))['blocked']
+                blocked = prerequisites[key]
                 if blocked:
                     result["blocked"] += 1
                     # A pending sibling ability already contributes this content
@@ -67,7 +79,7 @@ class StudyPathRuntimeMixin:
                     if content_row['introduction_id'] not in known_teaching:
                         teaching.add(content_row['introduction_id'])
                     continue
-                due = self.learning_store.question_not_before(unit, plan)
+                due = self.learning_store.question_not_before(unit, plan, now=now, exposure_times=exposures)
                 if content_row["stage"] == "bridge" and not self.learning_store._retrieval_ready(content_row, now):
                     due = max(due or "", content_row["retrieval_at_utc"])
                 if due and datetime.fromisoformat(due) > now:
@@ -89,6 +101,9 @@ class StudyPathRuntimeMixin:
         Only unfinished directions reserve work; history cannot hide due cards
         or newly unlocked recall directions in a continuously extended queue.
         """
+        from .practice_round import planned_round_running
+        if planned_round_running(self.store):
+            return {"ready": 0, "waiting": 0, "next_due": None}
         from . import ui_components as u
         from .app import KanaMemory
         from .domain import (WORD_SKILLS, LISTENING_SKILLS, HANDWRITING_SKILLS,
@@ -111,15 +126,16 @@ class StudyPathRuntimeMixin:
                   if q.kind not in WORD_SKILLS}
         grouped, due_by_key = {}, {}
         controls = self.store.get_setting(CONTENT_CONTROLS_SETTING, {})
-        from .kana_routing import candidate_cards, identity, prospective_identities
+        from .kana_routing import candidate_cards, current_identities, prospective_identities
         cards = candidate_cards(self.store, kinds, now)
-        occupied = {identity(self.store, cid, kind, script) for cid, kind, script in queued}
+        identities = current_identities(self.store, queued | {(c['content_id'], c['skill'], c['script']) for c in cards})
+        occupied = {identities[key] for key in queued}
         feedback_due = self.store.feedback_wait_times(
             ((c["content_id"], c["skill"], c["script"]) for c in cards), now)
         for card in cards:
             cid, kind, script = card["content_id"], card["skill"], card["script"]
             control = controls.get(cid, {})
-            if kind not in kinds or identity(self.store, cid, kind, script) in occupied or control.get("suspended"):
+            if kind not in kinds or identities[cid, kind, script] in occupied or control.get("suspended"):
                 continue
             due = datetime.fromisoformat(card["due_at_utc"])
             due = max(due, feedback_due.get((cid, kind, script), due))
@@ -252,15 +268,18 @@ class StudyPathRuntimeMixin:
             return
         if KanaMemory._activate_practice_lane(self, "main") is False:
             return
+        from .practice_round import begin, sealed, seal, frozen_priority, native_key, mark_finished
+        begin(self.store, restart_finished=not _checkpoint_saved)
         self.learning_store.ensure_prerequisites()
         service = self.study_path_service()
         preferences = clean_preferences(getattr(self, "_practice_preferences", {}))
         existing = self.store.load_session_progress(lane="main", lazy_questions=True)
         kinds = (KanaMemory._queue_kinds(self, existing) if existing
                  else enabled_preference_kinds(preferences))
-        queued = service.ensure_kana_queue(kinds,
+        queued = ({"session_id": existing["session_id"] if existing else None} if sealed(self.store)
+                  else service.ensure_kana_queue(kinds,
             audio_available=bool(self.platform.tts_ready), handwriting_available=self.model_state == "ready",
-            lazy_questions=True)
+            lazy_questions=True))
         if queued["session_id"]:
             # Do not overwrite the previous policy of an existing legacy queue.
             pending = self.store.load_session_progress(lazy_questions=True)
@@ -299,6 +318,12 @@ class StudyPathRuntimeMixin:
                         kana_priority = (5, 0)
         course_priority = (current.get("dispatch_priority", (4 if current["type"] == "question" else 5, 0))
                            if current and current["type"] in {"question", "instruction"} else None)
+        if kana_priority is not None:
+            kana_priority = frozen_priority(self.store, "cross-kana",
+                (pending["session_id"], native_key(q)), kana_priority)
+        if course_priority is not None:
+            course_priority = frozen_priority(self.store, "cross-course",
+                current["question"]["id"], course_priority)
         from .first_teaching_dispatch import choose_protected
         normal_kana = ({"type": "feedback" if pending.get("state", {}).get("feedback_pending") else
                         "introduction" if kana_priority[0] == 5 else "question",
@@ -306,9 +331,17 @@ class StudyPathRuntimeMixin:
                         "pending": pending, "state": pending.get("state", {}),
                         "session_id": pending["session_id"], "question_index": pending["question_index"],
                         "dispatch_priority": kana_priority} if pending and kana_priority else None)
-        protected = choose_protected(self.store, self.learning_store, normal_kana, current,
+        protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
             enabled_kinds=self.learning_preferences()["enabled"],
-            kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now)
+            kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now))
+        if protected:
+            from .practice_round import promote_initial
+            protected_lane, protected_head = protected
+            if protected_lane == "course":
+                promote_initial(self.store, course_id=protected_head["question"]["id"])
+            elif pending:
+                promote_initial(self.store, session_id=pending["session_id"], question=protected_head["question"])
+        seal(self.store)
         if protected:
             protected_lane, protected_head = protected
             if protected_lane == "course":
@@ -325,6 +358,16 @@ class StudyPathRuntimeMixin:
         elif lane == "course":
             self.continue_learning()
         else:
+            if not availability.ready_count and not availability.waiting_count and not current:
+                mark_finished(self.store)
+                from .practice_round import finished
+                if finished(self.store):
+                    self.screen("learning_done", "本轮已保存",
+                        u.label("作答记录和复习安排已保存。", size=17),
+                        u.button("开始新一轮", self.continue_study_path, primary=True),
+                        *self.learning_next_content_controls(),
+                        u.button("回到今日", self.leave_learning))
+                    return
             # Reference-only symbols have no made-up independent audio cards.
             path = service.overview()
             reference = service.next_reference_entry()

@@ -1162,6 +1162,8 @@ class StudyStore:
                 "question_index": new_index, "assisted_indices": assisted, "state": new_state,
                 "updated_at_utc": updated_at, "changed": True, "completed": completed,
                 "restored_count": len(restored)}
+        from .practice_round import remap_native_order
+        remap_native_order(self, session_id, remap)
         return self._activate_word_draft(result, lazy_questions=lazy_questions) if not completed else result
 
     def _activate_word_draft(self, pending, *, lazy_questions=False, dry_run=False):
@@ -1311,6 +1313,9 @@ class StudyStore:
         pending = self.load_session_progress(lazy_questions=lazy_questions)
         if pending is None or pending["session_id"] != session_id:
             return None
+        from .practice_round import active as round_active, collecting, sealed, finished, freeze_native_order, frozen_priority, native_key
+        if finished(self):
+            return None
         pending = self._park_invalid_context_draft(pending, lazy_questions=lazy_questions, dry_run=dry_run)
         pending = self._activate_word_draft(pending, lazy_questions=lazy_questions, dry_run=dry_run)
         questions, index = pending["questions"], pending["question_index"]
@@ -1346,7 +1351,8 @@ class StudyStore:
             if not dry_run and not teaching_only:
                 self.clear_session_progress()
             return None
-        if kana_resume_priority(state) is not None and not is_paused(questions[index]) and not kind_paused(questions[index]):
+        protected_head = kana_resume_priority(state) is not None and not is_paused(questions[index]) and not kind_paused(questions[index])
+        if protected_head and not collecting(self):
             return None if teaching_only else {**pending, "waiting_until_utc": None}
         from .kana_dependency_runtime import (
             kana_dependency_graph, kana_dependency_state, kana_prerequisite_status)
@@ -1370,7 +1376,7 @@ class StudyStore:
         review_day, daily_counts = reviews_today(self, now) if due_cards else (None, {})
         learned_scripts = ({tuple(row) for row in self._db.execute(
             "SELECT DISTINCT content_id,script FROM study_card WHERE review_count>0")} if spaced else set())
-        if (not teaching_only and not fair_new and not state and not unavailable and not paused_directions
+        if (not round_active(self) and not teaching_only and not fair_new and not state and not unavailable and not paused_directions
                 and all(question_allowed(q) for q in questions[index:])
                 and not due_cards
                 and not any(question.metadata.get("not_before_utc") for question in questions[index:])
@@ -1438,26 +1444,47 @@ class StudyStore:
                 return (*rank, old)
             repeated = bool(question.metadata.get("not_before_utc"))
             return (0 if repeated else 1, available_at(question) if repeated else now, old)
-        for item in sorted(ready, key=priority):
-            ready_by_content.setdefault(item[1].content_id, deque()).append(item)
-        heap = [(priority(items[0]), content_id) for content_id, items in ready_by_content.items()]
-        heapq.heapify(heap)
-        ready = []
-        previous_content = questions[index - 1].content_id if index else None
-        while heap:
-            selected = heapq.heappop(heap)
-            if (selected[1] == previous_content and heap
-                    and (not fair_new
-                         or (selected[0][0] < 4 and heap[0][0][0] < 4)
-                         or heap[0][0][:2] == selected[0][:2])):
-                alternative = heapq.heappop(heap)
-                heapq.heappush(heap, selected)
-                selected = alternative
-            content_id = selected[1]
-            ready.append(ready_by_content[content_id].popleft())
-            previous_content = content_id
-            if ready_by_content[content_id]:
-                heapq.heappush(heap, (priority(ready_by_content[content_id][0]), content_id))
+        if not sealed(self):
+            for item in sorted(ready, key=priority):
+                ready_by_content.setdefault(item[1].content_id, deque()).append(item)
+            heap = [(priority(items[0]), content_id) for content_id, items in ready_by_content.items()]
+            heapq.heapify(heap)
+            ready = []
+            previous_content = questions[index - 1].content_id if index else None
+            while heap:
+                selected = heapq.heappop(heap)
+                if (selected[1] == previous_content and heap
+                        and (not fair_new
+                             or (selected[0][0] < 4 and heap[0][0][0] < 4)
+                             or heap[0][0][:2] == selected[0][:2])):
+                    alternative = heapq.heappop(heap)
+                    heapq.heappush(heap, selected)
+                    selected = alternative
+                content_id = selected[1]
+                ready.append(ready_by_content[content_id].popleft())
+                previous_content = content_id
+                if ready_by_content[content_id]:
+                    heapq.heappush(heap, (priority(ready_by_content[content_id][0]), content_id))
+        if round_active(self):
+            if collecting(self):
+                from types import SimpleNamespace
+                from .kana_learning_intro import should_introduce
+                initial = [*ready, *future, *blocked, *parked]
+                if protected_head:
+                    initial = [(index, questions[index]), *(row for row in initial if row[0] != index)]
+                for entry in initial:
+                    initial_rank = priority(entry)[:2]
+                    if initial_rank[0] >= 4 and should_introduce(SimpleNamespace(store=self), entry[1]):
+                        initial_rank = (5, 0)
+                    frozen_priority(self, 'cross-kana', (session_id, native_key(entry[1])), initial_rank)
+                freeze_native_order(self, session_id, initial)
+            if protected_head:
+                return None if teaching_only else {**pending, "waiting_until_utc": None}
+            frozen_ready = freeze_native_order(self, session_id, ready)
+            frozen_future = freeze_native_order(self, session_id, future)
+            admitted_indices = {old for old, _ in [*frozen_ready, *frozen_future]}
+            parked.extend(row for row in [*ready, *future] if row[0] not in admitted_indices)
+            ready, future = frozen_ready, frozen_future
         teaching_trace = {}
         if teaching_only:
             from types import SimpleNamespace
@@ -1544,6 +1571,8 @@ class StudyStore:
                 if changed or new_index != index:
                     from .kana_ability_bridge import maintain_bridges
                     maintain_bridges(self)
+            from .practice_round import remap_native_order
+            remap_native_order(self, session_id, remap)
         result = {**pending, **teaching_trace, "questions": revised, "question_index": new_index,
                 "assisted_indices": sorted(assisted), "state": new_state,
                 "waiting_until_utc": wait_until.isoformat() if wait_until else None,
@@ -1965,6 +1994,8 @@ class StudyStore:
                 if recorded is not None:
                     self._db.rollback()
                     return {"scheduled": True, "already_recorded": True, "event_id": recorded[0], "card": self.get_scheduling_card(content_id, skill, script)}
+                from .practice_archive import assert_native_answerable
+                assert_native_answerable(self, session_id)
                 from .session_content import assert_current
                 assert_current(self, session_id, question_index, expected, question_fingerprint)
                 not_before = expected.get("metadata", {}).get("not_before_utc")
@@ -2083,7 +2114,8 @@ class StudyStore:
             queue_extended = False
             if question_index is not None:
                 config = expected.get("metadata", {}).get("practice_config", {})
-                if (config.get("schedule_mode") == "spaced" and int(updated.state) in (1, 3)
+                from .practice_round import active as fixed_round
+                if (not fixed_round(self) and config.get("schedule_mode") == "spaced" and int(updated.state) in (1, 3)
                         and now < updated.due < now + timedelta(days=1)):
                     metadata = {**expected.get("metadata", {}), "not_before_utc": updated.due.isoformat(),
                                 "relearning_of_index": question_index,
@@ -2102,7 +2134,7 @@ class StudyStore:
                         raise ValueError("本次复习记录过大，请结束后重新开始复习。")
                     session_questions.replace(self._db, session_id, questions, reader=self._snapshot_reader)
                     queue_extended = True
-                if corrections:
+                if corrections and not fixed_round(self):
                     from .kana_routing import reserve_new_units, bind_questions
                     added = [question.to_dict() for question in corrections]
                     reserve_new_units(self, added, session_id)
@@ -2160,6 +2192,8 @@ class StudyStore:
                 return {"scheduled": True, "already_recorded": True, "attempt_id": recorded[0],
                     "event_id": recorded[0], "card": None, "due_at_utc": None,
                     "queue_extended": False, "correction_count": 0}
+            from .practice_archive import assert_native_answerable
+            assert_native_answerable(self, session_id)
             from .kana_context_words import context_active
             from .session_content import assert_current, REPLACED, PREFIX as REPLACEMENTS
             assert_current(self, session_id, question_index, expected, question_fingerprint)
@@ -2244,7 +2278,8 @@ class StudyStore:
                 probe=expected.get("metadata", {}).get("kana_rule_probe_v1"))
             corrections = [] if drill or converted else self._validated_spelling_corrections(session_id, question_index,
                 questions, spelling, spelling_corrections, kana_rows or [], now)
-            if corrections:
+            from .practice_round import active as fixed_round
+            if corrections and not fixed_round(self):
                 from .kana_routing import reserve_new_units, bind_questions
                 added = [question.to_dict() for question in corrections]
                 reserve_new_units(self, added, session_id)

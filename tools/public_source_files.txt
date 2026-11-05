@@ -45,6 +45,9 @@ app/src/kanamemory/ai_service_ui.py
 app/src/kanamemory/ai_ui.py
 app/src/kanamemory/ai_ui_state.py
 app/src/kanamemory/answer_autoplay.py
+app/src/kanamemory/answer_speech.py
+tests/test_answer_speech.py
+tests/test_word_block_structure.py
 app/src/kanamemory/answer_feedback.py
 app/src/kanamemory/answer_input.py
 app/src/kanamemory/ability_teaching.py
@@ -175,6 +178,9 @@ app/src/kanamemory/learning_store.py
 app/src/kanamemory/learning_replacement.py
 app/src/kanamemory/learning_ui.py
 app/src/kanamemory/learning_pitch_ui.py
+app/src/kanamemory/multi_cloze.py
+app/src/kanamemory/cloze_presentation.py
+app/src/kanamemory/multi_cloze_ui.py
 app/src/kanamemory/pitch_practice.py
 app/src/kanamemory/pitch_practice_ui.py
 app/src/kanamemory/pitch_practice_canvas.py
@@ -214,6 +220,7 @@ app/src/kanamemory/pronunciation_curriculum.py
 app/src/kanamemory/pronunciation_samples.py
 app/src/kanamemory/pronunciation_sections.py
 app/src/kanamemory/question_contexts.py
+app/src/kanamemory/question_presentation.py
 app/src/kanamemory/question_support.py
 app/src/kanamemory/reading_audio.py
 app/src/kanamemory/review_dispatch.py
@@ -236,6 +243,9 @@ app/src/kanamemory/study_path_ui.py
 app/src/kanamemory/text_layout.py
 app/src/kanamemory/tree_checkbox.py
 app/src/kanamemory/tutor_engine.py
+app/src/kanamemory/ai_question_capabilities.py
+app/src/kanamemory/ai_prompt_policy.py
+app/src/kanamemory/tutor_native_routes.py
 app/src/kanamemory/learning_harness.py
 app/src/kanamemory/learning_practice_policy.py
 app/src/kanamemory/learning_conditions.py
@@ -294,7 +304,7 @@ app/src/kanamemory/kana_routing.py
 pyproject.toml
 pytest.ini
 .github/workflows/python-quality.yml
-AGENTS.md
+CLAUDE.md
 docs/design_current/07_engineering_structure.txt
 docs/python-engineering.txt
 environment/requirements-quality.txt
@@ -323,6 +333,15 @@ app/src/kanamemory/word_blocks.py
 app/src/kanamemory/material_request_outcome.py
 app/src/kanamemory/course_planning.py
 app/src/kanamemory/practice_preferences.py
+app/src/kanamemory/practice_round.py
+app/src/kanamemory/practice_archive.py
+docs/practice_round_0300.txt
+tests/test_practice_round.py
+tests/test_practice_archive.py
+tests/support/__init__.py
+tests/support/learning_store_fixtures.py
 app/src/kanamemory/answer_result_ui.py
 app/src/kanamemory/learning_dispatch_types.py
 app/src/kanamemory/adaptive_evidence.py
+app/src/kanamemory/prosody_cue.py
+app/src/kanamemory/prosody_cue_ui.py

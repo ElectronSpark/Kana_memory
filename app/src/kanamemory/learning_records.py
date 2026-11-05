@@ -109,6 +109,24 @@ def build_learning_records(app):
         app._learning_records_offset = result["offset"]
         panel.clear()
         panel.add(u.label(f"已加入 {result['total']} 项 · 已练 {result['reviewed']} 项 · 现在可练 {result['due']} 项", size=15))
+        from .practice_archive import archived_attempts
+        observations = archived_attempts(app.store)
+        if observations:
+            history = u.col()
+            def toggle_history(widget=None, **kwargs):
+                if not active():
+                    return
+                if history.children:
+                    history.clear()
+                    return
+                history.add(u.label("已保存作答，未选择复习评分；不自动修改到期时间。", size=12, color=u.MUTED))
+                for entry in observations:
+                    question = entry["question"]
+                    title = question.get("prompt") or question.get("title") or entry["content_id"]
+                    history.add(u.label(str(title), bold=True),
+                        u.label(entry["answered_text"], text_role="study"),
+                        u.label(date_label(entry["at"]), size=12, color=u.MUTED))
+            panel.add(u.button("未评级作答 · 最近记录", toggle_history, compact=True), history)
         if not result["items"]:
             panel.add(u.label("还没有加入课程学习。", color=u.MUTED))
             return

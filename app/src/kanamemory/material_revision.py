@@ -92,6 +92,10 @@ def revision_spec(request):
         'Do not change other fields, expand scope, invent sources, accents, IDs, progress or due dates. Cite only supplied '
         'evidence IDs; leave citations empty for an unproven suggestion. Preserve unknown readings/accents rather than '
         'guessing. Give a concise Simplified Chinese note for each suggestion. This creates a pending draft, not approved teaching.')
+    from .ai_prompt_policy import JSON_OUTPUT_RULES
+    instructions += ('\n' + JSON_OUTPUT_RULES + '\nvalue_json is a string containing serialized JSON, '
+        'not the raw field value. For a string field, encode its quotes too; for a list/object, encode the '
+        'complete list/object. If no defensible change exists, return {"changes":[]}.')
     return instructions, request, schema
 
 

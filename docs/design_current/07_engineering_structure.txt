@@ -1,5 +1,62 @@
 KanaMemory 工程结构与依赖契约
-版本15；2026-11-03；0.28.5反馈及结构修复；具体验证/交付以feedback_structure_fixes_20261103.txt为准。
+版本28；2026-11-04；本轮见docs/practice_round_0300.txt。
+0.30.0：practice_round拥有当前App运行期的题单、顺序与调度选择缓存，不能授予答题或评分资格；
+页面/流程通过具名接口接续，Store仍在展示与提交时校验实时到期、前置与材料安全。
+practice_archive是本地轮次归档事务所有者，以精确回执结束checkpoint/普通课程pending所有权，
+保留原题、草稿、未评级作答及已评分历史/SRS，跳过诊断和AI独立所有权。其读取接口返回
+已校验的分离值；原生已记录答案先幂等返回，归档保护再拒绝新提交。验证范围见本轮报告。
+0.29.9：ai_prompt_policy只生成任务专用指令和合法候选示例，无网络、平台、数据库或评分副作用。
+tutor_service按问答、普通下一步、纯路由收窄schema；纯路由的实时响应校验拒绝记忆更新，
+不重验或迁移历史笔记。候选枚举和示例共享本地policy目标筛选；最终采纳仍经现有校验。
+ai_question_capabilities按实际公开题型附加控制说明，复用answer_input的纯罗马音资格函数；
+依赖清单明确许可该现有纯函数，并新增ai_prompt_policy依赖守卫。没有复制另一套输入资格。
+生成、辅导、检查、复核和反馈修订分别遵守自己的输出格式与权限；公开请求载荷保持原合同。
+新需求规则、模型容量边界及验证/交付状态详见本轮报告。UI、课程、FSRS及持久格式不变。
+0.29.8：answer_input将共享罗马音输入扩展到无候选的语法填空、变形、重排、纠错和造句。
+保留原共享API名；资格只读公开题型/输入方式，不依赖隐藏答案。语法混合草稿只转换
+Latin片段，保留汉字、已有假名和数字；单词读音保持既有转换。answer_input_ui沿用
+默认可编辑、假名预览及未完成提交保护，课程/引导/Tutor/掌握度检查共用现有入口。
+原始草稿持久化，只有当前提交转假名；历史结果不重判。固定候选、罗马音选假名、
+发音分析不扩权，系统日文输入的选题可用性合同不变。验证状态以本轮报告为准。
+0.29.7：word_blocks新增受限的完整句末词块位置诊断，纯规则不承担日语通用判题。
+learning_ui仅为原已保存unresolved、当前材料合格且未受提示的回答做只读展示；
+answer_feedback可显示语序错误，与目标单词是否已掌握分开。不改原结果、观察、
+FSRS、草稿或队列；其他合理语序与开放作答继续保留原保守策略。
+0.29.6：answer_speech纯投影区分答案显示与朗读。按当前题的日语答案/完成句/词句刺激
+移除已知音高及分析标记；未知图表不猜读，不以整课例句代替当前变体。learning_ui与
+假名/单词练习入口共享清理，答后自动/按钮复用同一文本；structured pitch仍静默。
+不改快照、草稿、显示、评分、曝光或SRS；不改变全局speak_text或方言/古音播放规则。
+0.29.5：cloze_presentation只读投影公开共同上下文和保存的选值，不读答案键、不改冻结题。
+multi_cloze_ui拥有同页句视图；question_support.render_prompt_plan复用安全背景注音与原生
+换行，selected_spans与知识点target_spans分别记录。multi_cloze草稿v1可选有界selection_order，
+旧草稿无迁移、按句序回退；四个控制器仍由现有Store保存成功后更新，评分/SRS不变。
+0.29.2：prosody_cue是无平台依赖的刺激校验/整词换行几何；prosody_cue_ui拥有
+Toga矢量画布和动态高度，供question_support和structured_lesson_ui复用。
+仅已审核读音选择题可附prosody_observation参考曲线，API公开该刺激，评分哈希
+仅对存在的新字段绑定；旧快照哈希不变。不允许借题型目录自由生成曲线。
+multi_cloze新增pronunciation_application/application合法入口，主/背景评分归属不变。
+tools/publish_pronunciation_expansion要求精确逐课及逐题审批，输出独立内容包，
+只追加课程和模板，不读写学习数据库。公开源码仍仅含原创demo，不携私用讲解。
+实现与原生/自动验证的精确范围分别列在本轮报告，不以画布单测代替原生布局验证。
+0.29.0：ai_question_capabilities统一26种真实题型及模型可见操作/公开高亮锚点，
+不将类型目录当作选题许可。tutor_native_routes用原生队列合法头题生成不透明引用，
+私有定位/草稿不发给模型；采纳前复查，再调用原主线/单词工具控制器。
+learning_practice_policy.practice_candidates共享背景资格和扩展语境描述；
+tutor与retention不再仅扫描旧模板/前三个变体。每次请求仍限制候选和历史容量。
+tutor的音高快照、草稿、控件、判题和图形反馈复用pitch_practice与learning_pitch_ui。
+旧存档无迁移，新API上下文为可选字段；正式调度、辅助权重和记忆单位归属不变。
+0.28.9：question_presentation只读公开prompt/task/practice，按精确已知模板给出简短
+作答提示和目标span；未知要求、义项、变形/语境限制保留。旧题仅在公开引用唯一
+匹配时去重。question_support统一先执行原注音/TTS安全门，再高亮正文；课程、
+首次引导、AI、tutor与两种掌握度检查复用。反馈片段保留实际提示与高亮方案。
+不增加持久化字段、不修改题目快照/草稿/队列/评分/调度。公开源码清单含新模块。
+0.28.5之后的性能增量，实现验证见performance_optimization_20261103.txt。
+0.28.8来源登记修复：ExampleStore.import_pack在写事务内重新验证并合并，仅为本次
+输入身份中实际保留的行登记来源；被合并舍弃的元数据不参与hash，不扩大无关AI材料许可。
+material_usage将旧包身份映射与单行修改前状态分开，多个旧独立副本都保留external属性。
+有限收尾当前状态见config/bounded_finish_20261103.json；不能将待验项目当成已通过。
+后续0.28.6只递增版本并打包，不改结构；交付范围见packaging_0286_20261103.txt。
+0.28.5的既有交付以feedback_structure_fixes_20261103.txt为准。
 
 0.28.5新增职责 [I；有限验证见上文报告]
 - feedback_export_worker拥有导出准备/归档线程和独立Store连接。UI仅交付不可变载荷，
@@ -7,6 +64,8 @@ KanaMemory 工程结构与依赖契约
 - course_planning是只读候选规划，显式查询/进度/偏好输入和具名输出；UI只装配、按需
   物化和提交。practice_preferences是纯归一化，不导入App，也不接管会话队列策略。
 - word_blocks是纯草稿提案，调用方先保存后更新控件；answer_result_ui仅共享展示。
+- learning_ui词块编辑采用保存后的正式draft局部更新；非pending/已有结果才重新派发。
+  _learning_blocks_context随PAGE_BINDINGS保存/恢复，绑定题目对象与原控件，拒绝旧回调。
 - learning_dispatch_types与FinishCallback明确内存协议，不是新的数据格式或业务层。
 - material_request_outcome仅安全记录失败/刷新；预算仍由材料用例结算。provider授权
   显式绑定且一实例一请求，错误响应usage也必须可结算。
@@ -59,6 +118,26 @@ domain.py仍混合类型、规划和存储，不冒称已整体拆成纯领域�
   上下文退出即失效；新动作重读设置、内容、队列。add_entries独立重查后提交。
   counts题面逐行按需解码一次，空目标不规划，已知空队列不重复读。
   原snapshot双会话缓存及revision/data_version/外部竞争检查保持不变。
+- ExampleStore.read_operation只在一次同步页面构建中共享学习状态投影；例句卡片、
+  单项例句、例句详情与例句库的排序、链接和背景提示使用同一范围。嵌套读取共享外层，
+  离开最外层即释放；不能跨await、线程或后续动作持有。返回值深复制，调用方不能污染缓存。
+  本连接写入、外部提交及资源refresh使其失效；事务内始终实时读取且不发布缓存，回滚后
+  重读。查询前后的数据库token不同则丢弃本次缓存，不能拼接两版投影。
+  这不是原子数据库快照或评分/入队权限；不改变熟悉度规则，不长期缓存学习进度。
+- ExampleStore.for_item_page在完整实时排序后只复制所选页的例句/引用/提示，返回total与examples。
+  for_item作为limit=None兼容入口。预览/分页UI使用新接口；重排、个人版本、关联和总数政策不变。
+- kana_routing.current_identities一次解析本次读取的活动/计划身份，未知方向保留原元组；
+  与prospective_identities区分，不能提前合并尚未激活能力。后续动作/写入重新解析。
+  添加页及首页预览复用该批量结果，active_units原版本校验和事务回滚路径不变。
+- course_planning.iter_question_plans可显式接收本次动作刚读取的unit_states；缺省仍实时get_unit。
+  首页缺题预览按(content_id,instruction_scope)复用前置结果，一次读取输入设置及曝光时刻；
+  question_not_before显式接收now/exposure_times。追加教学scope不能继承旧scope的豁免。
+- TutorUIMixin按StudyStore对象身份复用AITutorStore；不共享给其他Store或线程。
+  save_chat_draft拥有独立写事务，每键提交。仅数据库原始JSON与本实例已验证/成功提交的
+  私有缓存逐字相同才复用历史校验；未知版本完整校验，不单凭revision数字判新旧。
+  此入口只改chat_draft/chat_context/revision，仍检查字段、密钥和总大小，不变输入不写。
+  缓存仅一份、commit后发布、失败清除；正式snapshot及其他_mutate继续完整验证。
+  该Store写入口的连接访问在architecture_policy中单独说明责任，UI没有新增SQL权限。
 - practice_worker/backup_worker各在线程内独立创建、关闭SQLite连接。
   取消后旧结果不能覆盖新请求；backup取消须等待回滚/提交及连接关闭。
   后台结果应用前检查请求/页面身份，不跨线程复用控件，不无依据增加线程或常驻缓存。
@@ -113,6 +192,25 @@ tools/check_architecture.py和architecture_policy.json按文件、作用域、�
 新发现单列，不自动扩展固定目标；本轮引入的回归必须修复。
 
 07 实施与证据入口
+0.29.1增量（实现、内容出版与有限验证；精确范围见本轮报告）：multi_cloze为纯规则，
+负责2–6空的精确锚点、允许组合、草稿和逐空诊断；multi_cloze_ui由宿主注入持久化/
+提交/页面有效性回调，写入成功才更新可见草稿。初学、课程、Tutor及掌握度检查复用。
+主项错误沿用原结算；背景空错误作为诊断，不批量改关联项或主项间隔。assessment_policy
+仅在新结构存在时将其纳入合同hash，旧题合同不变。保留旧快照/题序/学习ID及草稿。
+API公开空位控件需与完整本地spec一致，模型只能检索已提供候选；当前自由生成与
+个人整题修订仍安全拒绝多空模式，不能用其权限标记授予评分资格。结构及持久化检查
+见tests/test_multi_cloze*.py；规范、完成记录及未测边界见question_expansion_0291_plan.txt。
+
+题库出版由tools/compile_reviewed_question_batch.py核对完整逐槽Sol审批，按原序号追加。
+原始题面及学习项指纹精确绑定停用表，只排除未来抽题，旧快照/草稿/结果照原身份恢复。
+旧0.28.1生成器的审校来源已冻结；回归测试用独立私用来源快照恢复其原输入，
+不把更正后的共享例句强配到旧authoring。新发布不重跑旧生成器，也不放宽失效来源检查。
+手机内容包的新增provenance只保留题目/候选/审批指纹；完整来源、逐题语义审校和投影
+清单随私用审计产物归档，避免每条重复长来源记录而突破原32MiB内容命名空间上限。
+本轮核心15,288槽已完成Sol逐题审校，发布5,462新增与334替换；其余7,397旧模板未
+纳入完整语义复审。正式评分/草稿/历史兼容与UI契约分别192/223项通过，工程及独立
+MIT源码各120项检查通过。原生诊断、正式评分与音频听感是不同验证范围，不相互替代。
+
 E1：1209测试支撑调用逐项处置，1010互导/193路径迁移、6工具导入保留；原10423节点保持。
 E2：54个冻结调用点中42迁移、1无用导入移除、11保留；11处对应12条具体启动/政策符号边。
 组件/主题与答题协调分开。
@@ -128,3 +226,17 @@ E8当前最终候选及有限验证状态见docs/engineering_E8_20261103.txt、R
 python-engineering.txt定义日常原则；本文件取代本章节旧版本中的目标/迁移叙述，定义当前结构。
 python-refactor-20261102.txt和E1—E7记录保留历史过程；01—06中旧版本/目标仍属历史证据。
 原四年模拟与旧G/A/M/F计划保持暂停；工程目标完成不意味着那些旧验收已经完成。
+
+0.29.3增量：按能力首次教学仍由LearningStore负责事务，ability_teaching复用v1作用域，
+不改变学习单位或评分。prepare_initial_familiarity仅拆分未曝光、未作答的初始范围；
+save_familiarity_draft保存已开始旧范围的逐项选择。StudyQueries通过ability_teaching.rows
+聚合所有教学范围，任一范围未完成时课程仍未完成，前置不得因第一项完成而提前放行。
+feedback_ui单项归档/删除复用FeedbackStore，异步确认绑定页面和记录身份。
+question_support只读升级有精确本地身份的旧题展示，不改题面、答案、草稿或评分记录；
+注音投影需完整上下文指纹与唯一未改片段，读音/听辨/音高及答案重叠仍走原安全过滤。
+验证边界和前版替代关系见docs/usability_0293.txt。
+
+0.29.4：LearningStore新增同项其他能力介绍曝光的只读投影；UI据此省去重复导航，
+不将介绍曝光或全熟自评作为掌握。仍由原Store转移记录当前曝光/guide/bridge，
+不改学习单位、队列、评分或记录格式；引导内讲解按需展开，冻结题/草稿恢复照旧。
+具体同版边界及验证见docs/shared_intro_0294.txt。

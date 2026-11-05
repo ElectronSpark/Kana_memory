@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from .navigation import page_view
 from .retention_check import RetentionCheckStore
+from .question_presentation import question_instruction
 from .question_support import build_prompt_block, learning_text_role, clean_prompt_preferences
 from .typography import configure_text_role
 from .retention_session_ui import DiagnosticUIMixin
@@ -58,8 +59,12 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
 
     def start_retention_check(self,family):
         from .learning_content import get_learning_item
-        from .learning_questions import question_kinds,build_learning_question
+        from .learning_questions import build_learning_question
+        from .learning_practice_policy import practice_candidates
+        from .answer_input import system_japanese_enabled
         enabled=self.learning_preferences()['enabled'];targets=[]
+        known=self.store.queries.instruction_ready_ids()
+        system_japanese=system_japanese_enabled(self.store)
         enrolled={item['id'] for item in self.learning_store.list_items()}
         recent=self.retention_checks().recent_targets()
         for item in self.learning_items_available():
@@ -67,11 +72,9 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
                 continue
             local=get_learning_item(item['id'])
             if local is None:continue
-            for kind in question_kinds(local['id'],item=local):
-                if kind not in enabled:continue
-                q=build_learning_question(local,kind)
-                from .answer_input import available, system_japanese_enabled
-                if not available(q,system_japanese=system_japanese_enabled(self.store)):continue
+            for candidate in practice_candidates(local,enabled,
+                    known_background_ids=known,system_japanese=system_japanese):
+                q=build_learning_question(local,candidate['kind'],variant=candidate['variant'])
                 if q.get('input_mode','choice') in ('choice','text','typing','free_text') and not q.get('audio_text'):
                     targets.append(item['id']);break
             if len(targets)==3:break
@@ -108,9 +111,10 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         if row['result'] is not None:return self.show_retention_check_result(context)
         q=row['question'];children=[u.button('显示答案',lambda w:self.submit_retention_check(context,'',revealed=True),compact=True),
             build_prompt_block(self,q,clean_prompt_preferences(self.store.get_setting('prompt_display_v1',{})))]
-        children[-1]._feedback_fragment={'kind':'retention_check','episode_id':episode_id,'entry':deepcopy(row),'purpose':'check_only'}
-        if q.get('task'):
-            children.append(u.label(q['task'],size=13,color=u.MUTED))
+        children[-1]._feedback_fragment.update({'kind':'retention_check','episode_id':episode_id,'entry':deepcopy(row),'purpose':'check_only'})
+        instruction=question_instruction(q)
+        if instruction:
+            children.append(u.label(instruction,size=13,color=u.MUTED))
         if q.get('input_mode','choice')=='choice':
             children.extend(u.button(answer,lambda w,a=answer:self.submit_retention_check(context,a),multiline=True) for answer in q.get('choices',[]))
         else:

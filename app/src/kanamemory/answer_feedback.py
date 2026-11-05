@@ -25,11 +25,20 @@ SIGNALS = {
 }
 
 
-def build_answer_feedback(result: dict):
+def build_answer_feedback(result: dict, *, structure_error=None):
     from . import ui_components as u
 
     state = feedback_state(result)
+    # A proven arrangement error is visible even when its cause cannot be
+    # attributed to the target word's memory. The frozen result stays unknown.
+    from .word_blocks import SENTENCE_END_ERROR
+    structure_error = (structure_error == SENTENCE_END_ERROR and state == "ungraded"
+                       and not result.get("assisted") and not result.get("revealed"))
+    if structure_error:
+        state = "incorrect"
     symbol, foreground, background, accessible_name, caption = SIGNALS[state]
+    if structure_error:
+        caption = "语序有误"
     # A kana spelling can be wrong even when it represents the same sound.
     # This short distinction belongs in the existing signal, not a second
     # large explanation competing with the review controls.
@@ -53,6 +62,8 @@ def build_answer_feedback(result: dict):
     signal = u.row(*children, align_items="center", background_color=background,
                    padding=4, margin_bottom=4)
     signal._feedback_fragment = {"kind": "answer_feedback", "state": state}
+    if structure_error:
+        signal._feedback_fragment["structure_error"] = SENTENCE_END_ERROR
     if u.current_platform == "android":
         # TalkBack needs a worded result even though sighted users only see a
         # symbol. Announce new feedback politely without moving input focus.

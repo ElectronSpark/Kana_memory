@@ -175,10 +175,10 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         return True
 
     @page_view()
-    def show_feedback_manager(self, widget=None, *, status=None, query="", offset=0):
+    def show_feedback_manager(self, widget=None, *, status="open", query="", offset=0):
         self._render_feedback_manager(status=status, query=query, offset=offset)
 
-    def _render_feedback_manager(self, *, status=None, query="", offset=0):
+    def _render_feedback_manager(self, *, status="open", query="", offset=0):
         u = ui()
         try:
             service = self.feedback_store()
@@ -243,7 +243,11 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             caption = _caption(STATUSES, record.get("status"), "待处理") + " · " + _caption(CATEGORIES, record.get("category"), "其他")
             children.append(u.col(checkbox, u.label(page, size=16, bold=True),
                 u.label(preview, size=15), u.label(caption + " · " + local_feedback_time(record.get("created_at", "")), size=12, color=u.MUTED),
-                u.button("查看反馈", lambda w, key=identity: self.show_feedback_detail(key), compact=True),
+                u.row(u.button("查看", lambda w, key=identity: self.show_feedback_detail(key), compact=True, flex=1),
+                    u.button("取消归档" if record['status'] == 'archived' else "归档",
+                        lambda w, key=identity, action='open' if record['status'] == 'archived' else 'archived':
+                            self.change_feedback_record(key, action, state), compact=True, flex=1),
+                    u.button("删除", lambda w, key=identity: self.change_feedback_record(key, 'delete', state), compact=True, flex=1)),
                 padding=10, margin_bottom=8, background_color=u.ENTRY_BACKGROUNDS[index % 3]))
         if not records:
             children.append(u.label("没有符合条件的反馈。", color=u.MUTED))
@@ -293,6 +297,67 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             return
         self.clear_feedback_selection()
         self._render_feedback_manager(**self._feedback_manager_state)
+
+    def change_feedback_record(self, identity, action, state, *, detail=False):
+        """Direct single-record actions never reuse the bulk selection."""
+        if action not in {'archived', 'open', 'delete'}:
+            raise ValueError('Unknown feedback action')
+        page = 'report_detail' if detail else 'report_list'
+        attribute = '_report_detail' if detail else '_feedback_manager_state'
+        token = self._page_token
+
+        def current():
+            return (self.page == page and self._page_token == token
+                    and getattr(self, attribute, None) is state
+                    and (not detail or state['id'] == identity))
+
+        if not current() or getattr(self, '_feedback_delete_pending', False):
+            return
+
+        def commit():
+            if action == 'delete':
+                self.feedback_store().delete_many([identity])
+            elif detail:
+                self.feedback_store().update(identity, status=action,
+                    note=str(state['note'].value or '').strip(), category=CATEGORIES[state['category'].value])
+            else:
+                self.feedback_store().update_many([identity], status=action)
+            getattr(self, '_feedback_selected', set()).discard(identity)
+
+        def refresh():
+            if detail:
+                self._return_feedback_list()
+            else:
+                self._render_feedback_manager(**state)
+
+        if action != 'delete':
+            committed = False
+            try:
+                commit()
+                committed = True
+                refresh()
+            except Exception as exc:
+                self.alert(('反馈已更新，请重新打开列表：' if committed else '未能更新反馈，修改仍保留：') + str(exc))
+            return
+        self._feedback_delete_pending = True
+
+        async def confirm():
+            committed = False
+            try:
+                if not current():
+                    return
+                accepted = await self.main_window.dialog(ui().toga.ConfirmDialog('删除这条反馈？',
+                    '将删除此反馈及其页面快照，无法撤销。' + ('未保存的修改也会丢弃。' if detail and self._feedback_dirty(state, detail=True) else '')))
+                if not accepted or not current():
+                    return
+                commit()
+                committed = True
+                refresh()
+            except Exception as exc:
+                self.alert(('反馈已删除，请重新打开列表：' if committed else '未能删除反馈：') + str(exc))
+            finally:
+                self._feedback_delete_pending = False
+        self.loop.create_task(confirm())
 
     def delete_feedback_batch(self, widget=None, **kwargs):
         if self.page != "report_list":
@@ -532,6 +597,9 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         self._report_detail = state
         context = record["context"]
         self.screen("report_detail", "反馈详情", u.label(_page_title(context), size=18, bold=True),
+            u.row(u.button('取消归档' if record['status'] == 'archived' else '归档',
+                lambda w: self.change_feedback_record(identity, 'open' if record['status'] == 'archived' else 'archived', state, detail=True), compact=True, flex=1),
+                u.button('删除', lambda w: self.change_feedback_record(identity, 'delete', state, detail=True), compact=True, flex=1)),
             state["note"], state["category"], state["status"], state["message"],
             u.button("保存修改", self.save_feedback_changes, primary=True),
             u.button('AI 检查', lambda w: self.open_feedback_analysis_detail(), compact=True),

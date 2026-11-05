@@ -126,7 +126,7 @@ def _kana_reviews(app, repo, pending, kinds, now, result):
     if not kinds:
         return
     controls = app.store.get_setting(CONTENT_CONTROLS_SETTING, {})
-    from .kana_routing import candidate_cards, identity
+    from .kana_routing import candidate_cards, current_identities
     cards = [row for row in candidate_cards(app.store, kinds, now)
         if row["skill"] in kinds and not controls.get(row["content_id"], {}).get("suspended")]
     if not cards:
@@ -146,21 +146,23 @@ def _kana_reviews(app, repo, pending, kinds, now, result):
     # Queue-only delays are not FSRS interval changes. Multiple questions for
     # the same legacy direction are still one memory unit in this overview.
     queue_due = {}
-    available_units = {identity(app.store, *key) for key in due_by_key}
-    for q in (pending or {}).get("questions", [])[(pending or {}).get("question_index", 0):]:
-        key = identity(app.store, q.content_id, q.kind, q.script)
+    queued = (pending or {}).get("questions", [])[(pending or {}).get("question_index", 0):]
+    identities = current_identities(app.store, set(due_by_key) | {(q.content_id, q.kind, q.script) for q in queued})
+    available_units = {identities[key] for key in due_by_key}
+    for q in queued:
+        key = identities[q.content_id, q.kind, q.script]
         if q.kind in kinds and key in available_units:
             value = q.metadata.get("not_before_utc")
             due = datetime.fromisoformat(value) if value else now
             queue_due[key] = min(queue_due.get(key, due), due)
     for key in due_by_key:
-        due_by_key[key] = max(due_by_key[key], queue_due.get(identity(app.store, *key), due_by_key[key]))
+        due_by_key[key] = max(due_by_key[key], queue_due.get(identities[key], due_by_key[key]))
     by_ability = {}
     for (kind, script), ids in grouped.items():
         candidates = build_questions(repo, _BatchQuestionStore(app.store, ids), kind=kind,
             script=script, limit=len(ids), seed=0, now=now, include_extended=True, _targets_only=True)
         for q in candidates:
-            key = identity(app.store, q.content_id, kind, script)
+            key = identities[q.content_id, kind, script]
             due = due_by_key[q.content_id, kind, script]
             by_ability[key] = min(by_ability.get(key, due), due)
     for due in by_ability.values():

@@ -61,6 +61,18 @@ def _candidate_pool(service, scope, enabled):
                 'title': str(item['title'])[:100], 'prompt': str(q['prompt'])[:160],
                 'review_count': unit['review_count'], 'anchor': latest_anchor(service.db, uid),
                 'proof': proof, 'course_question_id': pending['question_id'] if pending else None})
+        # Rotate within the same ability/control burden, using completed
+        # observations rather than wall time. Reopening a request stays stable;
+        # appended contexts no longer lose forever to original variant zero.
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for row in legal:
+            groups[(row['ability'], row['response_mode'])].append(row)
+        observed = service.db.execute('SELECT COUNT(*) FROM learning_evidence WHERE target_id=?', (cid,)).fetchone()[0]
+        legal = []
+        for rows in groups.values():
+            offset = observed % len(rows)
+            legal.extend(rows[offset:] + rows[:offset])
         # Preserve ability coverage, then add an alternate response mode. This
         # is a bounded engineering sample, not calibrated difficulty or mastery.
         chosen, abilities = [], set()
@@ -72,6 +84,12 @@ def _candidate_pool(service, scope, enabled):
                 break
             if row not in chosen and not any((r['ability'], r['response_mode']) ==
                                              (row['ability'], row['response_mode']) for r in chosen):
+                chosen.append(row)
+        for row in legal:
+            if len(chosen) >= 4:
+                break
+            if row not in chosen and not any((r['ability'], r['kind']) ==
+                                             (row['ability'], row['kind']) for r in chosen):
                 chosen.append(row)
         result.extend(chosen[:4])
     return result
@@ -209,6 +227,10 @@ def generate(provider, request):
             'Local ordering will keep baseline checks before transfer/recovery.')
     # Local proofs, anchors and shared IDs do not help a model choose questions.
     payload = {k: deepcopy(v) for k, v in request.items() if k != 'enabled'}
+    from .ai_question_capabilities import capability_catalog, capability_rules
+    from .ai_prompt_policy import JSON_OUTPUT_RULES
+    payload['question_capabilities'] = capability_catalog(request.get('enabled', ()), request['candidates'])
+    instructions += '\n' + capability_rules() + '\n' + JSON_OUTPUT_RULES
     payload['candidates'] = [{k: v for k, v in row.items() if k not in {'proof', 'anchor', 'course_question_id'}}
                              for row in request['candidates']]
     if 'session' in payload:

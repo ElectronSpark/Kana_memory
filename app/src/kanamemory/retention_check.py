@@ -200,7 +200,9 @@ class RetentionCheckStore:
 
     def start(self, target_ids, enabled_kinds, request_id, *, exposed_ids=(), now=None):
         from .learning_content import get_learning_item
-        from .learning_questions import build_learning_question, question_kinds
+        from .learning_practice_policy import practice_candidates
+        from .learning_questions import build_learning_question
+        from .answer_input import system_japanese_enabled
         from .learning_evidence import reviewed_question
         if (not isinstance(request_id,str) or not 1 <= len(request_id) <= 256
                 or not isinstance(target_ids,list) or not 1 <= len(target_ids) <= MAX_TARGETS
@@ -218,18 +220,16 @@ class RetentionCheckStore:
                 raise ValueError('请先继续未完成的检查。')
             entries=[]
             stamp=now or app_clock.utc_now()
+            known = self.store.queries.instruction_ready_ids()
+            system_japanese = system_japanese_enabled(self.store)
             for cid in target_ids:
                 item=get_learning_item(cid)
                 if item is None:
                     raise ValueError('这项材料尚无可核验的本地题。')
                 candidates=[]
-                for kind in question_kinds(cid,item=item):
-                    if kind not in enabled_kinds:
-                        continue
-                    q=build_learning_question(item,kind)
-                    from .answer_input import available, system_japanese_enabled
-                    if not available(q,system_japanese=system_japanese_enabled(self.store)):
-                        continue
+                for candidate in practice_candidates(item, enabled_kinds,
+                        known_background_ids=known, system_japanese=system_japanese):
+                    q=build_learning_question(item,candidate['kind'],variant=candidate['variant'])
                     if q.get('input_mode','choice') not in ('choice','text','typing','free_text') or q.get('audio_text'):
                         continue
                     if not reviewed_question(q) or not assessment_decision(item,q,purpose='check_only',enrolled=False,store=self.store)['assessment_eligible']:

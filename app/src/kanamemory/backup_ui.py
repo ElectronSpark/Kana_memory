@@ -98,6 +98,8 @@ async def _stage(app, action, title, data=None):
                 reopened = StudyStore(data_dir, time_zone=zone)
                 reopened.practice_lane = lane
                 learning = LearningStore(reopened)
+                from .practice_round import restore_connection
+                restore_connection(old, reopened, imported=job.committed is not None)
             except Exception:
                 if reopened is not None:
                     reopened.close()

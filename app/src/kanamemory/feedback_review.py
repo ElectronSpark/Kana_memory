@@ -292,7 +292,8 @@ def generate(provider, request):
         'For a rubric facet, independently determine the complete bundle with the original field names: '
         'standard and same-context accepted answers, other-context alternatives, choices, known wrong answers, '
         'prompt, task, feedback, audio and existing pitch model. Do not assert an ungrounded accepted variant. '
-        'Return a JSON-encoded STRING for each requested field, or null if unknown. Do not create edits or URLs.')
+        'answer_json must be a STRING containing the JSON-encoded field value. If unknown, return status unknown '
+        'and answer_json="null" (a string, never JSON null). Do not create edits or URLs.')
     return validate_response(provider.structured(instructions, payload, schema, 'kana_feedback_blind_review_v1', max_output_tokens=3200), request)
 
 

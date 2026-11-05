@@ -56,6 +56,8 @@ def question_explanation_fingerprint(question):
     fields = ("target_id", "revision", "kind", "family", "domain", "prompt", "task", "answer",
               "input_mode", "feedback")
     value = {key: question.get(key) for key in fields}
+    if 'multi_cloze' in question:
+        value['multi_cloze'] = question['multi_cloze']
     for key in ("choices", "options", "accepted_answers"):
         values = question.get(key, [])
         if not isinstance(values, list) or any(not isinstance(part, str) for part in values):

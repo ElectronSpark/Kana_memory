@@ -54,8 +54,11 @@ def has_started_answer(draft):
         return False
     has_text = lambda value: isinstance(value, str) and bool(value.strip())
     parts = draft.get("parts")
+    cloze = draft.get('cloze_state')
+    cloze_values = cloze.get('values') if isinstance(cloze, dict) else None
     return (has_text(draft.get("answer")) or has_text(draft.get("text"))
-            or isinstance(parts, list) and any(has_text(part) for part in parts))
+            or isinstance(parts, list) and any(has_text(part) for part in parts)
+            or isinstance(cloze_values, dict) and any(has_text(value) for value in cloze_values.values()))
 
 
 def preserves_existing_route(learning, content):

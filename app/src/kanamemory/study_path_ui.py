@@ -534,6 +534,8 @@ class StudyPathUIMixin:
         self._study_path_adding = True
         try:
             self.study_path_service().add_entries(self._study_selection.selected_entry_ids, start_learning=True)
+            from .practice_round import restart
+            restart(self.store, lane="main")
             self.continue_study_path()
         except (ValueError, KeyError) as exc:
             self.alert(str(exc))
@@ -562,6 +564,8 @@ class StudyPathUIMixin:
         try:
             if identities:
                 self.study_path_service().add_sections(list(identities), start_learning=True)
+                from .practice_round import restart
+                restart(self.store, lane="main")
             self.continue_study_path()
         except (ValueError, KeyError) as exc:
             self.alert(str(exc))

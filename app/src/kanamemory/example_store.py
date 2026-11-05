@@ -5,6 +5,7 @@ Unicode anchors do not depend on the currently selected course or scheduler.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -284,12 +285,32 @@ class ExampleStore:
             return None
         return id(db), db.total_changes, db.execute("PRAGMA data_version").fetchone()[0]
 
+    @contextmanager
+    def read_operation(self):
+        """Reuse progress only during one synchronous render, never across actions.
+
+        Nested readers share this scope. Writes invalidate it; transaction reads
+        bypass it. This is a read optimization, not a database snapshot or an
+        authorization to reuse progress when enrolling or grading.
+        """
+        outer = getattr(self, "_progress_read", None)
+        if outer is None:
+            self._progress_read = {"token": None, "statuses": {}}
+        try:
+            yield self
+        finally:
+            if outer is None:
+                self._progress_read = None
+
     def _ensure_fresh(self):
         if self._token is None or self._database_token() != self._token:
             self.refresh()
 
     def refresh(self):
         """Re-read restored/custom resources without touching learning rows."""
+        read = getattr(self, "_progress_read", None)
+        if read is not None:
+            read.update(token=None, statuses={})
         from .personal_content_versions import changed_resources, GENERATION
         self._personal_changed = changed_resources(self.store)
         generation = self.store.get_setting(GENERATION, 0)
@@ -514,15 +535,22 @@ class ExampleStore:
 
     def import_pack(self, pack):
         """Atomic additive activation; duplicate imports are no-ops, not reviews."""
-        merged = self.prepare_import(pack)
         from .material_usage import register_in_transaction
         db = self.store._db
         with db:
             db.execute('BEGIN IMMEDIATE')
+            merged = self.prepare_import(pack)
+            # Only this import's retained identities gain independent ownership.
+            # Metadata rejected by the additive merge must not become its hash;
+            # unrelated AI-owned rows must not become external copies either.
+            adopted = {}
+            for group in ('examples', 'references'):
+                incoming_ids = {row['id'] for row in pack[group]}
+                adopted[group] = [row for row in merged[group] if row['id'] in incoming_ids]
             if merged != self.custom:
                 db.execute('INSERT INTO app_setting VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
                            (SETTING, _encoded(merged)))
-            register_in_transaction(db, pack)
+            register_in_transaction(db, adopted)
         self.refresh()
         return {"examples": len(merged["examples"]), "references": len(merged["references"])}
 
@@ -588,8 +616,30 @@ class ExampleStore:
                 "familiarity": round(familiarity, 6), "abilities": abilities}
 
     def _statuses(self, target_ids):
-        """Two small table scans for a screen, not N unit/history lookups."""
+        """Share detached progress projections inside the current read action."""
         identities = set(target_ids)
+        if not identities:
+            return {}
+        read = getattr(self, "_progress_read", None)
+        if read is None:
+            return self._statuses_uncached(identities)
+        token = self._database_token()
+        if token is None or token != read["token"]:
+            read.update(token=token, statuses={})
+        if token is None:
+            return self._statuses_uncached(identities)
+        missing = identities - read["statuses"].keys()
+        if missing:
+            values = self._statuses_uncached(missing)
+            if self._database_token() != token:
+                # Do not merge old cached targets with a racing new projection.
+                read.update(token=None, statuses={})
+                return self._statuses_uncached(identities)
+            read["statuses"].update(values)
+        return {cid: deepcopy(read["statuses"][cid]) for cid in identities}
+
+    def _statuses_uncached(self, identities):
+        """Read the live progress projection; caller owns any reuse lifetime."""
         db = getattr(self.learning_store, "_db", None)
         if db is None:
             return {cid: self._status_from_saved(cid, self.learning_store.get_item(cid)) for cid in identities}
@@ -721,6 +771,12 @@ class ExampleStore:
                 if any(span["start"] < end and span["end"] > start for span in ref["spans"])]
 
     def for_item(self, target_id):
+        return self.for_item_page(target_id, limit=None)["examples"]
+
+    def for_item_page(self, target_id, *, offset=0, limit=8):
+        """Keep the full ranking but materialize only the requested item examples."""
+        if type(offset) is not int or offset < 0 or (limit is not None and (type(limit) is not int or limit < 0)):
+            raise ValueError("例句分页范围不正确。")
         self._ensure_fresh()
         rows = []
         statuses = self._statuses(self.items)
@@ -732,13 +788,14 @@ class ExampleStore:
         introductory = {instruction.get("example", "")}
         for examples in (instruction.get("examples", []), target.get("examples", [])):
             introductory.update(example.get("text", "") for example in examples if isinstance(example, dict))
-        order = {}
         grouped = {}
         graph = self._graph_resources()
         if graph is not None:
             refs = {r['id']: r for r in graph['by_target'].get(target_id, [])}
+            sources = graph['examples']
         else:
-            _, _, extra_targets = self._lexical_resources()
+            extra, _, extra_targets = self._lexical_resources()
+            sources = {**extra, **self.examples}
             refs = {r["id"]: r for r in self.by_target.get(target_id, [])}
             refs.update({r["id"]: r for r in extra_targets.get(target_id, [])})
         for ref in refs.values():
@@ -749,7 +806,9 @@ class ExampleStore:
             # in its detail page, without inflating the example count or score.
             alternatives = sorted(alternatives, key=lambda ref: ref["id"])
             source = alternatives[0]
-            example = self._get(source["example_id"])
+            example = sources[source["example_id"]]
+            if graph is None:
+                example = self._personal_projection('example', example)
             others = {}
             for ref in self._references_for(example["id"]):
                 if ref["target_id"] != target_id:
@@ -757,16 +816,18 @@ class ExampleStore:
             denominator = sum(others.values())
             score = (sum(weight * statuses.get(cid, {}).get("familiarity", 0) for cid, weight in others.items()) / denominator
                      if denominator else 0.0)
-            example.update(reference=deepcopy(source), score=round(score, 8),
-                           reference_options=deepcopy(alternatives),
-                           hints=self.display_hints(source, target_id, _status=statuses.get(target_id)), related_count=len(others))
             unknown_load = sum(weight * (1 - statuses.get(cid, {}).get("familiarity", 0))
                                for cid, weight in others.items())
-            order[example["id"]] = (example["text"] not in introductory,
-                                    round(unknown_load, 8), len(example["text"]), example["text"])
-            rows.append(example)
-        return sorted(rows, key=lambda row: (-row["score"], *order[row["id"]],
-                                            row["id"], row["reference"]["id"]))
+            order = (-round(score, 8), example["text"] not in introductory,
+                     round(unknown_load, 8), len(example["text"]), example["text"], example["id"], source["id"])
+            rows.append((order, example["id"], source, alternatives, round(score, 8), len(others)))
+        rows.sort(key=lambda row: row[0])
+        selected = rows[offset:None if limit is None else offset + limit]
+        return {"total": len(rows), "examples": [
+            {**self._get(identity), "reference": deepcopy(source), "score": score,
+             "reference_options": deepcopy(alternatives), "related_count": related_count,
+             "hints": self.display_hints(source, target_id, _status=statuses.get(target_id))}
+            for _, identity, source, alternatives, score, related_count in selected]}
 
     def all_examples(self, query=""):
         """Browse/search with a progress-weighted mean, stable equal-score order."""

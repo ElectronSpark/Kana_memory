@@ -18,6 +18,12 @@ CONTRACT_FIELDS = (
 
 def contract_values(question):
     value = {key: question.get(key) for key in CONTRACT_FIELDS}
+    # Do not change hashes of retained pre-multi-gap attempts. New tasks bind
+    # every allowed combination and slot owner, not just the canonical answer.
+    if 'multi_cloze' in question:
+        value['multi_cloze'] = question['multi_cloze']
+    if 'prosody_cue' in question:
+        value['prosody_cue'] = question['prosody_cue']
     if 'material_qualification' in question:
         value['material_qualification'] = question['material_qualification']
     return value

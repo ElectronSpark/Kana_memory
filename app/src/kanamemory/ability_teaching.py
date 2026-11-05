@@ -1,7 +1,8 @@
 """Independent introductions for abilities added to an existing memory item.
 
 The original content row, its self-report and its units remain their owners.
-This sidecar supplies a virtual instruction row only for each new ability.
+This sidecar supplies a virtual instruction row for newly admitted abilities
+and untouched abilities whose first teaching is deferred until encountered.
 """
 from datetime import datetime
 from hashlib import sha256
@@ -47,17 +48,66 @@ def exposure_times(db, now):
     result = {}
     for cid, state in state_map(db).items():
         admitted = {*state['original_abilities'], *state['additions']}
-        for source, row in state['additions'].items():
-            value = json.loads(row['checkpoint_json']).get('instruction_exposed_at_utc')
+        original = db.execute('SELECT checkpoint_json FROM learning_content WHERE content_id=?', (cid,)).fetchone()
+        sources = [(set(state['original_abilities']), original),
+                   *(({ability}, row) for ability, row in state['additions'].items())]
+        for source, row in sources:
+            checkpoint = json.loads(row['checkpoint_json'])
+            profile = checkpoint.get('initial_familiarity', {})
+            values = [checkpoint.get('instruction_exposed_at_utc'),
+                      profile.get('selected_at_utc') if profile.get('title_answer_exposed') else None]
+            value = max((v for v in values if v), default=None, key=lambda v: datetime.fromisoformat(v))
             if not value:
                 continue
             until = datetime.fromisoformat(value) + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)
             if until <= now:
                 continue
-            for target in admitted - {source}:
+            for target in admitted - source:
                 pair = (cid, target)
                 result[pair] = max(result.get(pair, until.isoformat()), until.isoformat())
     return result
+
+
+def separate_untouched(db, row, *, first_ability=None):
+    """Give untouched enrolled abilities their existing independent intro owner.
+
+    No unit, question, schedule or snapshot is rewritten. A started/exposed
+    original introduction retains its complete scope and historical self-report.
+    The caller owns the transaction and validates the current introduction ID.
+    """
+    from .learning_store import _load, _dump
+    from .learning_dependencies import has_started_answer
+    cid = row['content_id']
+    admitted = original_abilities(db, cid)
+    if first_ability in admitted:
+        admitted = [first_ability, *(a for a in admitted if a != first_ability)]
+    checkpoint = _load(row['checkpoint_json'])
+    if (dict(row).get('instruction_scope') or len(admitted) < 2 or row['stage'] != 'intro'
+            or set(checkpoint) - {'supports_initial_familiarity', 'prerequisite_acknowledged',
+                                  'prerequisite_acknowledged_at_utc', 'prerequisite_evidence', 'prerequisite_version'}):
+        return False
+    if any(db.execute('SELECT 1 FROM learning_event WHERE unit_id IN (SELECT unit_id FROM learning_unit WHERE content_id=? AND ability=?) LIMIT 1',
+                      (cid, ability)).fetchone() for ability in admitted):
+        return False
+    if any(unit['instruction_ready'] or unit['review_count'] or unit['scheduler_state_json'] is not None
+           or unit['due_at_utc'] is not None for unit in db.execute('SELECT * FROM learning_unit WHERE content_id=?', (cid,))
+           if unit['ability'] in admitted):
+        return False
+    for pending in db.execute('''SELECT q.draft_json,q.result_json,u.ability FROM learning_question q
+            JOIN learning_unit u ON q.unit_id=u.unit_id WHERE u.content_id=? AND q.status='pending' ''', (cid,)):
+        if pending['ability'] in admitted and (pending['result_json'] is not None or has_started_answer(_load(pending['draft_json']))):
+            return False
+    state = read(db, cid) or {'version': 1, 'content_id': cid, 'revision': row['revision'],
+        'source_sha256': sha256(row['content_json'].encode()).hexdigest(),
+        'original_abilities': admitted, 'additions': {}}
+    # Preserve the active explicit-start anchor for the ability now requested.
+    state['original_abilities'] = admitted[:1]
+    for ability in admitted[1:]:
+        state['additions'][ability] = {name: row[name] for name in FIELDS}
+        state['additions'][ability].update(introduction_id=uuid4().hex, exposure_group=uuid4().hex,
+            checkpoint_json=_dump(checkpoint))
+    write(db, state)
+    return True
 
 
 def rows(db, states=None, *, teaching_only=False):
@@ -202,5 +252,7 @@ def validate_database(db):
             from .pitch_practice import validate_checkpoint
             from .learning_practice_policy import validate_practice_guide
             validate_checkpoint(state['content_id'], state['revision'], checkpoint)
+            from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
+            validate_cloze_checkpoint(state['content_id'], state['revision'], checkpoint)
             validate_practice_guide(state['content_id'], state['revision'], checkpoint,
                                     item=json.loads(content['content_json']), validate_result=False)

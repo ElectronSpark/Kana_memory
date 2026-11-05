@@ -27,7 +27,9 @@ def answer_controls(u, question, value, changed, active, *, system_japanese=Fals
     native = japanese_text(question) and not system_japanese
     romaji = romaji_reading_input(question)
     state = {"script": "hiragana", "group": "清音", "editing": False}
-    if reading_input_conversion(question, value) is not None:
+    # Empty unrestricted reading/grammar answers open Latin input directly.
+    # A saved kana draft keeps its original keypad and is never rewritten.
+    if romaji and (not (value or "").strip() or reading_input_conversion(question, value) is not None):
         state["group"] = "罗马音"
     field = configure_text_role(u.toga.TextInput(value=value, readonly=native,
         placeholder="用下方按键作答" if native else "输入答案",
@@ -49,7 +51,7 @@ def answer_controls(u, question, value, changed, active, *, system_japanese=Fals
     field.on_change = on_change
     if not native:
         if romaji:
-            field.placeholder = "输入假名或罗马音，例如 gakkou"
+            field.placeholder = "输入罗马音或假名，例如 gakkou"
             refresh_preview()
         return field, [field, preview, pending] if romaji else [field]
     keyboard = u.col()

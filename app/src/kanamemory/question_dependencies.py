@@ -136,7 +136,7 @@ the first current template. Unavailable historical sources remain unproven.
             return False
         rebuilt.update(tutor_practice=True, evidence_mode='exposure_only', scheduled=False)
     fields = (*ROLES, 'family', 'ability', 'input_mode', 'strict', 'known_wrong', 'practice', 'practice_source',
-              'pitch_practice', 'tests_reading', 'tests_pitch', 'text_roles', 'evidence_mode', 'requires_audio')
+              'pitch_practice', 'multi_cloze', 'tests_reading', 'tests_pitch', 'text_roles', 'evidence_mode', 'requires_audio')
     return any(candidate.get(KEY) == question.get(KEY) and all(candidate.get(k) == question.get(k) for k in fields)
                for candidate in (rebuilt, reviewed_question(rebuilt)))
 

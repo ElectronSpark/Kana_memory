@@ -5,7 +5,9 @@ from time import monotonic
 from uuid import uuid4
 
 from .navigation import page_view
+from .answer_result_ui import answer_text
 from .retention_session import DiagnosticStore, BUDGETS, LIVE
+from .question_presentation import question_instruction
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role
 from .retention_ai_ui import DiagnosticAIUIMixin
 from .retention_dialogue_ui import DiagnosticDialogueUIMixin
@@ -346,10 +348,16 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
             self._arm_diagnostic_timer(context)
             return
         q = row['question']
-        prompt = build_prompt_block(self, q, clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
-        prompt._feedback_fragment = {'kind': 'diagnostic', 'episode_id': identity, 'entry': deepcopy(row), 'purpose': row['purpose']}
+        if q.get('input_mode') == 'multi_cloze':
+            from .multi_cloze_ui import prompt_view
+            prompt = prompt_view(self, u, q, row['draft'],
+                clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
+        else:
+            prompt = build_prompt_block(self, q, clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
+        prompt._feedback_fragment.update({'kind': 'diagnostic', 'episode_id': identity, 'entry': deepcopy(row), 'purpose': row['purpose']})
         children = [context['budget'], self.diagnostic_permission_control(context), u.row(u.button('显示答案', lambda w: self.submit_diagnostic(context, '', revealed=True), compact=True), self.diagnostic_help_controls(context)), prompt]
-        if q.get('task'): children.append(u.label(q['task'], size=13, color=u.MUTED))
+        instruction = question_instruction(q)
+        if instruction: children.append(u.label(instruction, size=13, color=u.MUTED))
         if q.get('audio_text'):
             async def play(widget=None):
                 if self.page != 'diagnostic_question' or self._diagnostic_context is not context: return
@@ -370,6 +378,17 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                 on_change=lambda draft: service.save_draft(identity, row['id'], draft),
                 on_submit=lambda answer: self.submit_diagnostic(context, answer),
                 is_active=lambda: self.page == 'diagnostic_question' and self._diagnostic_context is context))
+        elif q.get('input_mode') == 'multi_cloze':
+            from .multi_cloze_ui import controls as cloze_controls
+
+            def submit_cloze(answer):
+                self.submit_diagnostic(context, answer)
+                return self.page != 'diagnostic_question' or self._diagnostic_context is not context
+
+            children.append(cloze_controls(self, u, q, row['draft'],
+                lambda draft: service.save_draft(identity, row['id'], draft),
+                submit_cloze,
+                lambda: self.page == 'diagnostic_question' and self._diagnostic_context is context, prompt=prompt))
         elif q.get('input_mode') == 'reorder':
             children.append(self.diagnostic_word_blocks(context))
         elif q.get('input_mode', 'choice') == 'choice':
@@ -447,7 +466,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         pitch = is_pitch_question(q)
         answer = (answer_diagram(self, q, answer=result['answered_text']) if pitch and viewed.get('correct') is True
                   else answer_diagram(self, q, reveal=True) if pitch
-                  else u.label(q['answer'], size=20, text_role=learning_text_role(q, 'answer')))
+                  else u.label(answer_text(q), size=20, text_role=learning_text_role(q, 'answer')))
         def expose_answer_audio():
             abilities = {(q['target_id'], q['ability'])}
             if q.get('family') == 'word':
@@ -467,9 +486,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
 
         children = [context['budget'], self.diagnostic_permission_control(context), build_answer_feedback(viewed), u.row(answer, u.speaker_button(play_answer)) if text else answer]
         if viewed.get('correct') is not True and result['answered_text'] and result['answered_text'] != q['answer']:
-            entered = answer_label(q, result['answered_text']) if pitch else result['answered_text']
+            entered = answer_label(q, result['answered_text']) if pitch else answer_text(q, result['answered_text'])
             children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, 'answer')))
-        explanation = distinct_explanation(q.get('feedback'), q['answer'])
+        explanation = distinct_explanation(q.get('feedback'), answer_text(q))
         if explanation: children.append(u.label(explanation, size=15))
         formal = (result.get('assessment', {}).get('settlement_channel') == 'formal'
                   and value['purpose'] == 'check_and_adjust' and not row['credit_revoked'])

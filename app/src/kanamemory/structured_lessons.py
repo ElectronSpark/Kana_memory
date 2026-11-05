@@ -9,7 +9,7 @@ from functools import lru_cache
 
 FORMAT = "kanamemory-lesson-view"
 VERSION = 1
-KINDS = {"pattern", "flow", "compare", "points", "beats", "pitch", "pitch_sequence"}
+KINDS = {"pattern", "flow", "compare", "points", "beats", "pitch", "pitch_sequence", "prosody"}
 SOURCE_FIELDS = ("id", "revision", "family", "domain", "title", "reading", "meaning", "instruction")
 
 
@@ -58,7 +58,10 @@ def validate_plan(plan):
         if kind not in KINDS:
             raise ValueError("Unknown lesson block")
         text(block.get("label"))
-        if kind == "pitch_sequence":
+        if kind == 'prosody':
+            from .prosody_cue import validate_cue
+            validate_cue(block.get('prosody_cue'), block.get('text'))
+        elif kind == "pitch_sequence":
             from .pitch_practice import specification
             specification({"input_mode": "pitch_fill", "pitch_practice": block.get("pitch_practice")})
         elif kind == "pitch":

@@ -6,6 +6,7 @@ the question nor its grader. In particular it is not a kanji-reading guesser.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 
 SETTING = "answer_input_preferences_v1"
@@ -38,8 +39,14 @@ def japanese_text(question):
 
 
 def romaji_reading_input(question):
-    """Only free vocabulary reading recall; never a kana selection stimulus."""
-    return (question.get("kind") == "vocab_reading" and japanese_text(question)
+    """Free reading/grammar composition; retain the original shared API name.
+
+    Kana selection and pronunciation analysis are separate response contracts.
+    Eligibility depends only on the public task, never its expected answer.
+    """
+    return (question.get("kind") in {"vocab_reading", "grammar_cloze",
+            "grammar_transform", "grammar_reorder", "targeted_correction",
+            "controlled_sentence_production"} and japanese_text(question)
             and not question.get("choices") and not question.get("options"))
 
 
@@ -51,12 +58,27 @@ def reading_input_conversion(question, value):
     """
     if not romaji_reading_input(question) or not isinstance(value, str):
         return None
-    import re
     if not re.search(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ]", value):
         return None
     if len(value) > 10000:
         return {"text": "", "pending": "输入过长", "complete": False}
     from .romaji_input import convert_romaji
+    if question.get("kind") != "vocab_reading":
+        # A grammar draft may include public kanji, digits or existing kana.
+        # Convert only Latin runs; do not guess kanji or rewrite other text.
+        output, end = [], 0
+        for match in re.finditer(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ'’＇\-－]+", value):
+            if not re.search(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ]", match.group()):
+                continue
+            output.append(value[end:match.start()])
+            result = convert_romaji(match.group(), convention="keyboard", final=True)
+            output.append(result["text"])
+            if not result["complete"]:
+                return {"text": "".join(output),
+                        "pending": result["pending"] + value[match.end():], "complete": False}
+            end = match.end()
+        output.append(value[end:])
+        return {"text": "".join(output), "pending": "", "complete": True}
     return convert_romaji(value, convention="keyboard", final=True)
 
 

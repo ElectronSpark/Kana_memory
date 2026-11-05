@@ -112,7 +112,12 @@ class StudyPathService:
         state = self._state()
         reserved, read = set(state["reserved_entries"]), set(state["reference_read"])
         learning_rows = self.store.queries.course_progress_rows()
-        learning = {row["content_id"]: row["stage"] for row in learning_rows}
+        stages = {}
+        for row in learning_rows:
+            stages.setdefault(row['content_id'], []).append(row['stage'])
+        learning = {cid: 'done' if all(s == 'done' for s in values)
+                    else 'intro' if all(s == 'intro' for s in values) else 'guide'
+                    for cid, values in stages.items()}
         needs_teaching = {row["content_id"] for row in learning_rows
                           if json.loads(row["checkpoint_json"]).get("initial_familiarity", {}).get(
                               "diagnostic_state") == "needs_teaching"}

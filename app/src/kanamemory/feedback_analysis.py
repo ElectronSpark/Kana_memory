@@ -170,6 +170,11 @@ def generate(provider, request):
         payload['feedbacks'] = [{'note': m['feedback']['note'], 'category': m['feedback']['category'],
             'binding_ids': [representatives[address(b)] for b in m['bindings']]} for m in request['group_members']]
         instructions += ' These feedback notes share content owners; consider all notes jointly. Use only representative binding IDs.'
+    from .ai_prompt_policy import JSON_OUTPUT_RULES
+    instructions += ('\nInput-method, display, TTS, draft or navigation failures are not by themselves linguistic '
+        'errors. Do not rewrite content/answers to compensate for an app fault. An unresolved grade proves '
+        'neither correct wording nor forgotten vocabulary; distinguish a supported local language issue from '
+        'assessment authority. Keep valid variants and unknown exact-form accents unchanged.\n' + JSON_OUTPUT_RULES)
     return validate_response(provider.structured(instructions, payload, schema, 'kana_feedback_analysis_v1', max_output_tokens=3200), request)
 
 

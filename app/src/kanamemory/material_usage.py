@@ -143,21 +143,21 @@ def register_in_transaction(db, pack, *, proposal=None, previous_pack=None):
     state = validate(json.loads(raw[0])) if raw else empty()
     before = deepcopy(state)
     for group in ('examples', 'references'):
-        previous = {row['id']: row for row in (previous_pack or {}).get(group, [])}
+        previous_rows = {row['id']: row for row in (previous_pack or {}).get(group, [])}
         for row in pack.get(group, []):
             sha = snapshot_hash(row, group)
             record = state['managed'][group].setdefault(row['id'],
-                {'sha256': sha, 'owners': [], 'external': row['id'] in previous})
+                {'sha256': sha, 'owners': [], 'external': row['id'] in previous_rows})
             if record['sha256'] != sha:
                 raise ValueError('来源归属不能覆盖另一版本。')
-            previous = managed_snapshot(record)
+            previous_state = managed_snapshot(record)
             if proposal:
                 if proposal['id'] not in record['owners']: record['owners'].append(proposal['id'])
             else: record['external'] = True
-            if 'history' in record and previous != managed_snapshot(record):
+            if 'history' in record and previous_state != managed_snapshot(record):
                 record['history'].append({'kind': 'publication' if proposal else 'import',
                     'request_id': proposal['id'] if proposal else 'independent-import',
-                    'before': previous, 'after': managed_snapshot(record)})
+                    'before': previous_state, 'after': managed_snapshot(record)})
     if state != before:
         state['generation'] += 1
         write_in_transaction(db, state)

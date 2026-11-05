@@ -127,7 +127,7 @@ def _question(question, source):
             or question.get("scheduled") is not False or question.get("tutor_practice") is not True
             or question.get("evidence_mode") != "exposure_only" or question.get("guided") is not False
             or question.get("ai_generated") is True or type(question.get("variant")) is not int
-            or question["variant"] < 0 or question.get("input_mode") not in {"choice", "text", "reorder"}):
+            or question["variant"] < 0 or question.get("input_mode") not in {"choice", "text", "reorder", "pitch_fill", "pitch_identify", "multi_cloze"}):
         raise ValueError("辅导题目不能冒充独立复习证据。")
     for key in ("choices", "options", "accepted_answers"):
         rows = question.get(key, [])
@@ -140,11 +140,15 @@ def _question(question, source):
         raise ValueError("辅导选择题没有有效答案。")
     if len(_json(question).encode()) > 64 * 1024:
         raise ValueError("辅导题目过大。")
+    from .pitch_practice import validate_snapshot
+    validate_snapshot(question)
+    from .multi_cloze import validate_snapshot as validate_cloze_snapshot
+    validate_cloze_snapshot(question)
     return deepcopy(question)
 
 
 def _draft(value, question=None):
-    if not isinstance(value, dict) or set(value) - {"answer", "parts", "assisted", "hint_used", "audio_ok", "presented"}:
+    if not isinstance(value, dict) or set(value) - {"answer", "parts", "assisted", "hint_used", "audio_ok", "presented", "pitch_state", "cloze_state"}:
         raise ValueError("辅导草稿字段不正确。")
     if "answer" in value:
         _text(value["answer"], 4000, blank=True)
@@ -158,6 +162,20 @@ def _draft(value, question=None):
     if len(parts) != len(set(parts)) or question is not None and (any(i >= len(question.get("choices", [])) for i in parts)
             or parts and question.get("input_mode") != "reorder"):
         raise ValueError("辅导排列草稿超出本题范围。")
+    from .pitch_practice import is_pitch_question, validate_draft
+    if "pitch_state" in value:
+        if not isinstance(value["pitch_state"], dict) or len(_json(value).encode()) > 64000:
+            raise ValueError("音高草稿格式不正确。")
+        if question is not None and not is_pitch_question(question):
+            raise ValueError("音高草稿缺少对应题目。")
+        if question is not None:
+            validate_draft(question, value)
+    if 'cloze_state' in value:
+        if not isinstance(value['cloze_state'], dict) or len(_json(value).encode()) > 64000:
+            raise ValueError('多空草稿格式不正确。')
+        if question is not None:
+            from .multi_cloze import validate_draft as validate_cloze_draft
+            validate_cloze_draft(question, value)
     return deepcopy(value)
 
 
@@ -208,7 +226,9 @@ def _result(question, draft, answer, revealed, submitted, *, cancelled=False):
             "answer": question["answer"], "explanation": question.get("explanation", question.get("feedback", "")),
             "correct": judgement["correct"], "outcome": judgement["status"],
             "assisted": assisted, "revealed": revealed, "scheduled": False, "training_only": True,
-            "submitted_at_utc": submitted, "error_category": judgement.get("error_category", "")}
+            "submitted_at_utc": submitted, "error_category": judgement.get("error_category", ""),
+            **{key: judgement[key] for key in ('slot_results', 'primary_correct', 'primary_scorable',
+                'overall_correct', 'background_errors') if key in judgement}}
 
 
 def validate_tutor_value(value):
@@ -256,7 +276,10 @@ def validate_tutor_value(value):
         pending += row["status"] == "pending"
         result = row["result"]
         if result is not None:
-            if (not isinstance(result, dict) or set(result) != _RESULT_FIELDS
+            from .multi_cloze import is_cloze_question
+            extra = ({'slot_results', 'primary_correct', 'primary_scorable', 'overall_correct', 'background_errors'}
+                     if is_cloze_question(q) else set())
+            if (not isinstance(result, dict) or set(result) - extra != _RESULT_FIELDS
                     or type(result.get("revealed")) is not bool):
                 raise ValueError("辅导结果字段不正确。")
             _text(result["answered_text"], 4000, blank=True)
@@ -381,6 +404,12 @@ class AITutorStore:
                 or learning.prerequisite_status(item["id"], dict(instruction).get('instruction_scope'))["blocked"]):
             return False
         prefs = self.store.get_setting("learning_preferences_v1", {})
+        from .learning_practice_policy import practice_metadata
+        from .learning_dependencies import independent_ready_ids
+        meta = practice_metadata(question)
+        if ("practice" in question and (meta is None or not set(meta["background_ids"])
+                <= independent_ready_ids(learning) | {item["id"]})):
+            return False
         if isinstance(prefs, dict) and isinstance(prefs.get("enabled"), list) and question["kind"] not in prefs["enabled"]:
             return False
         unit = learning.get_unit(item["id"], question["ability"])
@@ -506,6 +535,14 @@ class AITutorStore:
                 raise ValueError("请先作答。")
             if not revealed and q.get("input_mode") == "choice" and answer not in q["choices"]:
                 raise ValueError("请选择本题中的一个答案。")
+            from .pitch_practice import is_pitch_question, grade_answer
+            if (not revealed and is_pitch_question(q)
+                    and grade_answer(q, answer).get("status") in {"empty", "invalid"}):
+                raise ValueError("请先完成音高作答。")
+            from .multi_cloze import is_cloze_question, grade_answer as grade_cloze_answer
+            if (not revealed and is_cloze_question(q)
+                    and grade_cloze_answer(q, answer).get('status') in {'empty', 'invalid'}):
+                raise ValueError('请先完成各空。')
             row["result"] = _result(q, row["draft"], answer, revealed, _stamp(now, row["created_at_utc"]))
             from .learning_evidence import LearningEvidenceStore, reviewed_question
             from .assessment_opportunity import identity
@@ -556,12 +593,41 @@ class AITutorStore:
         return self._mutate(lambda state: self._expose(state, target_id, now))
 
     def save_chat_draft(self, text, context=None):
+        """Commit every edit while reusing only an exact, validated JSON version.
+
+        This narrow mutation cannot touch history. General writes and snapshots
+        still perform full validation. Cache publication follows COMMIT, and the
+        next edit compares actual stored bytes even inside a write transaction.
+        """
         text = _SECRET.sub("[已移除密钥]", _text(text, MAX_CHAT_DRAFT, blank=True))
         context = _chat_context(context)
-        def operation(state):
-            state.update(chat_draft=text, chat_context=context)
-            return text
-        return self._mutate(operation)
+        db = self.store._db
+        if db.in_transaction:
+            raise RuntimeError("Tutor writes require their own transaction")
+        try:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT value_json FROM app_setting WHERE key=?", (SETTING,)).fetchone()
+                raw = row[0] if row else None
+                cached = getattr(self, "_chat_draft_cache", None)
+                state = (cached[1] if cached is not None and cached[0] == raw else
+                         validate_tutor_value(json.loads(raw) if raw is not None else _empty()))
+                changed = state["chat_draft"] != text or state["chat_context"] != context
+                # Keep the validated history private and untouched; only these
+                # three fields may differ from the exact saved version.
+                value = {**state, "chat_draft": text, "chat_context": context,
+                         "revision": state["revision"] + int(changed)}
+                encoded = _json(value)
+                if len(encoded.encode()) > MAX_BYTES or _SECRET.search(encoded):
+                    raise ValueError("辅导保存内容过大或含敏感信息。")
+                if changed:
+                    db.execute("INSERT INTO app_setting VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                               (SETTING, encoded))
+            self._chat_draft_cache = (encoded if changed else raw, value)
+        except Exception:
+            self._chat_draft_cache = None
+            raise
+        return text
 
     def record_chat(self, role, text, *, target_id="", turn_id="", now=None):
         if role not in {"user", "assistant"}:

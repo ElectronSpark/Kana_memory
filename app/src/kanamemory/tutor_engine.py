@@ -78,12 +78,16 @@ def _kind_order(target, recent):
                                           count[kind], kinds.index(kind)))
 
 
-def _target_candidate(item, target, recent, state, now, patterns, *, system_japanese=False):
+def _target_candidate(item, target, recent, state, now, patterns, *, system_japanese=False,
+                      known_background_ids=()):
     from .learning_conditions import candidate_context
     from . import semantic_errors
     from .tutor_store import question_seen_recently
     best, priority = None, 0.
     ceiling = max((row["concern"] for row in patterns), default=0.)
+    from .learning_practice_policy import practice_candidates
+    descriptors = list(practice_candidates(item, target["allowed_kinds"],
+        known_background_ids=known_background_ids, system_japanese=system_japanese))
     for kind in _kind_order(target, recent):
         # Once a fallback exists, unrelated directions cannot improve an exact
         # condition match. Avoid hydrating every template on ordinary turns.
@@ -91,8 +95,11 @@ def _target_candidate(item, target, recent, state, now, patterns, *, system_japa
                     row.get('semantic') and row['ability'] == KIND_ABILITIES[kind]]
         if best is not None and not matching:
             continue
-        variants = item.get("question_templates", {}).get(kind)
-        for variant in range(min(len(variants) if variants else 4, 30)):
+        variants = [d["variant"] for d in descriptors if d["kind"] == kind]
+        if variants:
+            offset = state["completed_count"] % len(variants)
+            variants = variants[offset:] + variants[:offset]
+        for variant in variants[:30]:
             try:
                 question = local_question(item, kind, variant)
             except (ValueError, KeyError, TypeError):
@@ -169,7 +176,7 @@ def prepare_tutor_context(learning_store, enabled_kinds, state, *, now=None):
             patterns = conditional_patterns(target["id"], item["revision"], evidence) if targeted else []
             from .answer_input import system_japanese_enabled
             candidate, priority = _target_candidate(item, target, recent, state, now, patterns,
-                system_japanese=system_japanese_enabled(learning_store.store))
+                system_japanese=system_japanese_enabled(learning_store.store), known_background_ids=ready)
             if candidate:
                 candidates.append(candidate)
                 priorities[target["id"]] = priority
@@ -180,6 +187,19 @@ def prepare_tutor_context(learning_store, enabled_kinds, state, *, now=None):
             # Keep target recency protection; exact usable contexts win within
             # this slot. Each target still contributes at most one candidate.
             candidates.sort(key=lambda c: (c["target_id"] == last, -priorities[c["target_id"]]))
+        # Preserve ordinary target coverage first; offer a second real response
+        # direction for the leading targets instead of making the model choose
+        # between knowledge points merely to change the control.
+        primary = candidates[:4]
+        alternatives = []
+        for candidate in primary:
+            target = next(t for t in scope["targets"] if t["id"] == candidate["target_id"])
+            alternate = {**target, "allowed_kinds": [k for k in target["allowed_kinds"] if k != candidate["kind"]]}
+            extra, _ = _target_candidate(items[target["id"]], alternate, recent, state, now, [],
+                system_japanese=system_japanese_enabled(learning_store.store), known_background_ids=ready)
+            if extra:
+                alternatives.append(extra)
+        candidates = (primary + alternatives + candidates[4:])[:MAX_CANDIDATES]
         decision = "local" if candidates else "wait" if waits else "empty"
     if selection_mode(state["completed_count"]) == "independent_check":
         # A model may not turn a reserved independent check into another drill
@@ -190,6 +210,7 @@ def prepare_tutor_context(learning_store, enabled_kinds, state, *, now=None):
                  scope["targets"][0]["id"] if scope["targets"] else None)
     target = next((row for row in scope["targets"] if row["id"] == target_id), None)
     result = {"scope": scope, "recent": recent, "candidates": candidates,
+              "enabled_kinds": enabled,
               "question": deepcopy(active["question"]) if active else None,
               "target": deepcopy(target), "decision": decision,
               "wait_until": min(waits).isoformat() if waits else None,

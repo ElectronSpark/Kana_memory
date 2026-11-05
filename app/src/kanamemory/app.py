@@ -95,13 +95,15 @@ INK_PAGES = {"free_ink", "ink_question"}
 INK_BINDINGS = "free_ink strokes ink_width ink_height _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
 PRACTICE_BINDINGS = "questions question_index session_id question session_right script use_full_keyboard answer_revealed answered_text answer_correct question_audio_ok _question_started _answer_submitted_at _answer_duration_ms question_notice practice_preview_slot word_conversion_source word_conversion_convention word_used_conversion".split()
 PAGE_BINDINGS = {
+    "learning_familiarity": "_learning_item _learning_familiarity_state".split(),
+    "learning_intro": ["_learning_item"],
     "learning_guide": "_learning_item _learning_guide _learning_guide_result _learning_pitch_context".split(),
-    "learning_question": "_learning_question _learning_question_state _learning_answer _learning_parts _learning_used _learning_input _learning_composition _learning_status _learning_audio_ok _learning_pitch_context".split(),
+    "learning_question": "_learning_question _learning_question_state _learning_answer _learning_parts _learning_used _learning_input _learning_composition _learning_status _learning_audio_ok _learning_pitch_context _learning_blocks_context".split(),
     "learning_feedback": "_learning_question _learning_question_state _learning_feedback_view_result".split(),
     "learning_feedback_detail": "_learning_question _learning_question_state _learning_feedback_view_result".split(),
     "ai_service": ["ai_model_input", "ai_tutor_model_input", "ai_connection_label"],
     "material_budget_settings": ['_material_budget_config', '_material_budget_fields', '_material_budget_status'],
-    "tutor_question": "_tutor_current _tutor_answer_input _tutor_answer_state _tutor_status".split(),
+    "tutor_question": "_tutor_current _tutor_answer_input _tutor_answer_state _tutor_status _learning_pitch_context".split(),
     "tutor_feedback": ["_tutor_current"],
     "tutor_chat": "_tutor_chat_origin _tutor_chat_input _tutor_chat_status".split(),
     "tutor_loading": ["_tutor_loading_status"],
@@ -194,6 +196,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         from .material_qualification import bind_resources
         bind_resources(self.store, repo=self.repo)
         self.learning_store = LearningStore(self.store)
+        from .practice_archive import archive_previous_rounds
+        from .practice_round import enable
+        archive_previous_rounds(self.store)
+        enable(self.store)
         from .retention_schedule import visit as retention_visit
         retention_visit(self.store)
         self._practice_preferences = self._clean_preferences(self.store.get_setting("practice_preferences", {}))
@@ -286,7 +292,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         for task in tuple(getattr(self, "_kana_render_tasks", ())):
             task.cancel()
         if not getattr(self, "_backup_reopen_failed", False):
-            self._checkpoint()
+            if self._checkpoint() is False:
+                self._backup_closing = False
+                return False
+            try:
+                from .practice_archive import archive_previous_rounds
+                archive_previous_rounds(self.store)
+            except Exception as exc:
+                self._backup_closing = False
+                self.alert("本轮记录尚未归档，请重试退出：" + error_message(exc))
+                return False
         self._preview_pending = None
         self._page_token += 1
         if self._paint_handle:
@@ -1487,7 +1502,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             state = {"page": self.page, "use_full_keyboard": bool(getattr(self, "use_full_keyboard", False))}
         if self.page == "feedback" and getattr(self, "_answer_submitted_at", None):
             state.update(submitted_at_utc=self._answer_submitted_at,
-                         answer_duration_ms=self._answer_duration_ms)
+                         answer_duration_ms=self._answer_duration_ms,
+                         answer_correct=bool(self.answer_correct))
         if self.page not in {"session_wait", "dependency_wait"} and self.question.kind in KANA_WORD_PRACTICE_KINDS | {"romaji_kana_full"}:
             state["word_answer"] = getattr(self, "word_answer", "")
             if self.question.kind in WORD_PRACTICE_KINDS:
@@ -1512,6 +1528,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return False
 
     def resume_practice(self, widget=None, *, preserve_audio=False, **kwargs):
+        from .practice_round import begin
+        begin(self.store, restart_finished=True)
         pending = KanaMemory._reconcile_practice_kinds(self)
         if pending is False:
             return
@@ -2486,11 +2504,15 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 else:
                     self.store.append_session(session_id, questions, seed=seed, expected_token=append_token)
                 self.back_stack.discard(PRACTICE_PAGES)
+                from .practice_round import restart
+                restart(self.store)
                 self.resume_practice(preserve_audio=True)
             else:
                 self.session_id = (self.store.start_prepared_session(prepared) if prepared is not None
                                    else self.store.start_session(questions, seed=seed))
                 self.questions = questions
+                from .practice_round import restart
+                restart(self.store)
                 self.question_index, self.session_right = 0, 0
                 self.script, self.research_enabled = questions[0].script, True
                 self.use_full_keyboard = config["word_table"] == "full"
@@ -3104,6 +3126,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 self.alert(f"无法生成练习：{exc}")
             return
         KanaMemory._set_queue_kind_policy(self, append_session_id or session_id, kinds)
+        from .practice_round import restart
+        restart(self.store)
         if append_session_id:
             # Retained old views must never put a shorter queue back in memory.
             self.back_stack.discard(PRACTICE_PAGES)
@@ -3155,7 +3179,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 if prepared["state"].get("answer_revealed"):
                     self._assisted_attempts.add((self.session_id, self.question_index))
                 waiting_until = prepared.get("waiting_until_utc")
+        from .practice_round import seal
+        seal(self.store)
         if self.question_index >= len(self.questions):
+            from .practice_round import active as fixed_round
+            if (fixed_round(self.store) and getattr(self, "_study_path_enabled", False)
+                    and getattr(self.store, "practice_lane", "main") == "main"):
+                self.continue_study_path(_checkpoint_saved=True)
+                return
+            from .practice_round import mark_finished
+            mark_finished(self.store)
             item_count = len({getattr(q, "content_id", index) for index, q in enumerate(self.questions)})
             summary = self.store.get_session_summary(self.session_id) if getattr(self, "session_id", None) else None
             answered = len(self.questions)
@@ -3294,12 +3327,12 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.romaji_input.on_confirm = lambda w, question=self.question, **kw: self.check_answer(self.romaji_answer) if self.question is question else None
             self.screen("question", title, self.question_notice,
                         self.content_label(self.question.metadata["kana_symbol"], size=52, color=GREEN, bold=True, wrap=False, text_role="study"),
-                        ui.label("拼出对应的罗马音"), answer_hint(self), self.romaji_input,
+                        answer_hint(self), self.romaji_input,
                         ui.button("提交答案", lambda w, question=self.question, **kw: self.check_answer(self.romaji_answer) if self.question is question else None, primary=True))
             return
         reverse = self.question.kind == "romaji_kana"
         prompt = ui.label(self.question.metadata["romaji"], size=44, color=GREEN, bold=True, wrap=False) if reverse else self.content_label(self.question.metadata["kana_symbol"], size=52, color=GREEN, bold=True, wrap=False, text_role="study")
-        choices = [self.question_notice, prompt, ui.label("选择对应的假名" if reverse else "选择对应的读音"), self.note("新一轮更新选项，本轮保持不变。"), answer_hint(self)]
+        choices = [self.question_notice, prompt, answer_hint(self)]
         for option in self.question.options:
             choices.append(ui.button(option, lambda w, answer=option, question=self.question, **kw: self.choose_practice_answer(answer, question), height=54, font_size=22, text_role="study" if reverse else "ui"))
         self.screen("question", title, *choices)
@@ -3410,6 +3443,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     def practice_answer_heading(self, heading):
         """One answer-only speaker; it never changes scoring or audio readiness."""
+        from .answer_speech import clean_utterance
         question, attempt = self.question, self._attempt_key()
         text, caption = None, ""
         if question.kind in WORD_PRACTICE_KINDS:
@@ -3421,7 +3455,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 plan = kana_audio_plan(item)
                 text = plan.text
                 caption = plan.label if not plan.isolated else ""
-        self._practice_feedback_audio_text = text or ""
+        text = clean_utterance(text or "")
+        self._practice_feedback_audio_text = text
         if not text:
             return heading
 
@@ -3459,7 +3494,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             primary=True, flex=1, multiline=True)
         prompts = [self.question_notice,
             self.content_label(question.metadata["kana_answer"], size=30, bold=True, color=GREEN, text_role="study"),
-            ui.label("逐个选择假名在词中的罗马音片段", size=17, bold=True),
+            ui.label("罗马音", size=13, color=MUTED),
             self.mixed_label("词义：", ContentText(short(question.metadata.get("meaning_hint"), 160)), size=15)]
         word = self.repo.get_word(question.content_id)
         if isinstance(word, dict):
@@ -3479,12 +3514,12 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.word_romaji_delete.enabled = bool(index)
         self.word_romaji_submit.enabled = bool(index)
         if index >= len(units):
-            self.word_romaji_position.text = f"已选完 {len(units)} 个假名，可提交或删除重选。"
+            self.word_romaji_position.text = f"{len(units)} / {len(units)}"
             self.word_romaji_current.text = ""
             return
         unit = units[index]
-        self.word_romaji_position.text = f"第 {index + 1} / {len(units)} 个假名"
-        self.word_romaji_current.text = unit["kana"] + (" · 选择延长的元音" if unit["operation"] == "length" else " · 选择词内片段")
+        self.word_romaji_position.text = f"{index + 1} / {len(units)}"
+        self.word_romaji_current.text = unit["kana"] + (" · 延长音" if unit["operation"] == "length" else "")
         configure_study_ranges(self.word_romaji_current, [(0, len(unit["kana"]))])
         choices = [ui.button(option,
             lambda w, answer=option, question=self.question, step=index, **kw:
@@ -3554,16 +3589,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         from .romaji_input_ui import word_converter
         conversion = word_converter(self, ui_module, question)
         meaning_mode = self.question.kind == "word_meaning_kana"
-        prompts = [ui.label("看词义和罗马音，按顺序选出假名" if meaning_mode else "听词语，按顺序选出假名", size=18, bold=True),
+        prompts = [ui.label("片假名" if self.script == "katakana" else "平假名", size=13, color=MUTED),
                    *([self.note("含待审核词汇")] if self.research_enabled else []),
                    self.mixed_label("词义：" if meaning_mode else "词义提示：", ContentText(short(self.question.metadata.get("meaning_hint"), 160)) if self.question.metadata.get("meaning_hint") else "暂无", size=16 if meaning_mode else 12)]
         if self.question.metadata.get("word_romaji_drill"):
             prompts = [ui.label(self.question.metadata["romaji"], size=30, bold=True, color=GREEN),
-                       ui.label("按罗马音拼出" + ("片假名" if self.script == "katakana" else "平假名"), size=17, bold=True),
+                       ui.label("片假名" if self.script == "katakana" else "平假名", size=13, color=MUTED),
                        self.mixed_label("词义：", ContentText(short(self.question.metadata.get("meaning_hint"), 160)), size=15)]
         elif self.question.kind == "romaji_kana_full":
             prompts = [ui.label(self.question.metadata["romaji"], size=36, bold=True, color=GREEN),
-                       ui.label("从完整假名表选出" + ("片假名" if self.script == "katakana" else "平假名"), size=17, bold=True)]
+                       ui.label("片假名" if self.script == "katakana" else "平假名", size=13, color=MUTED)]
         elif meaning_mode:
             prompts.append(ui.label(self.question.metadata["romaji"], size=24, bold=True, color=GREEN))
         else:
@@ -4022,7 +4057,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             elif self.question.metadata.get("word_romaji_drill"):
                 children.append(ui.label("仅按有效证据轻调相关假名的识读复习间隔。", size=12, color=MUTED))
             elif corrections:
-                children.append(ui.label(f"保存后追加 {len(corrections)} 道错处补练。", size=12, color=MUTED))
+                from .practice_round import active as fixed_round
+                children.append(ui.label("错处会用于下一轮安排。" if fixed_round(self.store)
+                    else f"保存后追加 {len(corrections)} 道错处补练。", size=12, color=MUTED))
             elif not self.answer_correct:
                 children.append(ui.label("保存后记录错处；补练遵循当前题型和范围。", size=12, color=MUTED))
             if analysis.get("ambiguous"):
@@ -4058,6 +4095,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             action.enabled = word_practice or self.answer_correct or rating == 1
             children.append(action)
         self.screen("feedback", "拼写反馈" if word_practice else "作答结果", *children)
+        self._checkpoint()
         # Every outcome has the same compact details entry, including revealed
         # answers and restored feedback. Grading remains independent of lookup.
         self.preview_practice_answer(answer, self.question)

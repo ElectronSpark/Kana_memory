@@ -69,6 +69,9 @@ def clear_learning_data(store) -> dict:
         db.execute("DELETE FROM app_setting WHERE key GLOB 'retention_source_guard_v1:*'")
         material_keys.extend(row[0] for row in db.execute("SELECT key FROM app_setting WHERE key GLOB 'ability_teaching_v1:*'"))
         db.execute("DELETE FROM app_setting WHERE key GLOB 'ability_teaching_v1:*'")
+        from .practice_archive import PREFIX as ROUND_ARCHIVES
+        material_keys.extend(row[0] for row in db.execute('SELECT key FROM app_setting WHERE key GLOB ?', (ROUND_ARCHIVES + '*',)))
+        db.execute('DELETE FROM app_setting WHERE key GLOB ?', (ROUND_ARCHIVES + '*',))
         deleted_settings.extend(material_keys)
         check_filter = "key GLOB 'retention_check_v[12]:*' OR key GLOB 'retention_exposure_v1:*' OR key GLOB 'retention_reservation_v1:*' OR key GLOB 'retention_handoff_v1:*' OR key='retention_active_v2'"
         check_keys = [row[0] for row in db.execute('SELECT key FROM app_setting WHERE ' + check_filter)]
@@ -94,4 +97,6 @@ def clear_learning_data(store) -> dict:
     store._choice_history = {}
     store._choice_history_rowid = 0
     store._choice_history_version = version
+    from .practice_round import reset as reset_round
+    reset_round(store)
     return {"deleted_rows": deleted_rows, "deleted_settings": deleted_settings}

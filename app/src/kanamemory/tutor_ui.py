@@ -12,6 +12,8 @@ from hashlib import sha256
 import json
 
 from .navigation import page_view
+from .answer_result_ui import answer_text
+from .question_presentation import question_instruction
 from .question_support import (build_prompt_block, clean_prompt_preferences, learning_question_display,
                                learning_text_role, prompt_audio_text)
 from .typography import configure_study_ranges, configure_text_role
@@ -94,7 +96,10 @@ def ui():
 class TutorUIMixin:
     def tutor_store(self):
         from .tutor_store import AITutorStore
-        return AITutorStore(self.store)
+        cached = getattr(self, "_tutor_store_cache", None)
+        if cached is None or cached.store is not self.store:
+            cached = self._tutor_store_cache = AITutorStore(self.store)
+        return cached
 
     def _tutor_context(self):
         from .tutor_engine import prepare_tutor_context
@@ -117,6 +122,11 @@ class TutorUIMixin:
             context["result"] = deepcopy(latest["result"])
             context["target"] = self.learning_store.get_item(latest["question"]["target_id"])
             context["correction_row_id"] = latest["id"]
+        if hasattr(self, "_queue_kinds"):
+            from .tutor_native_routes import native_route_candidates, attach_native_routes
+            routes, enabled = native_route_candidates(self.store, self._queue_kinds,
+                audio_ready=bool(self.platform.tts_ready), handwriting_ready=self.model_state == "ready")
+            attach_native_routes(context, routes, enabled)
         return context
 
     def _tutor_row(self, row_id):
@@ -169,12 +179,13 @@ class TutorUIMixin:
         # evidence warrants help, at bounded variation points, or when the local
         # pool is exhausted; an opening exercise never needs an API selection.
         completed_count = state.get("completed_count", len(completed))
+        native_routes = any(c.get("native_lane") for c in context.get("candidates", []))
         needs_model = (force_ai or correction or bool(completed_count and completed_count % 3 == 0)
-                       or not context.get("candidates"))
+                       or not context.get("candidates") or native_routes)
         if harness.get("mode") == "independent_check" and not correction:
             needs_model = False
         if (use_ai and needs_model and self.ai_connection_status().get("ready")
-                and (context.get("scope", {}).get("targets") or correction)):
+                and (context.get("scope", {}).get("targets") or correction or native_routes)):
             self.start_tutor_request("next", context=context)
             return
         self._tutor_use_local(context)
@@ -192,6 +203,10 @@ class TutorUIMixin:
         from .tutor_engine import local_next
         u = ui()
         context = context or self._tutor_context()
+        candidate = next(iter(context.get("candidates", [])), None)
+        if candidate and candidate.get("native_lane"):
+            self._tutor_resume_native(candidate)
+            return
         question = local_next(context)
         if question is None:
             if context.get("decision") in {"wait", "disabled"}:
@@ -206,6 +221,11 @@ class TutorUIMixin:
         if row:
             self.show_tutor_question(row)
         else:
+            self._show_tutor_wait(self._tutor_context())
+
+    def _tutor_resume_native(self, candidate):
+        from .tutor_native_routes import resume_native_route
+        if not resume_native_route(self, candidate):
             self._show_tutor_wait(self._tutor_context())
 
     def show_tutor_question(self, current):
@@ -224,15 +244,25 @@ class TutorUIMixin:
         public_audio = prompt_audio_text(q)
         if public_audio:
             actions.append(u.speaker_button(lambda w: self.play_tutor_prompt(row_id=row_id), "朗读题干"))
-        children = [u.label(q.get("task", "选择最符合语境的答案。"), size=16), u.row(*actions)]
+        instruction = question_instruction(q)
+        children = []
+        prompt = None
         if q.get("audio_text"):
             children.append(u.speaker_button(lambda w: self.play_tutor_prompt(row_id=row_id), "播放题目"))
-        else:
-            prompt = build_prompt_block(self, q, clean_prompt_preferences(
-                self.store.get_setting("prompt_display_v1", {})), size=20)
-            prompt._feedback_fragment = {"kind": "tutor_question", "row_id": row_id,
-                                         "question": deepcopy(q), "draft": deepcopy(draft)}
+        elif q.get("input_mode") not in {"pitch_fill", "pitch_identify"}:
+            if q.get('input_mode') == 'multi_cloze':
+                from .multi_cloze_ui import prompt_view
+                prompt = prompt_view(self, u, q, draft,
+                    clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
+            else:
+                prompt = build_prompt_block(self, q, clean_prompt_preferences(
+                    self.store.get_setting("prompt_display_v1", {})), size=20)
+            prompt._feedback_fragment.update({"kind": "tutor_question", "row_id": row_id,
+                                         "question": deepcopy(q), "draft": deepcopy(draft)})
             children.append(prompt)
+        if instruction:
+            children.append(u.label(instruction, size=13, color=u.MUTED))
+        children.append(u.row(*actions))
         if q.get("gloss"):
             children.append(u.label(q["gloss"], size=12, color=u.MUTED))
         display = learning_question_display(q)
@@ -253,7 +283,32 @@ class TutorUIMixin:
                 configure_study_ranges(note, ranges)
                 children.append(note)
         mode = q.get("input_mode", "choice")
-        if mode == "choice":
+        if mode in {"pitch_fill", "pitch_identify"}:
+            def save_pitch(updated):
+                self.tutor_store().save_draft(row_id, updated)
+                self._tutor_answer_state.update(deepcopy(updated))
+            controls = self.learning_pitch_controls(q, draft,
+                on_change=save_pitch,
+                on_submit=lambda answer: self.submit_tutor_answer(answer, row_id=row_id),
+                is_active=lambda: self.page == "tutor_question" and self._tutor_current["id"] == row_id)
+            controls._feedback_fragment = {"kind": "tutor_question", "row_id": row_id,
+                                           "question": deepcopy(q), "draft": deepcopy(draft)}
+            children.append(controls)
+        elif mode == 'multi_cloze':
+            from .multi_cloze_ui import controls as cloze_controls
+
+            def save_cloze(updated):
+                self.tutor_store().save_draft(row_id, updated)
+                self._tutor_answer_state.update(deepcopy(updated))
+
+            def submit_cloze(answer):
+                self.submit_tutor_answer(answer, row_id=row_id)
+                return self.page != 'tutor_question' or self._tutor_current['id'] != row_id
+
+            children.append(cloze_controls(self, u, q, draft, save_cloze,
+                submit_cloze,
+                lambda: self.page == 'tutor_question' and self._tutor_current['id'] == row_id, prompt=prompt))
+        elif mode == "choice":
             children.extend(u.button(choice, lambda w, answer=choice: self.submit_tutor_answer(answer, row_id=row_id),
                 multiline=True, text_role=learning_text_role(q, "choice")) for choice in q.get("choices", []))
         elif mode == "reorder":
@@ -381,7 +436,11 @@ class TutorUIMixin:
         from .answer_autoplay import autoplay_answer
         u = ui()
         q, row_id = self._tutor_current["question"], self._tutor_current["id"]
-        answer = u.label(q["answer"], size=20, flex=1, text_role=learning_text_role(q, "answer"))
+        from .pitch_practice import is_pitch_question, answer_label
+        from .learning_pitch_ui import answer_diagram
+        pitch = is_pitch_question(q)
+        answer = (answer_diagram(self, q, reveal=True) if pitch else
+                  u.label(answer_text(q), size=20, flex=1, text_role=learning_text_role(q, "answer")))
         answer._feedback_fragment = {"kind": "tutor_feedback", "question": deepcopy(q), "result": deepcopy(result)}
         text = self._learning_answer_audio_text(q)
 
@@ -394,9 +453,13 @@ class TutorUIMixin:
             play_answer, "朗读答案对应的日语")) if text else answer]
         entered = result.get("answered_text", "")
         if not result.get("correct") and entered and entered != q["answer"]:
+            if pitch:
+                entered = answer_label(q, entered)
+            else:
+                entered = answer_text(q, entered)
             children.append(u.label("我的回答：" + entered, size=12, color=u.MUTED))
         explanation = str(result.get("explanation") or q.get("feedback") or "").strip()
-        if explanation and explanation != q["answer"].strip():
+        if explanation and explanation != answer_text(q).strip():
             children.append(u.label(explanation, size=15))
         actions = [u.button("问 AI", lambda w: self.open_tutor_question(source="tutor", question_id=row_id,
             after_answer=True), compact=True, flex=1)]
@@ -804,6 +867,12 @@ class TutorUIMixin:
                 self._tutor_busy = False
 
     def _tutor_accept_response(self, response, context, intent, message, origin, request_id):
+        # Recheck saved replies too: an older dispatcher response must not
+        # reveal a native answer without that queue's assistance bookkeeping.
+        if (intent == "next" and any(c.get("native_lane") for c in context.get("candidates", []))
+                and response.get("action") != "retrieve"):
+            self._tutor_use_local(context)
+            return
         store = self.tutor_store()
         self._tutor_memory_notice = ''
         if response.get('memory_updates') and context.get('learner_context'):
@@ -851,6 +920,9 @@ class TutorUIMixin:
             return
         if action == "retrieve":
             candidate = next((item for item in context["candidates"] if item["candidate_id"] == response["candidate_id"]), None)
+            if candidate and candidate.get("native_lane"):
+                self._tutor_resume_native(candidate)
+                return
             question = candidate["question"] if candidate else None
             source = "local"
         elif action == "generate":

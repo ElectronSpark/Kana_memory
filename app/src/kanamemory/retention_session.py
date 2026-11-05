@@ -126,13 +126,16 @@ def validate_episode(value):
                 or row['id'] in seen or row['proof'] != _proof(q)
                 or row['phase'] not in {'baseline', 'transfer', 'recovery'} or row['purpose'] not in PURPOSES
                 or any(type(row[k]) is not bool for k in ('presented', 'exposed', 'completed', 'credit_revoked'))
-                or not isinstance(row['draft'], dict) or set(row['draft']) - {'answer', 'audio_ok', 'hint_used', 'pitch_state', 'used'}
+                or not isinstance(row['draft'], dict) or set(row['draft']) - {'answer', 'audio_ok', 'hint_used', 'pitch_state', 'used', 'cloze_state'}
                 or not isinstance(row['draft'].get('answer', ''), str) or len(row['draft'].get('answer', '')) > 10000
                 or any(type(row['draft'][k]) is not bool for k in ('audio_ok', 'hint_used') if k in row['draft'])
                 or row['anchor_event_id'] is not None and not _text(row['anchor_event_id'])):
             raise ValueError('Invalid diagnostic question or draft')
         from .pitch_practice import validate_draft
         validate_draft(q, row['draft'])
+        from .multi_cloze import validate_snapshot as validate_cloze_snapshot, validate_draft as validate_cloze_draft
+        validate_cloze_snapshot(q)
+        validate_cloze_draft(q, row['draft'])
         used = row['draft'].get('used')
         if used is not None:
             if (q.get('input_mode') != 'reorder' or not isinstance(used, list) or len(used) != len(set(used))
@@ -407,9 +410,14 @@ class DiagnosticStore:
                     and available(q, system_japanese=system_japanese_enabled(self.store))
                     and assessment_decision(item, q, purpose='check_only', enrolled=False, store=self.store)['assessment_eligible']]
         candidates = []
+        from .learning_practice_policy import practice_candidates
+        from .learning_dependencies import independent_ready_ids
+        descriptors = list(practice_candidates(item, question_kinds(cid, item=item),
+            known_background_ids=independent_ready_ids(self.learning),
+            system_japanese=system_japanese_enabled(self.store)))
         for kind in question_kinds(cid, item=item):
             if not enabled_question(self.store, {'kind': kind}, enabled): continue
-            for variant in range(3):
+            for variant in [d['variant'] for d in descriptors if d['kind'] == kind]:
                 q = build_learning_question(item, kind, variant=variant)
                 if (not material_id and item.get('dictionary_only')
                         and self.learning.get_unit(cid, q['ability']) is None):
@@ -681,7 +689,9 @@ class DiagnosticStore:
                 result = {'question_id': q['id'], 'answered_text': answer, 'correct': judge['correct'] if qualified else None,
                           'outcome': judge['status'] if qualified else 'unresolved', 'assisted': row['exposed'],
                           'scheduled': False, 'qualified': qualified, 'submitted_at_utc': stamp.isoformat(),
-                          'assessment': decision, 'observed_judgement': {'outcome': judge['status'], 'correct': judge['correct']}}
+                          'assessment': decision, 'observed_judgement': {'outcome': judge['status'], 'correct': judge['correct']},
+                          **{key: judge[key] for key in ('slot_results', 'primary_correct', 'primary_scorable',
+                              'overall_correct', 'background_errors') if key in judge}}
                 result['assessment_contract'] = for_question(q)
                 result['observations'] = observations(q, result); result['unit_observations'] = aggregate(result['observations'])
                 LearningEvidenceStore(self.store).record_attempt('diagnostic:' + row['id'], q, result,

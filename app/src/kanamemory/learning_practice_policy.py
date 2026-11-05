@@ -34,7 +34,7 @@ def question_scaffold(question):
     meta = practice_metadata(question)
     if mode == "choice":
         return "recognition"
-    if mode == "reorder":
+    if mode in {"reorder", "multi_cloze"}:
         return "cued"
     if mode in _TEXT_MODES:
         if meta:
@@ -73,6 +73,7 @@ def _candidate_questions(item, ability, kinds, state):
     # rewriting a stored lesson or moving its original variant indices.
     provider = getattr(questions, "practice_templates", None)
     templates = provider(item) if provider else item.get("question_templates")
+    retired = questions.retired_practice_variants(item, templates)
     known = state.get("known_background_ids", ())
     known = {x for x in known if isinstance(x, str)} if isinstance(known, (list, tuple, set, frozenset)) else set()
     known.add(item["id"])
@@ -80,6 +81,8 @@ def _candidate_questions(item, ability, kinds, state):
     for kind in enabled:
         variants = templates.get(kind, []) if isinstance(templates, dict) else None
         for variant in range(len(variants) if variants is not None else 4):
+            if (kind, variant) in retired:
+                continue
             if variants is None:
                 try:
                     raw = questions.build_learning_question(item, kind, variant=variant)
@@ -106,6 +109,15 @@ def _candidate_questions(item, ability, kinds, state):
             yield {**descriptor, "kind": kind, "variant": variant,
                    "input_mode": raw.get("input_mode", "choice"),
                    "reviewed_practice": meta is not None}
+
+
+def practice_candidates(item, kinds, *, known_background_ids=(), system_japanese=False):
+    """Public read-only descriptors shared by course, tutor and retention paths."""
+    from .learning_questions import KIND_ABILITIES
+    state = {"known_background_ids": known_background_ids,
+             "system_japanese_input": system_japanese}
+    for ability in dict.fromkeys(KIND_ABILITIES[k] for k in kinds if k in KIND_ABILITIES):
+        yield from _candidate_questions(item, ability, kinds, state)
 
 
 def select_practice_plan(item, ability, kinds, state, history):
@@ -254,7 +266,7 @@ def validate_practice_guide(content_id, revision, checkpoint, *, item=None, vali
             or q.get("ability") != KIND_ABILITIES[q["kind"]]
             or not isinstance(q.get("prompt"), str) or not isinstance(q.get("answer"), str)
             or not isinstance(q.get("input_mode"), str)
-            or q["input_mode"] not in {"choice", "text", "reorder"}):
+            or q["input_mode"] not in {"choice", "text", "reorder", "multi_cloze"}):
         raise ValueError("Invalid frozen practice guide")
     if item is not None and sequence is None:
         from .learning_questions import build_learning_question
@@ -278,6 +290,9 @@ def validate_practice_guide(content_id, revision, checkpoint, *, item=None, vali
     if mode == "choice" and q["answer"] not in choices:
         raise ValueError("Practice guide answer is absent")
     draft = checkpoint.get("guide_draft", {})
+    from .multi_cloze import validate_snapshot, validate_draft
+    validate_snapshot(q)
+    validate_draft(q, draft)
     if not isinstance(draft, dict) or not isinstance(draft.get("answer", ""), str):
         raise ValueError("Invalid practice guide draft")
     if "demonstration_open" in draft and type(draft["demonstration_open"]) is not bool:

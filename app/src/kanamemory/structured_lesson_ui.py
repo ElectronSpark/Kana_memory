@@ -17,6 +17,14 @@ def lesson_label(u, text, **style):
 
 
 def block_widget(u, block, index=0):
+    if block['kind'] == 'prosody':
+        from .prosody_cue_ui import cue_widget
+        result = cue_widget({'prompt': block['text'], 'prosody_cue': block['prosody_cue']})
+        if block.get('caption'):
+            result.add(lesson_label(u, block['caption'], size=14, color=u.MUTED))
+        result._lesson_block_kind = 'prosody'
+        result._feedback_fragment = {'kind': 'teaching_block', 'index': index, 'block': deepcopy(block)}
+        return result
     if block['kind'] == 'pitch_sequence':
         from .pitch_practice import fixed_view
         from .pitch_practice_ui import fixed_pitch_diagram

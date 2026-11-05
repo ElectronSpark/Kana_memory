@@ -1,6 +1,14 @@
 """Shared result typography; grading, revelation and scheduling stay in callers."""
 
 
+def answer_text(question, answer=None):
+    """Display structured answers as ordinary Japanese, never their encoding."""
+    from .multi_cloze import is_cloze_question, answer_label
+    if is_cloze_question(question):
+        return answer_label(question, answer)
+    return str(question.get('answer', '') if answer is None else answer)
+
+
 def distinct_explanation(explanation, answer):
     """Remove exact answer-only lines, retaining translations and explanations."""
     return "\n".join(line for line in str(explanation or "").splitlines()

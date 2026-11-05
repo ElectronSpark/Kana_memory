@@ -26,6 +26,9 @@ def question_receipt(store, question_id):
 
 
 def assert_answerable(store, question_id):
+    from .practice_archive import archived_question
+    if archived_question(store, question_id):
+        raise ValueError('这一轮已结束，答案记录已归档。请开始新一轮练习。')
     if question_receipt(store, question_id):
         raise ValueError('这道旧题已保留在替换记录中，请继续新的题目。')
 
@@ -267,6 +270,8 @@ class LearningReplacementStore:
                 from .pitch_practice import validate_checkpoint
                 validate_practice_guide(event['content_id'], event['source']['revision'], after, item=event['source'])
                 validate_checkpoint(event['content_id'], event['source']['revision'], after)
+                from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
+                validate_cloze_checkpoint(event['content_id'], event['source']['revision'], after)
                 row = self.learning.instruction_row(event['content_id'], event['scope'])
                 update(self.db, row, checkpoint_json=_dump(after))
             _write(self.db, key, event)
@@ -347,6 +352,8 @@ def validate_database(db):
             for state in (old, after):
                 validate_practice_guide(e['content_id'], source['revision'], state, item=base, validate_result=False)
                 validate_checkpoint(e['content_id'], source['revision'], state)
+                from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
+                validate_cloze_checkpoint(e['content_id'], source['revision'], state)
             for q in after.get('guide_sequence', [after['guide_question']]):
                 if not factory_matches(q, source): raise ValueError('新引导题不属于核对来源。')
             if after['guide_question'].get('practice') and after.get('guide_source_item') != source:

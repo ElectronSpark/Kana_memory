@@ -42,13 +42,14 @@ def configure_text_role(widget, text_role='ui', font_family=None):
     return widget
 
 
-def configure_study_ranges(widget, ranges):
+def configure_study_ranges(widget, ranges, *, font_family='serif'):
     """Style explicit Japanese ranges without replacing text or kana links."""
     text = str(widget.text)
     ranges = tuple(ranges)
     if any(not (0 <= start < end <= len(text)) for start, end in ranges):
         raise ValueError('Study range outside displayed text')
     widget._study_ranges = ranges
+    widget._study_range_family = font_family
     if current_platform != 'android' or not ranges:
         return widget
     from android.text import SpannableString, Spanned
@@ -60,7 +61,7 @@ def configure_study_ranges(widget, ranges):
         # Android span offsets count UTF-16 units, not Python code points.
         first = len(text[:start].encode('utf-16-le')) // 2
         last = len(text[:end].encode('utf-16-le')) // 2
-        styled.setSpan(TypefaceSpan('serif'), first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        styled.setSpan(TypefaceSpan(font_family), first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         styled.setSpan(LocaleSpan(Locale.JAPAN), first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     native.setText(styled)
     widget.refresh()

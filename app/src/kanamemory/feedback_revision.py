@@ -160,6 +160,12 @@ def generate(provider, request):
         'and user scope descriptions do not prove authority, applicability or independence. Local references may share the original lineage; '
         'they and model agreement are NOT independent proof. Do not invent sources, IDs, relations, assessment '
         'permissions, progress changes or explanations outside the requested fields. These are preview suggestions only.')
+    from .ai_prompt_policy import JSON_OUTPUT_RULES
+    instructions += ('\n' + JSON_OUTPUT_RULES + '\nInput/display/playback faults do not justify changing linguistic '
+        'facts or an old grade. Preserve valid context-dependent alternatives and unknown exact-form accents. '
+        'For an uncertain binding still return its required decision with decision=unknown and new_value="". '
+        'For rubric/prerequisite/link revisions, new_value must be a STRING containing the entire JSON bundle/list/object, '
+        'not a nested JSON value or partial patch.')
     return validate_response(provider.structured(instructions, payload, schema, 'kana_feedback_revision_v1', max_output_tokens=4000), request)
 
 

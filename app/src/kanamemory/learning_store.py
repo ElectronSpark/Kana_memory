@@ -271,6 +271,37 @@ class LearningStore:
         plan = build_dependency_plan([item["id"] for item in selected], combined, self)
         return {**plan, "added": self.enroll(plan["items"], now=now)}
 
+    def has_other_instruction_exposure(self, content_id, *, instruction_scope=None, personal_revision=None):
+        """Another ability's introduction was shown, not necessarily mastered.
+
+        Reuse only the same material; a changed personal explanation needs its
+        own introduction unless another frozen guide binds that exact revision.
+        """
+        current = self.instruction_row(content_id, instruction_scope)
+        if current is None:
+            return False
+        original = self.instruction_row(content_id)
+        state = _teaching.read(self._db, content_id)
+        rows = [original, *((state or {}).get('additions', {}).values())]
+        return any(row['introduction_id'] != current['introduction_id']
+            and (checkpoint := _load(row['checkpoint_json'])).get('instruction_exposed_at_utc')
+            and (checkpoint.get('guide_source_item') or {}).get('personal_revision') == personal_revision
+            for row in rows)
+
+    def prepare_initial_familiarity(self, content_id, *, expected_introduction_id, instruction_scope=None, ability=None):
+        """Separate only untouched abilities, preserving every actual study row."""
+        with self._db:
+            self._transaction()
+            row = self.instruction_row(content_id, instruction_scope)
+            if row is None or row['introduction_id'] != expected_introduction_id:
+                raise ValueError('The introduction is no longer current')
+            if ability is not None and ability not in _teaching.abilities(self._db, row):
+                raise ValueError('The ability is outside this introduction')
+            separated = _teaching.separate_untouched(self._db, row, first_ability=ability)
+            if separated and ability:
+                instruction_scope = _teaching.scope_for(self._db, content_id, ability)
+        return self.instruction_item(content_id, instruction_scope)
+
     def set_initial_familiarity(self, content_id, levels, *, expected_introduction_id=None,
                                 title_answer_exposed=False, now=None, fair_new=False, instruction_scope=None):
         """Save a first-exposure self-report, never a successful review.
@@ -319,6 +350,7 @@ class LearningStore:
             checkpoint["initial_familiarity"] = {"version": 1, "evidence": "self_report",
                 "levels": dict(levels), "route": route, "selected_at_utc": now.isoformat(),
                 "diagnostic_state": "active" if route == "diagnostic" else "not_requested"}
+            checkpoint.pop('familiarity_draft', None)
             if title_answer_exposed:
                 checkpoint["initial_familiarity"]["title_answer_exposed"] = True
             _teaching.update(self._db, row, checkpoint_json=_dump(checkpoint))
@@ -339,6 +371,22 @@ class LearningStore:
                 if fair_new:
                     from .new_dispatch import completed
                     completed(self._db, "course")
+        return self.instruction_item(content_id, instruction_scope)
+
+    def save_familiarity_draft(self, content_id, levels, *, expected_introduction_id, instruction_scope=None):
+        """Keep explicit partial choices for an already-exposed shared intro."""
+        with self._db:
+            self._transaction()
+            row = self.instruction_row(content_id, instruction_scope)
+            if row is None or row['introduction_id'] != expected_introduction_id or row['stage'] != 'intro':
+                raise ValueError('The introduction is no longer current')
+            checkpoint = _load(row['checkpoint_json'])
+            if (checkpoint.get('initial_familiarity') or not isinstance(levels, dict)
+                    or not set(levels) < set(_teaching.abilities(self._db, row))
+                    or any(v not in FAMILIARITY_LEVELS for v in levels.values())):
+                raise ValueError('Invalid partial familiarity choices')
+            checkpoint['familiarity_draft'] = dict(levels)
+            _teaching.update(self._db, row, checkpoint_json=_dump(checkpoint))
         return self.instruction_item(content_id, instruction_scope)
 
     def ensure_prerequisites(self, catalogue=None, now=None):
@@ -605,6 +653,8 @@ class LearningStore:
                 draft["guide_source_item"] = resolve(self.store, teaching_overlay(reviewed_item(_load(row["content_json"]))))
             from .pitch_practice import validate_checkpoint
             validate_checkpoint(content_id, row["revision"], draft)
+            from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
+            validate_cloze_checkpoint(content_id, row['revision'], draft)
             from .learning_practice_policy import validate_practice_guide
             validate_practice_guide(content_id, row["revision"], draft, item=_load(row["content_json"]))
             if checkpoint in {"intro_done", "guide"} and row["stage"] == "intro":
@@ -663,6 +713,8 @@ class LearningStore:
             if self._db.execute("SELECT 1 FROM learning_question WHERE unit_id=? AND status='pending'", (unit["unit_id"],)).fetchone():
                 continue
             qid = _identifier(q.get("id", q.get("question_id", uuid4().hex)))
+            from .practice_round import next_question_id
+            qid = next_question_id(self.store, qid)
             if self._db.execute("SELECT 1 FROM learning_question WHERE question_id=?", (qid,)).fetchone():
                 continue
             if not isinstance(q.get("prompt"), str) or not isinstance(q.get("answer"), str):
@@ -672,6 +724,8 @@ class LearningStore:
             q.update(id=qid, question_id=qid, target_id=cid, ability=ability)
             from .pitch_practice import validate_snapshot
             validate_snapshot(q)
+            from .multi_cloze import validate_snapshot as validate_cloze_snapshot
+            validate_cloze_snapshot(q)
             if 'content_dependencies' in q:
                 from .question_dependencies import validate as validate_field_dependencies
                 validate_field_dependencies(q['content_dependencies'])
@@ -805,6 +859,10 @@ class LearningStore:
             result.update(status='superseded', replacement_question_id=replaced['question']['id'])
         from .material_review import reviewed_question
         result = reviewed_question(result)
+        from .practice_archive import archived_question
+        archive = archived_question(self.store, question_id)
+        if archive:
+            result.update(status="archived", round_archive=archive)
         from .assessment_contract import for_question as assessment_contract
         result["assessment_contract"] = ((result["result"] or {}).get("assessment_contract")
                                          or assessment_contract(result))
@@ -860,14 +918,20 @@ class LearningStore:
                                           apply_review=checkpoint.get("guide_answer") is None)
         if frozen is None and checkpoint.get("guide_answer") is None:
             from .answer_input import available, system_japanese_enabled
-            from .learning_questions import practice_templates
+            from .learning_questions import practice_templates, retired_practice_variants
             system_input = system_japanese_enabled(self.store)
-            if not available(question, system_japanese=system_input):
-                templates = practice_templates(target)
-                for index in range(len((templates or {}).get(kind, []))):
-                    candidate = build_learning_question(target, kind, guided=True, variant=index)
-                    if available(candidate, system_japanese=system_input):
-                        return candidate
+            templates = practice_templates(target)
+            variants = (templates or {}).get(kind, [])
+            is_retired = bool(variants and (kind, variant % len(variants)) in
+                              retired_practice_variants(target, templates))
+            if is_retired or not available(question, system_japanese=system_input):
+                from .learning_practice_policy import practice_candidates
+                for candidate in practice_candidates(target, [kind],
+                        known_background_ids=self.store.queries.instruction_ready_ids(),
+                        system_japanese=system_input):
+                    return build_learning_question(target, kind, guided=True, variant=candidate['variant'])
+                if is_retired:
+                    raise ValueError('这道旧例题已停用，目前没有前置知识已就绪的替代题。')
         return question
 
     def guided_sequence(self, item, kinds, *, known_background_ids=()):
@@ -946,6 +1010,8 @@ class LearningStore:
                     old[key] = True
             from .pitch_practice import validate_draft
             validate_draft(_load(row["snapshot_json"]), old)
+            from .multi_cloze import validate_draft as validate_cloze_draft
+            validate_cloze_draft(_load(row['snapshot_json']), old)
             self._db.execute("UPDATE learning_question SET draft_json=? WHERE question_id=?", (_dump(old), question_id))
         return self.get_question(question_id)
 
@@ -1064,6 +1130,8 @@ class LearningStore:
         # question snapshots and their original insertion order stay intact.
         def service_priority(row):
             priority = dispatch_priority(row)
+            from .practice_round import frozen_priority
+            frozen_priority(self.store, "cross-course", row['question_id'], priority)
             if not include_unassessed or priority[0] < 4:
                 return (0, priority)
             category = unassessed(row)
@@ -1080,7 +1148,8 @@ class LearningStore:
                     "ability": head["question"]["ability"], "kind": head["question"]["kind"]}
                     for pool, head in service_heads.items()}}
 
-        for row in sorted(self._dispatch_pending(enabled_kinds), key=service_priority):
+        from .practice_round import freeze_course_rows
+        for row in freeze_course_rows(self.store, self._dispatch_pending(enabled_kinds), service_priority):
             content_row = content_row_for(row)
             if _paused_practice_guide(content_row, enabled_kinds):
                 continue
@@ -1297,6 +1366,15 @@ class LearningStore:
         assisted = assisted or any(draft.get(k) for k in ("assisted", "answer_revealed", "hint_used"))
         outcome = outcome or ("correct" if correct is True else "incorrect" if correct is False else "unresolved")
         spelling_diagnosis = {}
+        from .multi_cloze import is_cloze_question, grade_answer as grade_cloze_answer
+        if is_cloze_question(snapshot) and outcome not in {'revealed', 'cancelled', 'device_failure'}:
+            judgement = grade_cloze_answer(snapshot, answered_text)
+            if judgement['status'] in {'empty', 'invalid'}:
+                raise ValueError(judgement['message'])
+            outcome, correct = judgement['status'], judgement['correct']
+            spelling_diagnosis = {key: judgement[key] for key in (
+                'slot_results', 'primary_correct', 'primary_scorable', 'overall_correct', 'background_errors')
+                if key in judgement}
         from .pitch_practice import is_pitch_question, grade_answer as grade_pitch_answer
         if is_pitch_question(snapshot) and outcome not in {"revealed", "cancelled", "device_failure"}:
             judgement = grade_pitch_answer(snapshot, answered_text)
@@ -1557,8 +1635,16 @@ def validate_backup_rows(db):
         checkpoint = _load(row["checkpoint_json"])
         if not isinstance(checkpoint, dict):
             raise ValueError("Invalid instruction state")
+        if 'familiarity_draft' in checkpoint:
+            draft = checkpoint['familiarity_draft']
+            if (not isinstance(draft, dict) or not set(draft) < set(_teaching.abilities(db, row))
+                    or any(value not in FAMILIARITY_LEVELS for value in draft.values())
+                    or checkpoint.get('initial_familiarity') or row['stage'] != 'intro'):
+                raise ValueError('Invalid partial familiarity choices')
         from .pitch_practice import validate_checkpoint
         validate_checkpoint(row["content_id"], row["revision"], checkpoint)
+        from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
+        validate_cloze_checkpoint(row['content_id'], row['revision'], checkpoint)
         from .learning_practice_policy import validate_practice_guide
         validate_practice_guide(row["content_id"], row["revision"], checkpoint, item=item,
                                 validate_result=False)
@@ -1643,6 +1729,9 @@ def validate_backup_rows(db):
         from .pitch_practice import validate_snapshot, validate_draft
         validate_snapshot(q)
         validate_draft(q, draft)
+        from .multi_cloze import validate_snapshot as validate_cloze_snapshot, validate_draft as validate_cloze_draft
+        validate_cloze_snapshot(q)
+        validate_cloze_draft(q, draft)
         _utc(datetime.fromisoformat(row["created_at_utc"]))
         if row["not_before_utc"] is not None:
             _utc(datetime.fromisoformat(row["not_before_utc"]))
@@ -1673,6 +1762,8 @@ def validate_backup_rows(db):
             raise ValueError("Unresolved evidence cannot alter the schedule")
     from .learning_replacement import validate_database as validate_replacements
     retired = validate_replacements(db)
+    from .practice_archive import validate_database as validate_round_archives
+    retired = set(retired) | validate_round_archives(db)
     if any(row[0] not in retired for row in db.execute("""SELECT q.question_id FROM learning_question q
             LEFT JOIN learning_event e ON q.question_id=e.question_id
             WHERE q.status='completed' AND e.event_id IS NULL""")):

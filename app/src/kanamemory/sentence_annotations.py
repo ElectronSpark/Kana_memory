@@ -108,6 +108,11 @@ def _validated(text, record):
         excluded_positions.update(range(start, end))
     out = {"text": text, "segments": result, "version": VERSION,
            "status": record.get("status", "precomputed")}
+    projection = record.get('context_projection_sha256')
+    if projection is not None:
+        if not isinstance(projection, str) or not re.fullmatch('[0-9a-f]{64}', projection):
+            return None
+        out['context_projection_sha256'] = projection
     if excluded:
         out["excluded"] = deepcopy(excluded)
     covered = {i for s in result if s.get("reading") is not None

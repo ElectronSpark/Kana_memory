@@ -10,7 +10,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = Path(__file__).with_name("public_source_files.txt")
-FORBIDDEN_PARTS = {".git", ".venv", "__pycache__", ".codex", ".agents", "data", "resources", "research", "user-data", "artifacts"}
+FORBIDDEN_PARTS = {".git", ".venv", "__pycache__", ".codex", ".agents", ".claude", "data", "resources", "research", "user-data", "artifacts"}
 SECRET = re.compile(rb"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{30,}")
 PRIVATE_PATH = re.compile(rb"[A-Za-z]:[\\/]Users[\\/][^\\/\r\n\"']+")
 

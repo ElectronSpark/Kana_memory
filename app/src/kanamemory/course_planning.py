@@ -20,12 +20,15 @@ class CourseProgressReader(Protocol):
 
 
 def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,
-                        learning_store: CourseProgressReader, system_japanese_input: bool) -> Iterator[CourseQuestionPlan]:
+                        learning_store: CourseProgressReader, system_japanese_input: bool,
+                        unit_states: dict | None = None) -> Iterator[CourseQuestionPlan]:
     """Read missing ability candidates; existing snapshots remain owners.
 
     Explicit templates carry the response mode and reviewed scaffold needed
     to preview a due time. Build their full question only on continuation.
     The few legacy template-free lessons use the original builder directly.
+    unit_states is an explicit caller-owned projection from this synchronous
+    read action, never a saved preview used to authorize a later append.
     """
     enabled = set(enabled_kinds)
     pending = queries.pending_abilities(item["id"])
@@ -42,7 +45,8 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         kinds = [k for k in available if KIND_ABILITIES[k] == ability and k in enabled]
         if not kinds:
             continue
-        state = learning_store.get_unit(item["id"], ability)
+        state = (learning_store.get_unit(item["id"], ability) if unit_states is None
+                 else unit_states.get(ability))
         count = int((state or {}).get("attempt_count", 0))
         policy_state = dict(state or {})
         policy_state["system_japanese_input"] = system_japanese_input

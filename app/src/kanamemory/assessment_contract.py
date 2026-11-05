@@ -9,6 +9,11 @@ from .material_review import fingerprint
 VERSION = 1
 
 
+def _cloze_slots(question):
+    from .multi_cloze import is_cloze_question, specification
+    return specification(question)['slots'] if is_cloze_question(question) else ()
+
+
 def _component_fields(question):
     from .pitch_practice import is_pitch_question
     if not is_pitch_question(question):
@@ -77,6 +82,11 @@ def for_question(question):
     for field in _component_fields(question):
         result['scored_parts'].append({'id': 'pitch:' + field, 'slot': field, 'target': target,
                                       'role': 'component', 'judge': 'local_pitch', 'accepted_answers': []})
+    for slot in _cloze_slots(question):
+        result['scored_parts'].append({'id': 'cloze:' + slot['id'], 'slot': slot['id'],
+            'target': {'knowledge_id': slot['target_id'], 'ability': slot['ability'], 'script': ''},
+            'role': 'component' if slot['role'] == 'primary' else 'background',
+            'judge': 'local_multi_cloze', 'accepted_answers': []})
     if semantic:
         result['provenance']['semantic_revision'] = semantic['revision']
         result['provenance']['semantic_source'] = semantic['source_id']
@@ -112,6 +122,22 @@ def observations(question, result):
                       # The full immutable response is retained in the primary.
                       'answered_text': '', 'response_ref': 'answer',
                       'attribution': 'direct' if correct is not None else 'unresolved'})
+    slots = _cloze_slots(question)
+    if slots:
+        from .multi_cloze import grade_answer
+        raw = result.get('observed_judgement', result)
+        judged = (grade_answer(question, result.get('answered_text', ''))
+                  if raw.get('outcome') in {'correct', 'incorrect', 'unresolved'} else {})
+        values = {row['slot_id']: row for row in judged.get('slot_results', [])}
+        for slot in slots:
+            value = values.get(slot['id'], {})
+            correct = value.get('correct')
+            parts.append({**main, 'part_id': 'cloze:' + slot['id'],
+                'unit': {'knowledge_id': slot['target_id'], 'ability': slot['ability'], 'script': ''},
+                'role': 'component' if slot['role'] == 'primary' else 'background',
+                'outcome': value.get('outcome', 'unresolved'), 'correct': correct,
+                'answered_text': '', 'response_ref': 'answer',
+                'attribution': 'direct' if correct is not None else 'unresolved'})
     return parts
 
 

@@ -25,20 +25,18 @@ class StudyQueries:
         return len(tables) == 3
 
     def taught_course_ids(self, content_ids: Iterable[str]) -> set[str]:
-        content_ids = tuple(content_ids)
-        placeholders = ','.join('?' for _ in content_ids)
-        return {row[0] for row in self._connection.execute(
-            f"SELECT content_id FROM learning_content WHERE content_id IN ({placeholders}) "
-            "AND stage IN ('bridge','check','done')", content_ids)}
+        selected = set(content_ids)
+        rows = [r for r in self.course_progress_rows() if r['content_id'] in selected]
+        return {r['content_id'] for r in rows} - {r['content_id'] for r in rows if r['stage'] not in ('bridge', 'check', 'done')}
 
     def contribution_valid(self, identity: str, content_id: str, ability: str) -> bool:
         from .content_history import contribution_valid
         return contribution_valid(self._connection, identity, content_id, ability)
 
-    def course_progress_rows(self) -> list[sqlite3.Row]:
-        """Raw main-course stage/checkpoint, without content or ability overlays."""
-        return self._connection.execute(
-            "SELECT content_id,stage,checkpoint_json FROM learning_content").fetchall()
+    def course_progress_rows(self) -> list:
+        """Every admitted introduction scope; consumers aggregate per content."""
+        from .ability_teaching import rows
+        return list(rows(self._connection, teaching_only=True))
 
     def reviewed_kana_rows(self) -> list[sqlite3.Row]:
         """All scored legacy facts, including word skills and suspended cards."""
@@ -51,8 +49,7 @@ class StudyQueries:
             "SELECT content_id FROM learning_content ORDER BY content_id"))
 
     def unfinished_course_ids(self) -> tuple[str, ...]:
-        return tuple(row[0] for row in self._connection.execute(
-            "SELECT content_id FROM learning_content WHERE stage<>'done'"))
+        return tuple(dict.fromkeys(row['content_id'] for row in self.course_progress_rows() if row['stage'] != 'done'))
 
     def active_review_units(self) -> list[sqlite3.Row]:
         """Scored, unsuspended abilities, regardless of pending/reservation state."""
@@ -260,8 +257,9 @@ class StudyQueries:
         ORDER BY occurred_at_utc DESC LIMIT ?""", (now.isoformat(), limit)))
 
     def first_unfinished_course(self) -> sqlite3.Row | None:
-        return self._connection.execute("""SELECT content_id FROM learning_content
-        WHERE stage<>'done' ORDER BY rowid LIMIT 1""").fetchone()
+        identities = self.unfinished_course_ids()
+        return self._connection.execute('SELECT content_id FROM learning_content WHERE content_id=?',
+                                        (identities[0],)).fetchone() if identities else None
 
     def first_pending_course(self, enabled) -> sqlite3.Row | None:
         return self._connection.execute("""SELECT u.content_id FROM learning_question q

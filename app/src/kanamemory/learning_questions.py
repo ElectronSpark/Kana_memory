@@ -16,6 +16,7 @@ import unicodedata
 from .content_pack import load_namespace
 from .learning_content import get_learning_item
 from . import pitch_practice
+from . import multi_cloze
 
 _CONTENT = load_namespace("learning_questions", {})
 _PRACTICE = load_namespace("varied_practice", {})
@@ -71,7 +72,10 @@ def learning_order_translation_source(question):
             or question.get("audio_only") or question.get("has_hidden_transcript")):
         return None
     field = "prompt"
-    if kind in {"grammar_cloze", "vocab_usage"}:
+    if multi_cloze.is_cloze_question(question):
+        text = multi_cloze.answer_label(question)
+        field = "answer"
+    elif kind in {"grammar_cloze", "vocab_usage"}:
         prompt, answer = question.get("prompt"), question.get("answer")
         if not isinstance(prompt, str) or not isinstance(answer, str) or prompt.count("（　）") != 1:
             return None
@@ -120,7 +124,7 @@ def validate_practice(raw, *, target_id=None):
     required = {"schema_version", "task_family", "context_id", "scaffold",
                 "target_spans", "background_ids", "reviewed"}
     if (not isinstance(value, dict) or not required <= set(value)
-            or set(value) - required - {"example_id"}
+            or set(value) - required - {"example_id", "coverage_scope", "assessed_ids"}
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["reviewed"] is not True):
         raise ValueError("Unsupported reviewed practice metadata")
@@ -132,7 +136,7 @@ def validate_practice(raw, *, target_id=None):
         raise ValueError("Invalid practice scaffold")
     mode = raw.get("input_mode", "choice")
     if ((mode == "choice" and value["scaffold"] != "recognition")
-            or (mode == "reorder" and value["scaffold"] != "cued")
+            or (mode in {"reorder", "multi_cloze"} and value["scaffold"] != "cued")
             or (mode == "text" and value["scaffold"] == "recognition")):
         raise ValueError("Practice scaffold disagrees with response control")
     backgrounds = value["background_ids"]
@@ -141,6 +145,17 @@ def validate_practice(raw, *, target_id=None):
                    or cid == target_id for cid in backgrounds)
             or len(set(backgrounds)) != len(backgrounds)):
         raise ValueError("Invalid practice background targets")
+    if "coverage_scope" in value or "assessed_ids" in value:
+        assessed = value.get("assessed_ids")
+        if (value.get("coverage_scope") not in {"focused", "cumulative"}
+                or not isinstance(assessed, list) or not 1 <= len(assessed) <= 8
+                or any(not isinstance(cid, str) or not cid or len(cid) > 1024 for cid in assessed)
+                or len(set(assessed)) != len(assessed)
+                or target_id is not None and (target_id not in assessed
+                    or not set(assessed) <= {target_id, *backgrounds})
+                or value["coverage_scope"] == "focused" and len(assessed) != 1
+                or value["coverage_scope"] == "cumulative" and len(assessed) < 2):
+            raise ValueError("Invalid reviewed coverage scope")
     spans, prompt = value["target_spans"], raw.get("prompt", "")
     if not isinstance(spans, list) or not 1 <= len(spans) <= 20 or not isinstance(prompt, str):
         raise ValueError("Practice needs explicit public target spans")
@@ -170,6 +185,33 @@ def _practice_binding(item):
 def _template_fingerprint(raw):
     return hashlib.sha256(json.dumps(raw, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def retired_practice_variants(item, templates):
+    """Future selection exclusions, bound to exact lesson and raw template.
+
+    Retired templates remain reconstructible for saved questions and history.
+    Custom lessons and model-authored flags cannot retire local material.
+    """
+    from .material_review import item_fingerprint
+    if item.get('ai_generated') or not isinstance(templates, dict):
+        return frozenset()
+    entries = _PRACTICE.get('template_retirements', {}).get(item.get('id'), {})
+    if not entries:
+        return frozenset()
+    retired = entries.get(item_fingerprint(item), {})
+    if not isinstance(retired, dict):
+        raise ValueError('Invalid exact template retirement')
+    result = set()
+    for kind, hashes in retired.items():
+        if (not isinstance(hashes, list) or any(not isinstance(value, str)
+                or re.fullmatch(r'[0-9a-f]{64}', value) is None for value in hashes)):
+            raise ValueError('Invalid retired template fingerprints')
+        fingerprints = set(hashes)
+        for variant, raw in enumerate(templates.get(kind, [])):
+            if _template_fingerprint(raw) in fingerprints:
+                result.add((kind, variant))
+    return frozenset(result)
 
 
 def _practice_source(item, kind, raw):
@@ -234,6 +276,8 @@ def reviewed_practice_context(question):
                 "answer": raw["answer"], "input_mode": mode, "family": family,
                 "ability": KIND_ABILITIES[kind], "practice": raw["practice"],
                 "strict": raw.get("strict", mode in {"choice", "reorder"})}
+    if 'multi_cloze' in raw or 'multi_cloze' in question:
+        expected['multi_cloze'] = raw.get('multi_cloze')
     if any(question.get(key) != value for key, value in expected.items()):
         return None
     choices = raw.get("choices", [])
@@ -279,7 +323,8 @@ def practice_templates(item):
     if base is None:
         return None  # No guessed template replacement for dictionary fallback.
     result = deepcopy(base)
-    allowed = WORD_KINDS if item["family"] == "word" else GRAMMAR_KINDS
+    allowed = (PRONUNCIATION_KINDS if item.get("domain") == "pronunciation" else
+               WORD_KINDS if item["family"] == "word" else GRAMMAR_KINDS)
     for kind, additions in extension.get("templates", {}).items():
         if kind not in allowed or KIND_ABILITIES[kind] not in item.get("abilities", []):
             raise ValueError("Practice extension cannot create a memory ability")
@@ -487,6 +532,11 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
             expected = pitch_practice.canonical_answer(raw)
             if raw.get("answer") != expected:
                 raise ValueError("Pitch template answer disagrees with its reviewed model")
+        if multi_cloze.is_cloze_question(raw):
+            expected = multi_cloze.canonical_answer(dict(raw, target_id=target['id'],
+                                                         ability=KIND_ABILITIES[kind]))
+            if raw.get('answer') != expected:
+                raise ValueError('Multi-gap answer disagrees with its reviewed combinations')
         if not raw.get("prompt") or not raw.get("answer") or not raw.get("feedback"):
             raise ValueError("A local question requires a prompt, answer and explanation")
         if raw.get("input_mode", "choice") == "choice":
@@ -545,7 +595,8 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
         "support": support, "spans": support["segments"],
         "guide": (target["instruction"]["rule"] + "\n" + target["instruction"]["example"]
                   + "\n本题示范：" + (pitch_practice.answer_label(raw)
-                      if pitch_practice.is_pitch_question(raw) else raw["answer"])) if guided else "",
+                      if pitch_practice.is_pitch_question(raw) else multi_cloze.answer_label(raw)
+                      if multi_cloze.is_cloze_question(raw) else raw["answer"])) if guided else "",
         "feedback": raw["feedback"], "evidence_mode": "exposure_only" if guided else "primary",
         "strict": raw.get("strict", mode in ("choice", "reorder")),
         "known_wrong": raw.get("known_wrong", []), "guided": guided,
@@ -558,6 +609,10 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
         source = _practice_source(target, kind, raw)
         if source is not None:
             result["practice_source"] = source
+    if multi_cloze.is_cloze_question(raw):
+        result['multi_cloze'] = multi_cloze.specification(raw)
+        result.update(optional_audio_text='', audio_text='', requires_audio=False, has_gap=True)
+        multi_cloze.validate_snapshot(result)
     if support.get("background_support_version"):
         result["background_support_version"] = support["background_support_version"]
     if target.get("domain") == "pronunciation":
@@ -578,6 +633,12 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
         if result["pitch_practice"]["version"] in (2, 3):
             result["task"] = pitch_practice.public_task(result)
         pitch_practice.validate_snapshot(result)
+    if 'prosody_cue' in raw:
+        from .prosody_cue import validate_cue
+        if target.get('domain') != 'pronunciation' or mode != 'choice' or practice is None or practice['task_family'] != 'prosody_observation':
+            raise ValueError('A contour stimulus requires a reviewed pronunciation observation')
+        result['prosody_cue'] = validate_cue(raw['prosody_cue'], prompt)
+        result['tests_pitch'] = True
     if (practice is None and target["family"] == "grammar"
             and target.get("domain") != "pronunciation" and mode in {"text", "reorder"}):
         # Grammar application does not test kanji orthography. A correct kana
@@ -614,6 +675,11 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
 def grade_learning_answer(question: dict, answer) -> dict:
     from .material_review import reviewed_question
     question = reviewed_question(question)
+    if multi_cloze.is_cloze_question(question):
+        reason = question.get('assessment_blocked_reason')
+        if isinstance(reason, str) and reason:
+            return {'status': 'unresolved', 'correct': None, 'message': reason, 'scorable': False}
+        return multi_cloze.grade_answer(question, answer)
     if pitch_practice.is_pitch_question(question):
         reason = question.get("assessment_blocked_reason")
         if isinstance(reason, str) and reason:

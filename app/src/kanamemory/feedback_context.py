@@ -400,11 +400,9 @@ def _capture_content(c, app, page, key):
         if isinstance(item, Mapping):
             result["learning_item"] = c.copy(item, "content/current_learning_item")
     if page == "learning_familiarity":
-        controls = c.attr(app, "_learning_familiarity_controls", "content/familiarity_selections", {})
-        if isinstance(controls, Mapping):
-            values = {ability: c.attr(control, "value", "content/familiarity_selections/" + str(ability))
-                      for ability, control in controls.items()}
-            result["familiarity_selections"] = c.copy(values, "content/familiarity_selections")
+        state = c.attr(app, '_learning_familiarity_state', 'content/familiarity_selections', {})
+        if isinstance(state, Mapping):
+            result['familiarity_selections'] = c.copy(state, 'content/familiarity_selections')
     if page == "learning_detail" and route == "show_learning_detail":
         item = c.attr(app, "_learning_detail_item", "content/current_learning_item")
         if isinstance(item, Mapping) and item.get("id") == identity:
