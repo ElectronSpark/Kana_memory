@@ -345,3 +345,5 @@ app/src/kanamemory/learning_dispatch_types.py
 app/src/kanamemory/adaptive_evidence.py
 app/src/kanamemory/prosody_cue.py
 app/src/kanamemory/prosody_cue_ui.py
+README.md
+README.en.md

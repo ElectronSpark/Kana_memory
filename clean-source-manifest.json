@@ -6,6 +6,8 @@
     "CLAUDE.md": "21340ff67b314d04f47cff9ba775d33f3972c04988967bd7121bda1f4dc5f78c",
     "LICENSE": "71561116e1d16a4432a9bf8980b6f6b5f1bfa83560f2dc38a3b7000d11d033cd",
     "LICENSE-SCOPE.txt": "63ae288bae6b98c131f56ce113f68b1c01b96c5b2f77822a3ecbc62faf704dac",
+    "README.en.md": "12d94f0581cd75f96a5448677a0f980df47c867fc29f485c61339c2a65033731",
+    "README.md": "75f768f883f5ee0b27209238982ac4d7d187495c393c0dea813e3a05482e70b3",
     "README.txt": "8487977e6e16230dad60dae6de30ba3ed3e46352c20bb6bec4054ffbe09330b8",
     "app/native/java/org/example/kanamemory/KanaAISecrets.java": "dab00e9edaffb372d8722cc2e69a102d15829cb12882954293e75ec7363d51b3",
     "app/native/java/org/example/kanamemory/KanaBackHandler.java": "afd9c57f4b0a0897b9c63d33f8f5bbba00d7859c3ce88bfb5e930c951c6a35fb",
@@ -346,7 +348,7 @@
     "tools/evaluate_tutor_api.py": "f5213e586837cb296df60586fb1b5ff839856cd866b48cbdc8626c4a618f0aa6",
     "tools/export_clean_source.py": "997e72dccbcbbd5b042afa626b71d5b10f866acfb0b8d4a67eb4bf3179b40afa",
     "tools/package_content_bundle.py": "f41dd89fa6a45c7565b7b3de36b38cee78aded3d7d7a4069de8ab28f9fba3758",
-    "tools/public_source_files.txt": "3d511f6130f3fd00eda3adb0b11a220b0a026ae0a339aadb567d04c4bde72823",
+    "tools/public_source_files.txt": "0ecfa335aa095874c3409dff05b28a18c1e61b47cd5d9834e79ac3bb3dd6f173",
     "tools/run_evidence.py": "65530cf79b4fcb18f46ba675342c6cb27116a2a3d1a1caf9c0bbcf4ec9cb9973"
   },
   "format": "kanamemory-clean-source-v1",
