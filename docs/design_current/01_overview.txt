@@ -141,7 +141,6 @@ arm64-v8a 和 x86_64。开发环境使用 Python 3.13、Briefcase 0.4.5。
 公开 demo 的独立构建：docs/public-build.txt、environment/build_public_app.ps1。
 常规测试定义：tests/。
 公开 demo 与个人包采用不同包名；QA 包还具有专用测试时钟/记录接口。
-测试接口规范：docs/test_control_interface.txt；不能用测试接口修改真实用户状态。
 
 安装、测试、构建命令见对应维护文档，不把某次模拟器 serial 或临时目录当固定配置。
 

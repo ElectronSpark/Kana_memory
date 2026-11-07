@@ -516,7 +516,6 @@ docs/study_path_design.txt
 docs/study_path_multiselect.txt
 docs/study_policy_0_22.txt
 docs/teaching_harness_eval_cases_0267.json
-docs/test_control_interface.txt
 docs/ui_information_v2.txt
 docs/varied_practice_0280.txt
 docs/varied_practice_0281.txt
