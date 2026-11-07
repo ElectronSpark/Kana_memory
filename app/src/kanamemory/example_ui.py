@@ -10,11 +10,7 @@ from .navigation import page_view
 from .example_highlight import overlap_regions
 from .typography import configure_study_ranges, configure_text_role
 from .lexical_example_ui import LexicalExampleUIMixin
-
-
-def ui():
-    from . import ui_components as app
-    return app
+from . import ui_components as u
 
 
 def with_example_progress(render):
@@ -40,7 +36,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     def natural_translation_label(self, text, translation='', *, prefix='', resource=None, **style):
         from .natural_translations import natural_translation_note, natural_translation_pending
-        u = ui()
         personal = (resource or {}).get('personal_revision')
         if (resource or {}).get('personal_withdrawal_id'):
             result = u.label(prefix + '译文待重新核对', **style)
@@ -76,7 +71,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         pending = natural_translation_pending(text, translation)
         if not pending:
             return []
-        u = ui()
         result = u.col(u.label('自然译文待核，暂用原译', size=13, color=u.MUTED),
                        u.label(pending['reason'], size=13, color=u.MUTED, wrap=False))
         result._feedback_fragment = {'kind': 'natural_translation_review', 'source_text': text,
@@ -93,7 +87,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         """Teaching-only view; questions must use their separate support gate."""
         from .sentence_annotation_ui import build_sentence_block
         from .question_support import clean_prompt_preferences, PROMPT_DISPLAY_SETTING
-        u = ui()
         slot = u.col()
         ref = weakref.ref(slot)
         corrected = reading_override is not None or reading_pending
@@ -154,7 +147,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     def sentence_source_rows(self, text):
         from .sentence_annotations import annotation_pending, annotation_sources
-        u = ui()
         rows = []
         for pending in annotation_pending(text):
             status = '读法、调号待核' if pending['reading_pending'] else '调号待核'
@@ -223,7 +215,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         return self._example_service
 
     def example_text(self, example, reference=None, *, interactive=False):
-        u = ui()
         from .personal_reading import presentation, annotation_exclusions
         all_refs = self.example_store().references(example['id'])
         refs = all_refs if interactive else []
@@ -243,7 +234,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         return widget
 
     def example_hint_rows(self, hints, *, already_shown=()):
-        u = ui()
         names = {'meaning': '词义', 'reading': '读法', 'rule': '用法'}
         if isinstance(already_shown, str):
             already_shown = (already_shown,)
@@ -266,7 +256,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         Competing rules and overlapping senses are chosen explicitly, never
         presented as if all interpretations were simultaneously applicable.
         """
-        u = ui()
         refs = self.example_store().references(example_id, current_target_id=reference['target_id'])
         rows, seen = [], set()
         for ref in sorted(refs, key=lambda r: r['spans'][0]['start']):
@@ -297,7 +286,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @with_example_progress
     def example_cards(self, item, *, limit=2):
-        u = ui()
         page = self.example_store().for_item_page(item['id'], limit=limit)
         entries = page['examples']
         if not page['total']:
@@ -338,7 +326,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @with_example_progress
     def _render_item_examples(self, target_id, offset=0):
-        u = ui()
         self._item_examples_state = (target_id, offset)
         service = self.example_store()
         items = {x['id']: x for x in self.example_targets_available(reference_ids={target_id})}
@@ -372,7 +359,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @with_example_progress
     def _render_example_detail(self, example_id, reference_id=None, *, choices=None):
-        u = ui()
         service = self.example_store()
         example = service.get(example_id)
         if not example:
@@ -456,7 +442,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @page_view(detail=True)
     def show_example_sources(self, example_id):
-        u = ui()
         from .learning_content import learning_sources
         example = self.example_store().get(example_id)
         sources = {x['id']: x for x in learning_sources()}
@@ -495,7 +480,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         self._render_example_target_picker(example_id, query, offset)
 
     def _render_example_target_picker(self, example_id=None, query='', offset=0):
-        u = ui()
         self.example_target_query = u.toga.TextInput(value=query,
             placeholder='搜索要关联的词义、语法或读音规则', style=u.Pack(margin_bottom=6))
         search = lambda w: self._render_example_target_picker(example_id, self.example_target_query.value or '')
@@ -514,7 +498,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @page_view(detail=True)
     def show_example_editor(self, target_id, *, example_id=None):
-        u = ui()
         item = next(x for x in self.learning_items_available() if x['id'] == target_id)
         example = self.example_store().get(example_id) if example_id else None
         self._example_editor_target = target_id
@@ -545,7 +528,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         self.screen('example_editor', '添加例句' if not example else '添加关联', *children)
 
     def preview_example_edit(self, widget=None):
-        u = ui()
         values = {key: control.value or '' for key, control in self._example_editor_fields.items()}
         existing = self._example_editor_existing
         if existing:
@@ -606,7 +588,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @with_example_progress
     def _render_example_library(self, query='', offset=0):
-        u = ui()
         self._example_library_state = (query, offset)
         service = self.example_store()
         self.example_query = u.toga.TextInput(value=query, placeholder='搜索日文或中文例句', style=u.Pack(margin_bottom=6))
@@ -640,7 +621,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     @page_view()
     def show_example_exchange(self, widget=None):
-        u = ui()
         self._example_json_input = u.toga.MultilineTextInput(placeholder='粘贴例句 JSON 数据', style=u.Pack(height=220, margin_bottom=8))
         self._example_import_preview = u.col()
         self.screen('example_exchange', '导入／导出例句',
@@ -675,7 +655,6 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     def preview_example_import(self, widget=None):
         from .example_store import parse_pack, validate_pack
-        u = ui()
         try:
             raw = self._example_json_input.value or ''
             candidate = parse_pack(raw, known_targets={x['id'] for x in self.learning_items_available()},

@@ -89,6 +89,9 @@ class DesktopPlatform:
         self.tts_voice_inventory = []
         self.tts_engine = None
 
+    def fit_content_above_keyboard(self):
+        """Desktop has no soft keyboard covering the window."""
+
     def register_back_handler(self, callback):
         """Keep the shared lifecycle API; desktop has no Android system Back key."""
         if not callable(callback):

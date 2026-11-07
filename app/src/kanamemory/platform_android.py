@@ -417,7 +417,8 @@ class AndroidPlatform:
             view.draw(canvas)
             if not bitmap.compress(c("android.graphics.Bitmap$CompressFormat").PNG, 100, output):
                 raise PlatformError("页面截图压缩失败。")
-            return bytes((int(value) & 255 for value in output.toByteArray()))
+            # Chaquopy byte[] supports the buffer protocol: one copy, no per-byte JNI boxing.
+            return bytes(output.toByteArray())
         finally:
             output.close()
             bitmap.recycle()
@@ -480,6 +481,12 @@ class AndroidPlatform:
     def acknowledge_material_share(self, identity):
         if not self._closed:
             self._jclass("org.example.kanamemory.KanaTextShareActivity").acknowledge(self._context, identity)
+
+    def fit_content_above_keyboard(self):
+        """Call once on the UI thread after the main window has its content."""
+        self._check_open()
+        c = self._jclass
+        c("org.example.kanamemory.KanaKeyboardInsets").install(c("org.beeware.android.MainActivity").singletonThis)
 
     def register_back_handler(self, callback):
         """Register one synchronous UI-thread callback returning bool handled.

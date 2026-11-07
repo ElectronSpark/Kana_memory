@@ -676,6 +676,17 @@ class StudyStore:
         """Whether readers must bypass caches to see this connection's writes."""
         return self._db.in_transaction
 
+    def _transaction(self):
+        """Begin this write's own transaction; nesting is a caller error (B5).
+
+        Joining an open transaction would let this method's `with self._db:`
+        commit the caller's unfinished writes. Same contract as
+        LearningStore._transaction.
+        """
+        if self._db.in_transaction:
+            raise RuntimeError("Study writes require their own transaction")
+        self._db.execute("BEGIN IMMEDIATE")
+
     def read_revision(self) -> tuple[int, int]:
         """Local changes (including rollbacks) plus commits by other connections."""
         return self._db.total_changes, self._db.execute("PRAGMA data_version").fetchone()[0]
@@ -894,8 +905,7 @@ class StudyStore:
         if question_index < count:
             validate_session_state(state, questions[question_index])
         with self._db:
-            if not self._db.in_transaction:
-                self._db.execute('BEGIN IMMEDIATE')
+            self._transaction()
             # Do not let a content update or queue append between the read and
             # write overwrite the replacement's checkpoint with an old page.
             if revision() != before:
@@ -1817,8 +1827,7 @@ class StudyStore:
         session_practice_lane(items)
         sid = str(uuid4())
         with self._db:
-            if not self._db.in_transaction:
-                self._db.execute("BEGIN IMMEDIATE")
+            self._transaction()
             from .kana_routing import bind_encoded, reserve_new_units
             reserve_new_units(self, items, sid)
             items, encoded = bind_encoded(self, items, prepared.question_json)
@@ -3549,7 +3558,8 @@ def build_practice_batch(repository, store: StudyStore, *, kinds, rounds: int = 
             ordered = _interleave_spaced_batch(by_content, [cid for cid in chosen if by_content[cid]],
                                                 mix_kinds=adaptive)
             if not word_family:
-                retained = deduplicate_questions(store, ordered, now, new_abilities=True)
+                retained = deduplicate_questions(store, ordered, now, new_abilities=True,
+                    unlocked=lambda q: _unlocked_advanced_kind(q.kind, q.metadata.get("adaptive_stage", 0)))
                 if len(retained) != len(ordered):
                     grouped = {}
                     for question in retained:

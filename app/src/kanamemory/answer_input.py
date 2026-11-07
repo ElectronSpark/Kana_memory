@@ -44,7 +44,7 @@ def romaji_reading_input(question):
     Kana selection and pronunciation analysis are separate response contracts.
     Eligibility depends only on the public task, never its expected answer.
     """
-    return (question.get("kind") in {"vocab_reading", "grammar_cloze",
+    return (question.get("kind") in {"vocab_reading", "vocab_recall", "grammar_cloze",
             "grammar_transform", "grammar_reorder", "targeted_correction",
             "controlled_sentence_production"} and japanese_text(question)
             and not question.get("choices") and not question.get("options"))

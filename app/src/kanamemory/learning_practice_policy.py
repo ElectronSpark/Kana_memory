@@ -54,6 +54,9 @@ def _fingerprint(question):
     fields = (question.get("kind"), question.get("input_mode", "choice"),
               normalized(question.get("prompt")), normalized(question.get("task")),
               normalized(question.get("answer")))
+    if question.get("kind") in {"vocab_audio_word", "vocab_reading_choice"}:
+        # These share a stimulus by design; their options are the variation.
+        fields = (*fields, sorted(normalized(choice) for choice in question.get("choices", ())))
     return sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()
 
 

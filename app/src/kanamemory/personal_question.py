@@ -227,8 +227,8 @@ def rows_for(store, target_id):
     return rows
 
 
-def attach(store, item):
-    result = deepcopy(item)
+def attach(store, item, *, owned=False):
+    result = item if owned else deepcopy(item)
     result.pop('personal_question_versions', None)
     if result and store is not None and getattr(store, '_db', None):
         rows = rows_for(store, result.get('id'))

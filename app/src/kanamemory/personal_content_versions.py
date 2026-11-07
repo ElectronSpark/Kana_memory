@@ -100,14 +100,18 @@ def active_version(store, identity, kind='lesson'):
     return value
 
 
-def original_source(store, item, *, kind='lesson'):
-    """Recover only our recorded overlay; enrollment must save the base item."""
+def original_source(store, item, *, kind='lesson', owned=False):
+    """Recover only our recorded overlay; enrollment must save the base item.
+
+    owned=True means the caller hands over an independent snapshot, so an item
+    without an overlay need not be copied again.
+    """
     if not item: return deepcopy(item)
     if item.get('personal_question_versions'):
         from .personal_question import validate_frozen_source
         validate_frozen_source(store, item)
     if not item.get('personal_revision'):
-        result = deepcopy(item)
+        result = item if owned else deepcopy(item)
         for key in ('personal_content_unavailable', 'personal_withdrawal_id', 'personal_reading', 'personal_question_versions', 'personal_prerequisites'): result.pop(key, None)
         return result
     event = store.get_setting(PREFIX + item['personal_revision'], None)
@@ -152,17 +156,17 @@ def _base_matches(item, row, kind='lesson'):
     return False
 
 
-def resolve(store, item, *, kind='lesson'):
+def resolve(store, item, *, kind='lesson', owned=False):
     if kind == 'lexical_example' and item and item.get('personal_related_base'):
         item = deepcopy(item['personal_related_base'])
-    result = _resolve(store, item, kind=kind)
+    result = _resolve(store, item, kind=kind, owned=owned)
     if kind == 'lexical_example' and result:
         from .personal_graph import related_lexical_projection
         result = related_lexical_projection(store, item, result)
     return result
 
 
-def _resolve(store, item, *, kind='lesson'):
+def _resolve(store, item, *, kind='lesson', owned=False):
     """Detached teaching projection; raw package/export evidence stays raw."""
     if not item: return item
     event = active_version(store, item['id'], kind)
@@ -176,7 +180,7 @@ def _resolve(store, item, *, kind='lesson'):
         if withdrawal: result['personal_content_unavailable'] = True
         return result
     if event is None:
-        result = original_source(store, item, kind=kind)
+        result = original_source(store, item, kind=kind, owned=owned)
         if withdrawal:
             result.update(personal_content_unavailable=True, personal_withdrawal_id=withdrawal)
             from .personal_content_compensation import holds
@@ -185,7 +189,7 @@ def _resolve(store, item, *, kind='lesson'):
                 result['personal_reading'] = {'version_id': withdrawal, 'pending': True, 'scope': kind}
         if kind == 'lesson':
             from .personal_question import attach
-            result = attach(store, result)
+            result = attach(store, result, owned=True)
         return result
     row = next(r for r in event['resources'] if r['id'] == item['id'] and r.get('kind', 'lesson') == kind)
     result = original_source(store, item, kind=kind)

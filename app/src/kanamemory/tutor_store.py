@@ -383,9 +383,8 @@ class AITutorStore:
         return validate_tutor_value(self.store.get_setting(SETTING, _empty()))
 
     def _formal_anchor(self, question):
-        return self.store._db.execute("""SELECT e.event_id,e.occurred_at_utc FROM learning_event e
-            JOIN learning_unit u ON u.unit_id=e.unit_id WHERE u.content_id=? AND u.ability=? AND e.role='primary'
-            ORDER BY e.occurred_at_utc DESC,e.rowid DESC LIMIT 1""", (question["target_id"], question["ability"])).fetchone()
+        from .learning_store import _unit_id
+        return self.store.queries.latest_primary_event(_unit_id(question["target_id"], question["ability"]))
 
     def _available(self, question, scope, enabled_kinds):
         if not question_available(question, scope, enabled_kinds):
@@ -410,7 +409,8 @@ class AITutorStore:
         if ("practice" in question and (meta is None or not set(meta["background_ids"])
                 <= independent_ready_ids(learning) | {item["id"]})):
             return False
-        if isinstance(prefs, dict) and isinstance(prefs.get("enabled"), list) and question["kind"] not in prefs["enabled"]:
+        from .learning_questions import stored_enabled_kinds
+        if isinstance(prefs, dict) and isinstance(prefs.get("enabled"), list) and question["kind"] not in stored_enabled_kinds(prefs):
             return False
         unit = learning.get_unit(item["id"], question["ability"])
         return bool(unit and not unit.get("suspended") and unit.get("instruction_ready")

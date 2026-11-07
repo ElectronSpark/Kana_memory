@@ -186,8 +186,8 @@ def _course_anchor(db, target_id, ability):
     unit = db.execute("SELECT * FROM learning_unit WHERE content_id=? AND ability=? AND suspended=0", (target_id, ability)).fetchone()
     if unit is None or not unit["review_count"] or not unit["scheduler_state_json"]:
         return None
-    event = db.execute("""SELECT * FROM learning_event WHERE unit_id=? AND role='primary'
-        ORDER BY occurred_at_utc DESC,rowid DESC LIMIT 1""", (unit["unit_id"],)).fetchone()
+    from .study_queries import StudyQueries
+    event = StudyQueries(db).latest_primary_event(unit["unit_id"])
     if event is None:
         return None
     return unit, event

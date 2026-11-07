@@ -17,16 +17,12 @@ from .material_study_ui import MaterialStudyUIMixin
 from .material_reference_ui import MaterialReferenceUIMixin
 from .ai_ui_state import AI_FORM_SETTING, AI_PREVIEW_SETTING
 from .navigation import page_view
-from .question_presentation import question_instruction
+from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role, prompt_audio_text
 from .typography import configure_text_role
+from . import ui_components as u
 
 AI_PRACTICE_PAGES = {"ai_question", "ai_feedback", "ai_practice_done", "retention_question", "retention_feedback", "retention_done", "retention_wait"}
-
-
-def ui():
-    from . import ui_components as app
-    return app
 
 
 class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUIMixin, TutorUIMixin, AIServiceUIMixin):
@@ -48,7 +44,7 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
     def show_material_usage(self, proposal_id):
         from .material_usage import read, allowed, flags, MaterialUsageStore
         from .material_workflow import digest
-        u = ui(); service = self.ai_material_store(read_only=True)
+        service = self.ai_material_store(read_only=True)
         proposal = service.get(proposal_id)
         if not proposal:
             self.alert('材料已不可用。'); return
@@ -97,7 +93,7 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         from .material_source_resolution import MaterialSourceStore
         from .material_usage import read, allowed
         from .material_workflow import digest
-        u = ui(); service = MaterialSourceStore(self.store)
+        service = MaterialSourceStore(self.store)
         try: candidates = service.candidates(proposal_id)
         except ValueError as exc: self.alert(str(exc)); return
         state = read(self.store)
@@ -139,7 +135,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
     @page_view(detail=True, refresh=True)
     def show_material_revision(self, identity):
         from .material_revision import conflict_claims
-        u = ui()
         report = self.current_material_verification(identity)
         record = self.material_revision().get(identity)
         children = [u.label("只针对选定分歧修订一次，原材料保留。", size=14)]
@@ -409,7 +404,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view()
     def show_ai_center(self, widget=None, **kwargs):
-        u = ui()
         scope = self._ai_scope()
         counts = self.ai_practice_store().counts(self.learning_preferences()["enabled"], scope)
         pending = self.ai_material_store(read_only=True).list_proposals(status="pending")
@@ -443,7 +437,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         self._render_ai_target_picker(query, offset)
 
     def _render_ai_target_picker(self, query="", offset=0):
-        u = ui()
         self._ai_target_query = u.toga.TextInput(value=query, placeholder="搜索假名、单词、语法或读音规则", style=u.Pack(margin_bottom=8))
         search = lambda w: self._render_ai_target_picker(self._ai_target_query.value or "")
         self._ai_target_query.on_confirm = search
@@ -461,7 +454,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view()
     def show_ai_form(self, mode, *, target_id=None, input_id=None):
-        u = ui()
         self.cancel_ai_generation(navigation=True)
         if mode not in {"questions", "examples", "analyze"}:
             raise ValueError("Unknown AI activity")
@@ -532,7 +524,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     def refresh_ai_form_connection(self):
         """Refresh only the local connection notice on a restored input form."""
-        u = ui()
         self.refresh_material_selection()
         slot = getattr(self, "_ai_connection_slot", None)
         if slot is None:
@@ -849,7 +840,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view()
     def show_material_tasks(self, widget=None, *, offset=0, **kwargs):
-        u = ui()
         jobs = self.material_workflow().list()
         children = [u.button("解析日文", lambda w: self.show_ai_form("analyze"))]
         for job in jobs[offset:offset + 12]:
@@ -872,7 +862,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view(detail=True, refresh=True)
     def show_material_task(self, identity):
-        u = ui()
         workflow = self.material_workflow()
         job = workflow.get(identity)
         if job is None:
@@ -926,7 +915,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view(detail=True, refresh=True)
     def show_material_verification(self, identity, *, offset=0):
-        u = ui()
         report = self.current_material_verification(identity)
         if report is None:
             self.alert("尚无核验记录。")
@@ -951,7 +939,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view()
     def show_ai_inbox(self, widget=None, *, show_all=False, offset=0, **kwargs):
-        u = ui()
         proposals = self.ai_material_store(read_only=True).list_proposals(status=None if show_all else "pending")
         children = [u.button("只看待确认" if show_all else "查看全部记录", lambda w: self.show_ai_inbox(show_all=not show_all), compact=True)]
         if not proposals:
@@ -971,7 +958,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         self._render_ai_proposal(proposal_id)
 
     def _render_ai_proposal(self, proposal_id):
-        u = ui()
         service = self.ai_material_store(read_only=True)
         proposal = service.get(proposal_id)
         if proposal is None:
@@ -1077,7 +1063,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
                 (identity in retained or identity in requested or len(referenced) == 1)]
 
     def _ai_retained_target_actions(self, item_id, retained_items):
-        u = ui()
         retained = retained_items.get(item_id)
         actions = []
         if retained:
@@ -1114,7 +1099,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         """Inspect a staged lesson without retaining it or creating a card."""
         from .structured_lesson_ui import teaching_block
         from .learning_ui import KIND_LABELS
-        u = ui()
         proposal_id, item_id = selection
         proposal = self.ai_material_store(read_only=True).get(proposal_id)
         item = next((row for row in (proposal or {}).get("items", []) if row["id"] == item_id), None)
@@ -1215,7 +1199,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view()
     def show_ai_question_preview(self, widget=None, **kwargs):
-        u = ui()
         preview = self.store.get_setting(AI_PREVIEW_SETTING, None)
         if not preview:
             self.show_ai_form("questions")
@@ -1249,7 +1232,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     @page_view(replace=True)
     def continue_ai_practice(self, widget=None, **kwargs):
-        u = ui()
         enabled, scope = self.learning_preferences()["enabled"], self._ai_scope()
         current = self.ai_practice_store().current(enabled, scope)
         if current is None:
@@ -1273,14 +1255,12 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
             source="ai", question_id=qid), compact=True, font_size=12, flex=1))
         if prompt_audio_text(question):
             actions.append(u.speaker_button(lambda w, qid=current["id"]: self.play_ai_prompt(question_id=qid), "朗读题干"))
-        instruction = question_instruction(question)
         children = []
         children.append(build_prompt_block(self, question,
             clean_prompt_preferences(self.store.get_setting("prompt_display_v1", {})), size=20))
         children[-1]._feedback_fragment.update({"kind": "ai_question", "question": deepcopy(question),
                                           "question_id": current["id"], "draft": deepcopy(current.get("draft", {}))})
-        if instruction:
-            children.append(u.label(instruction, size=13, color=u.MUTED))
+        children.extend(instruction_widgets(u, question))
         children.append(u.row(*actions))
         if question.get("input_mode", "choice") == "choice":
             children.extend(u.button(choice, lambda w, answer=choice, qid=current["id"]: self.submit_ai_answer(answer, question_id=qid),
@@ -1325,7 +1305,6 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         from .answer_feedback import build_answer_feedback
         from .answer_result_ui import entered_answer_row, distinct_explanation
         from .answer_autoplay import autoplay_answer
-        u = ui()
         question = self._ai_current["question"]
         children = [u.label(result.get("answer", question["answer"]), size=20,
                             flex=1, text_role=learning_text_role(question, "answer"))]
@@ -1394,7 +1373,7 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         token = self._page_token
         async def confirm():
             try:
-                confirmed = await self.main_window.dialog(ui().toga.ConfirmDialog("返回首页？", "练习和已输入的答案已保存，可以稍后继续。"))
+                confirmed = await self.main_window.dialog(u.toga.ConfirmDialog("返回首页？", "练习和已输入的答案已保存，可以稍后继续。"))
                 if confirmed and self._page_token == token:
                     AIUIMixin.leave_ai_practice(self)
             finally:

@@ -1,5 +1,6 @@
 """Accessible native diagrams for introductions, details and explicit hints."""
 import re
+import unicodedata
 from copy import deepcopy
 
 from .structured_lessons import lesson_view, original_sections
@@ -14,6 +15,24 @@ def lesson_label(u, text, **style):
     if spans:
         configure_study_ranges(widget, spans)
     return widget
+
+
+def unbroken_groups(text):
+    """Let a pattern wrap only at its ideographic-space group separators.
+
+    Display only: a word joiner never splits a base character from its combining
+    mark, and an over-wide group still wraps where Android has to. The stored
+    block text and its feedback fragment stay exact.
+    """
+    if "　" not in text:
+        return text
+    groups = []
+    for group in text.split("　"):
+        joined = ""
+        for char in group.replace(" ", " "):
+            joined += char if not joined or unicodedata.combining(char) else "⁠" + char
+        groups.append(joined)
+    return "　".join(groups)
 
 
 def block_widget(u, block, index=0):
@@ -48,7 +67,7 @@ def block_widget(u, block, index=0):
     children = [u.label(block["label"], size=12, bold=True, color=u.MUTED, margin_bottom=5)]
     kind = block["kind"]
     if kind == "pattern":
-        children.append(lesson_label(u, block["text"], size=19, bold=True, color=u.GREEN))
+        children.append(lesson_label(u, unbroken_groups(block["text"]), size=19, bold=True, color=u.GREEN))
     elif kind == "flow":
         # A vertical path keeps every node readable at large accessibility
         # font sizes; it never squeezes several sentences into narrow columns.

@@ -8,6 +8,7 @@ from .navigation import page_view
 from .presentation import payload
 from .previews import _sense_preview
 from .typography import configure_study_ranges
+from . import ui_components as u
 
 STATES = {"全部": "all", "存疑": "uncertain", "已修正": "corrected", "未发现问题": "reviewed"}
 STATUS_LABELS = {"reviewed": "未发现问题", "corrected": "已修正", "uncertain": "待核",
@@ -23,14 +24,8 @@ def _selected_meanings(word, link):
                     if sense.get("sense_id") in selected)
 
 
-def ui():
-    from . import ui_components as app
-    return app
-
-
 class LexicalExampleUIMixin:
     def lexical_example_card(self, example, word_id, index=0):
-        u = ui()
         from .personal_content_versions import resolve
         example = resolve(self.store, example, kind='lexical_example')
         review = example["review"]
@@ -54,7 +49,6 @@ class LexicalExampleUIMixin:
 
     @page_view(detail=True)
     def show_lexical_example_detail(self, identity):
-        u = ui()
         from .personal_content_versions import resolve
         example = resolve(self.store, self.repo.get_example(identity), kind='lexical_example')
         if not example or not example.get("review"):
@@ -104,7 +98,6 @@ class LexicalExampleUIMixin:
 
     @page_view(detail=True)
     def show_lexical_example_sources(self, identity):
-        u = ui()
         example = self.repo.get_example(identity)
         if not example or not example.get("review"):
             self.alert("这条例句的审校资料暂不可用。")
@@ -155,7 +148,6 @@ class LexicalExampleUIMixin:
         self.screen("lexical_example_sources", "审校与来源", *children)
 
     def _lexical_source_credit(self, source):
-        u = ui()
         children = []
         credit = " · ".join(dict.fromkeys(x for x in (source.get("attribution"), source.get("license")) if x))
         if credit:
@@ -169,7 +161,6 @@ class LexicalExampleUIMixin:
 
     def _lexical_provenance_children(self, snapshot, *, shown_review_pair=None):
         """Render portable source credits only on the shared example's source page."""
-        u = ui()
         source = snapshot["original"]
         children = [u.label("词库例句来源 · " + snapshot["review_id"], size=15, bold=True),
                     u.label("原始日语", size=13), u.label(source["text"], text_role="study", size=17)]
@@ -206,7 +197,6 @@ class LexicalExampleUIMixin:
         self._render_lexical_example_library(query, state, offset)
 
     def _render_lexical_example_library(self, query="", state="all", offset=0):
-        u = ui()
         self.lexical_example_query = u.toga.TextInput(value=query, placeholder="搜索词库例句或中文", style=u.Pack(margin_bottom=6))
         self.lexical_example_state = u.selection(items=list(STATES), style=u.Pack(margin_bottom=6))
         self.lexical_example_state.value = next(k for k, v in STATES.items() if v == state)

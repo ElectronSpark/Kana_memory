@@ -30,7 +30,7 @@ class _StudyPathRead:
 
     def __init__(self, service: StudyPathService, now: datetime):
         self.service, self.now = service, now
-        self._checkpoint, self._states = _UNREAD, None
+        self._checkpoint, self._states, self._course_rows = _UNREAD, None, None
         self.active = True
 
     @property
@@ -41,10 +41,18 @@ class _StudyPathRead:
         return self._checkpoint
 
     @property
+    def course_rows(self) -> list:
+        self.check_active()
+        if self._course_rows is None:
+            self._course_rows = self.service.store.queries.course_progress_rows()
+        return self._course_rows
+
+    @property
     def states(self) -> Mapping[str, str]:
         self.check_active()
         if self._states is None:
-            self._states = MappingProxyType(self.service._entry_states(pending=self.pending))
+            self._states = MappingProxyType(self.service._entry_states(
+                pending=self.pending, learning_rows=self.course_rows))
         return self._states
 
     def check_active(self) -> None:
@@ -106,12 +114,13 @@ class StudyPathService:
             yield read
         finally:
             read.active = False
-            read._checkpoint = read._states = None
+            read._checkpoint = read._states = read._course_rows = None
 
-    def _entry_states(self, *, pending=_UNREAD):
+    def _entry_states(self, *, pending=_UNREAD, learning_rows=None):
         state = self._state()
         reserved, read = set(state["reserved_entries"]), set(state["reference_read"])
-        learning_rows = self.store.queries.course_progress_rows()
+        if learning_rows is None:
+            learning_rows = self.store.queries.course_progress_rows()
         stages = {}
         for row in learning_rows:
             stages.setdefault(row['content_id'], []).append(row['stage'])

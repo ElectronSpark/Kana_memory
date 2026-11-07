@@ -11,6 +11,7 @@ COURSE = {
     "vocab_orthography": "word orthography", "vocab_usage": "word in context; includes Chinese-to-Japanese word banks and multiple gaps",
     "vocab_zh_ja_contrast": "Chinese/Japanese meaning contrast",
     "reading_comprehension": "sentence meaning", "listening_comprehension": "heard sentence meaning",
+    "vocab_audio_word": "heard word to written word choice", "vocab_reading_choice": "word to reading choice",
     "grammar_meaning": "grammar meaning", "grammar_cloze": "grammar gap; includes multiple independently editable gaps",
     "grammar_transform": "sentence transformation", "grammar_reorder": "Chinese-to-Japanese word block ordering",
     "targeted_correction": "correct the marked error",
@@ -66,7 +67,7 @@ def question_semantics(question):
                  "task_family": meta["task_family"] if meta else question.get("kind", ""),
                  "scaffold": meta["scaffold"] if meta else "unspecified",
                  "hidden_transcript": bool(question.get("audio_text") or question.get("has_hidden_transcript")),
-                 "tests_reading": bool(question.get("tests_reading") or question.get("kind") == "vocab_reading"),
+                 "tests_reading": bool(question.get("tests_reading") or question.get("kind") in {"vocab_reading", "vocab_reading_choice"}),
                  "tests_pitch": bool(question.get("tests_pitch")),
                  "has_gap": bool(question.get("has_gap") or question.get('input_mode') == 'multi_cloze'
                                  or "（　）" in question.get("prompt", "")),

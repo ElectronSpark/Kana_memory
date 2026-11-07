@@ -4,17 +4,13 @@ from uuid import uuid4
 
 from .navigation import page_view
 from .material_reference import MaterialReferenceStore, claims, checks
+from . import ui_components as u
 
 LABELS = {'family': '类别', 'domain': '领域', 'title': '写法', 'reading': '读法', 'meaning': '词义',
     'instruction': '首次讲解', 'depends_on': '前置', 'question_templates': '配套题', 'accent': '调号',
     'text': '日文', 'translation': '译文', 'order_translation': '语序译文', 'target_id': '关联目标',
     'spans': '关联片段', 'hint': '理解提示', 'explanation': '关联说明'}
 STATES = {'仍待核实': 'pending', '所列参考支持本项': 'supported', '所列参考与本项冲突': 'contradicted'}
-
-
-def ui():
-    from . import ui_components as app
-    return app
 
 
 class MaterialReferenceUIMixin:
@@ -26,7 +22,7 @@ class MaterialReferenceUIMixin:
     @page_view(detail=True, refresh=True)
     def show_material_senses(self, identity):
         from .material_senses import MaterialSenseStore
-        u = ui(); service = MaterialSenseStore(self.store, repo=self.repo)
+        service = MaterialSenseStore(self.store, repo=self.repo)
         try:
             rows = service.options(identity)
         except ValueError as exc:
@@ -59,7 +55,7 @@ class MaterialReferenceUIMixin:
 
     @page_view(detail=True, refresh=True)
     def show_material_references(self, identity, *, offset=0):
-        u = ui(); service = MaterialReferenceStore(self.store)
+        service = MaterialReferenceStore(self.store)
         job = self.material_workflow().get(identity)
         if not job or not job.get('proposal_id'):
             self.alert('材料暂不可用。'); return
@@ -86,7 +82,7 @@ class MaterialReferenceUIMixin:
 
     @page_view(detail=True, refresh=True)
     def show_material_reference_source(self, identity):
-        u = ui(); job = self.material_workflow().get(identity)
+        job = self.material_workflow().get(identity)
         if not job or not job.get('proposal_id'): self.alert('材料暂不可用。'); return
         key = 'material_reference_form_v1:' + job['proposal_id']
         old = self.store.get_setting(key, {})
@@ -117,7 +113,7 @@ class MaterialReferenceUIMixin:
 
     @page_view(detail=True, refresh=True)
     def show_material_reference_claim(self, identity, claim_id):
-        u = ui(); service = MaterialReferenceStore(self.store); job = self.material_workflow().get(identity)
+        service = MaterialReferenceStore(self.store); job = self.material_workflow().get(identity)
         if not job or not job.get('proposal_id'): self.alert('材料暂不可用。'); return
         expected = service.preview(job['proposal_id'], claim_id); claim = expected['claim']
         draft_key = 'material_reference_claim_form_v1:' + claim_id

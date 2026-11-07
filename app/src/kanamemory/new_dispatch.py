@@ -26,9 +26,14 @@ def read(db):
         "version": 1, "last_lane": None, "last_kana_band": None}
 
 
+def study_path_available(app):
+    """The production app routes through the study path; standalone course
+    controllers (harnesses and focused tests) have no route runtime."""
+    return callable(getattr(app, "continue_study_path", None))
+
+
 def enabled(app):
-    return (getattr(app, "_study_path_enabled", False)
-            and getattr(app.store, "practice_lane", "main") == "main")
+    return study_path_available(app) and getattr(app.store, "practice_lane", "main") == "main"
 
 
 def band(kind):

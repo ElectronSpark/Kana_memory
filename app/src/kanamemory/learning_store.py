@@ -24,6 +24,8 @@ ABILITIES = {"word": {"understanding", "reading", "use", "listening"},
              "grammar": {"understanding", "application"}}
 STAGES = {"intro", "guide", "bridge", "check", "done"}
 ALIASES = {"meaning": "understanding", "usage": "use"}
+WORD_LISTENING_ADMISSION = "word_listening_admission_v1"
+WORD_LISTENING_DAILY_LIMIT = 8
 RETRIEVAL_DELAY_SECONDS = 60
 FEEDBACK_COOLDOWN_SECONDS = 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -256,6 +258,32 @@ class LearningStore:
             if _after_enroll_with_ids is not None:
                 _after_enroll_with_ids(self._db, tuple(added))
         return added
+
+    def admit_word_listening(self, now=None, *, daily_limit=WORD_LISTENING_DAILY_LIMIT):
+        """Give studied words their listening unit in small daily batches.
+
+        Each unit starts with the same deferred teaching as any added ability,
+        so nothing lands in the review queue at once and no due date moves.
+        """
+        from .app_clock import localize
+        now = _utc(now)
+        today = localize(now).date().isoformat()
+        with self._db:
+            self._transaction()
+            row = self._db.execute("SELECT value_json FROM app_setting WHERE key=?",
+                                   (WORD_LISTENING_ADMISSION,)).fetchone()
+            state = _load(row["value_json"]) if row else {}
+            used = state.get("count", 0) if state.get("date") == today else 0
+            remaining = daily_limit - used
+            admitted = []
+            for content in (_teaching.word_listening_candidates(self._db, remaining) if remaining > 0 else ()):
+                if _teaching.append(self._db, content, ["listening"], now):
+                    admitted.append(content["id"])
+            if admitted:
+                self._db.execute("""INSERT INTO app_setting VALUES (?,?)
+                    ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json""",
+                    (WORD_LISTENING_ADMISSION, _dump({"date": today, "count": used + len(admitted)})))
+        return admitted
 
     def enroll_with_prerequisites(self, items, catalogue, now=None):
         """Append a prerequisite-first plan, preserving every existing snapshot."""
@@ -560,6 +588,11 @@ class LearningStore:
         # Keep the authored ability list intact for template and dependency
         # validation. Only actual units are admitted to teaching/assessment.
         result["enrolled_abilities"] = [unit["ability"] for unit in units]
+        # A word admitted before listening existed keeps its frozen teaching JSON.
+        # Its later listening unit is real, so this read view must include it.
+        missing = [ability for ability in result["enrolled_abilities"] if ability not in result.get("abilities", ())]
+        if result.get("family") == "word" and missing == ["listening"]:
+            result["abilities"] = [*result["abilities"], "listening"]
         return result
 
     @staticmethod
@@ -1357,7 +1390,8 @@ class LearningStore:
             raise ValueError("Complete teaching and interleaving before independent assessment")
         snapshot = _load(row["snapshot_json"])
         enabled = self.store.get_setting("learning_preferences_v1", {})
-        if isinstance(enabled, dict) and isinstance(enabled.get("enabled"), list) and row["kind"] not in enabled["enabled"]:
+        from .learning_questions import stored_enabled_kinds
+        if isinstance(enabled, dict) and isinstance(enabled.get("enabled"), list) and row["kind"] not in stored_enabled_kinds(enabled):
             raise ValueError("This question type is currently disabled")
         due = self.effective_question_due({**dict(unit), **dict(row)}, snapshot, now)
         if unit["suspended"] or not diagnostic and due and datetime.fromisoformat(due) > now:

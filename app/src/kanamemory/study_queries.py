@@ -48,8 +48,10 @@ class StudyQueries:
         return tuple(row[0] for row in self._connection.execute(
             "SELECT content_id FROM learning_content ORDER BY content_id"))
 
-    def unfinished_course_ids(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(row['content_id'] for row in self.course_progress_rows() if row['stage'] != 'done'))
+    def unfinished_course_ids(self, rows: Iterable | None = None) -> tuple[str, ...]:
+        """Pass ``rows`` to reuse a progress read from the same operation."""
+        rows = self.course_progress_rows() if rows is None else rows
+        return tuple(dict.fromkeys(row['content_id'] for row in rows if row['stage'] != 'done'))
 
     def active_review_units(self) -> list[sqlite3.Row]:
         """Scored, unsuspended abilities, regardless of pending/reservation state."""
@@ -115,6 +117,18 @@ class StudyQueries:
         return self._connection.execute(
             'SELECT stage,checkpoint_json,introduction_id FROM learning_content WHERE content_id=?',
             (content_id,)).fetchone()
+
+    def latest_primary_event(self, unit_id: str) -> sqlite3.Row | None:
+        """The unit's latest primary event by time; insertion order breaks ties.
+
+        The single definition behind the tutor anchor, the auxiliary-evidence
+        course anchor and the retention-check anchor (B6). Restored or
+        corrected rows may be stored out of time order, so rowid alone is not
+        "latest".
+        """
+        return self._connection.execute("""SELECT * FROM learning_event
+            WHERE unit_id=? AND role='primary' ORDER BY occurred_at_utc DESC,rowid DESC LIMIT 1""",
+            (unit_id,)).fetchone()
 
     def latest_primary_rating(self, unit_id: str) -> sqlite3.Row | None:
         return self._connection.execute("""SELECT rating,occurred_at_utc FROM learning_event

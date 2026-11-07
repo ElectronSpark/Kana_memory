@@ -9,7 +9,7 @@ KanaMemory is an Android app for learning Japanese, written in Python. It covers
 ## Features
 
 - **Kana**: full hiragana/katakana tables; choose or type romaji for kana, choose or assemble kana from romaji, **handwrite kana** from audio or romaji (Google ML Kit handwriting recognition), spell words from audio, and more.
-- **Vocabulary**: meaning, Chinese–Japanese meaning contrast, listening for meaning, readings, recall from meaning, orthography, usage in context, and short reading/listening comprehension.
+- **Vocabulary**: hearing a word and choosing it, choosing a reading, meaning, Chinese–Japanese meaning contrast, listening for meaning, readings, recall from meaning, orthography, usage in context, and short reading/listening comprehension.
 - **Grammar**: meaning, cloze (including several blanks in one sentence), transformation, word-block reordering, targeted correction and constrained sentence production. Romaji input works everywhere, so no Japanese IME is required.
 - **Pronunciation rules**: understanding and applying rules, pitch-accent marking, pitch fill/identify questions, and contour cues for longer phrases.
 - **Scheduling**: FSRS spaced repetition per content × ability. Each practice round fixes its question list at the start, can be resumed from the home page, and saves every rating idempotently.

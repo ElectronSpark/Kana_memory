@@ -62,7 +62,8 @@ def reading_qualification(store, source, question, event):
     if not state or state.get('pending'): return None
     if (source.get('family') != 'word' or source.get('question_templates') is not None
             or question.get('practice') or question.get('practice_source')
-            or question.get('kind') not in {'vocab_reading', 'vocab_recall', 'vocab_audio_meaning', 'vocab_orthography'}
+            or question.get('kind') not in {'vocab_reading', 'vocab_recall', 'vocab_audio_meaning', 'vocab_orthography',
+                                            'vocab_audio_word', 'vocab_reading_choice'}
             or source.get('alternative_readings') or source.get('accepted_readings')
             or not available(question, system_japanese=system_japanese_enabled(store))):
         return None
@@ -92,6 +93,10 @@ def reading_qualification(store, source, question, event):
         if question['answer'] != source['title'] or reading not in question['accepted_answers']: return None
     elif kind == 'vocab_audio_meaning':
         if question['audio_text'] != reading or question['answer'] != source['meaning']: return None
+    elif kind == 'vocab_audio_word':
+        if question['audio_text'] != reading or question['answer'] != source['title']: return None
+    elif kind == 'vocab_reading_choice':
+        if question['answer'] != reading or question['prompt'] != source['title']: return None
     elif question['answer'] != source['title'] or reading not in question['prompt']:
         return None
     return {'version': 1, 'method': METHOD, 'personal_revision': event['id'], 'generation': event['generation'],
@@ -104,6 +109,7 @@ def reading_qualification(store, source, question, event):
 
 def requires_reading_contract(source, question):
     if not source.get('personal_reading'): return False
-    if question.get('kind') in {'vocab_reading', 'vocab_recall', 'vocab_audio_meaning', 'vocab_orthography'}: return True
+    if question.get('kind') in {'vocab_reading', 'vocab_recall', 'vocab_audio_meaning', 'vocab_orthography',
+                                'vocab_audio_word', 'vocab_reading_choice'}: return True
     return any(e['field'] == 'reading' and any(u['role'] in {'rubric', 'stimulus'} for u in e['uses'])
                for e in question.get('content_dependencies', {}).get('entries', []))

@@ -1,5 +1,16 @@
 KanaMemory 工程结构与依赖契约
-版本28；2026-11-04；本轮见docs/practice_round_0300.txt。
+版本29；2026-11-06；本轮见docs/practice_round_0300.txt及下方题型增量。
+题型增量（2026-11-06，未单独发版）：word_sound_questions是纯规则，从课程自身字段生成听词选词
+vocab_audio_word（listening）和看词选读音vocab_reading_choice（reading），干扰项排除同音词及目标的
+其他已列读法；practice_templates把它们追加在已审校模板之后，AI与自定义材料不获得。全部词的
+abilities在载入时加listening，item_fingerprint不含abilities，已审校模板绑定不变；依赖签名比较时忽略
+listening。ability_teaching._admissible允许旧词快照追加这一项单位，不改快照。
+LearningStore.admit_word_listening按日限量（8词）为已学词追加单位，走原有追加教学，不动既有到期时间。
+stored_enabled_kinds是已存题型设置的唯一解析入口，audio_ready_kinds在无日语语音时只扣除听词选词。
+retired_practice_variants另读word_sound_mix内容包命名空间（config/cognate_words_20261106.json经
+tools/build_word_sound_mix.py生成，绑定id/题头/读音），只排除未来选题，旧题、草稿和历史照旧。
+question_presentation把已知的中文译文提示移入folded_hint并给日文短标签；question_instruction_ui拥有
+折叠控件，展开不写草稿、不算辅助。FSRS参数、辅助证据权重和记录格式未改。
 0.30.0：practice_round拥有当前App运行期的题单、顺序与调度选择缓存，不能授予答题或评分资格；
 页面/流程通过具名接口接续，Store仍在展示与提交时校验实时到期、前置与材料安全。
 practice_archive是本地轮次归档事务所有者，以精确回执结束checkpoint/普通课程pending所有权，
@@ -12,6 +23,10 @@ ai_question_capabilities按实际公开题型附加控制说明，复用answer_i
 依赖清单明确许可该现有纯函数，并新增ai_prompt_policy依赖守卫。没有复制另一套输入资格。
 生成、辅导、检查、复核和反馈修订分别遵守自己的输出格式与权限；公开请求载荷保持原合同。
 新需求规则、模型容量边界及验证/交付状态详见本轮报告。UI、课程、FSRS及持久格式不变。
+0.30.5：目标SDK 35+强制全面屏，adjustResize不再缩窗，模板MainActivity只留系统栏。KanaKeyboardInsets在内容视图的
+父视图上按键盘高度补底部内边距，不消费insets；platform.fit_content_above_keyboard()在启动时安装一次。
+0.30.4：answer_input资格加入vocab_recall；answer_controls的输入框带kana_script，五个提交入口传给
+prepare_submission(field=...)，转换结果与预览同一写法。转换仍不读取答案。
 0.29.8：answer_input将共享罗马音输入扩展到无候选的语法填空、变形、重排、纠错和造句。
 保留原共享API名；资格只读公开题型/输入方式，不依赖隐藏答案。语法混合草稿只转换
 Latin片段，保留汉字、已有假名和数字；单词读音保持既有转换。answer_input_ui沿用
@@ -151,6 +166,8 @@ feedback_context对真实Pack从margin读取旧padding字段，保留版本1反�
 diagnostic_events.py只记录操作码、阶段、异常类别、首次/末次时间和次数；进程内最多64种
 事件、每种计数9999。返回副本，不持久化，不接收密钥、路径、正文、回答、提示词或堆栈。
 自身失败不能掩盖原操作。用户主动记录的完整反馈另有合同，不能因日志脱敏而丢失还原信息。
+吞掉异常并改为提示重试的 UI 处理（掌握度检查计时/音频、多空填空保存/提交、Tutor 建议、
+反馈导出后刷新）先调用 record_error；multi_cloze_ui 为此允许导入 diagnostic_events（审计 B7）。
 request_outcome.py协调一次可选生成及finish，区分请求/保存/取消/二次落盘失败；不重发，
 不管理数据库、权限或UI。控制器各自保留有效性、曝光、计时和清理政策。
 提交成功与显示成功分开，刷新失败不能声称保存失败，不能靠重复提交修复UI。

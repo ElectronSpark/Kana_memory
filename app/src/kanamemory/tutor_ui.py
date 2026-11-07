@@ -13,10 +13,11 @@ import json
 
 from .navigation import page_view
 from .answer_result_ui import answer_text
-from .question_presentation import question_instruction
+from .question_instruction_ui import instruction_widgets
 from .question_support import (build_prompt_block, clean_prompt_preferences, learning_question_display,
                                learning_text_role, prompt_audio_text)
 from .typography import configure_study_ranges, configure_text_role
+from . import ui_components as u
 
 
 TUTOR_PAGES = {"tutor_center", "tutor_question", "tutor_feedback", "tutor_chat", "tutor_wait", "tutor_loading", "tutor_profile"}
@@ -88,11 +89,6 @@ def _profile_target_ids(store, context, state):
     return targets
 
 
-def ui():
-    from . import ui_components as app
-    return app
-
-
 class TutorUIMixin:
     def tutor_store(self):
         from .tutor_store import AITutorStore
@@ -134,7 +130,6 @@ class TutorUIMixin:
 
     @page_view()
     def show_tutor_center(self, widget=None, **kwargs):
-        u = ui()
         self.tutor_store().start()
         state = self.tutor_store().snapshot()
         pending = any(row["status"] == "pending" for row in state["entries"])
@@ -191,7 +186,6 @@ class TutorUIMixin:
         self._tutor_use_local(context)
 
     def _show_tutor_wait(self, context):
-        u = ui()
         when = context.get("wait_until")
         message = ("这一项刚看过答案，先休息或学习其他内容，稍后再独立检验。" if when
                    else "当前题型没有可用题目；原题和草稿已保留。")
@@ -201,7 +195,6 @@ class TutorUIMixin:
 
     def _tutor_use_local(self, context=None):
         from .tutor_engine import local_next
-        u = ui()
         context = context or self._tutor_context()
         candidate = next(iter(context.get("candidates", [])), None)
         if candidate and candidate.get("native_lane"):
@@ -229,7 +222,6 @@ class TutorUIMixin:
             self._show_tutor_wait(self._tutor_context())
 
     def show_tutor_question(self, current):
-        u = ui()
         self._tutor_current = deepcopy(current)
         if current.get("result"):
             self.show_tutor_feedback(current["result"])
@@ -244,7 +236,6 @@ class TutorUIMixin:
         public_audio = prompt_audio_text(q)
         if public_audio:
             actions.append(u.speaker_button(lambda w: self.play_tutor_prompt(row_id=row_id), "朗读题干"))
-        instruction = question_instruction(q)
         children = []
         prompt = None
         if q.get("audio_text"):
@@ -260,8 +251,7 @@ class TutorUIMixin:
             prompt._feedback_fragment.update({"kind": "tutor_question", "row_id": row_id,
                                          "question": deepcopy(q), "draft": deepcopy(draft)})
             children.append(prompt)
-        if instruction:
-            children.append(u.label(instruction, size=13, color=u.MUTED))
+        children.extend(instruction_widgets(u, q))
         children.append(u.row(*actions))
         if q.get("gloss"):
             children.append(u.label(q["gloss"], size=12, color=u.MUTED))
@@ -411,7 +401,8 @@ class TutorUIMixin:
             return
         q = self._tutor_current["question"]
         from .answer_input_ui import prepare_submission
-        ready, answer = prepare_submission(q, answer, self._tutor_status, revealed=revealed)
+        ready, answer = prepare_submission(q, answer, self._tutor_status, revealed=revealed,
+            field=getattr(self, "_tutor_answer_input", None))
         if not ready:
             return
         if not revealed and not str(answer or "").strip():
@@ -434,7 +425,6 @@ class TutorUIMixin:
     def show_tutor_feedback(self, result):
         from .answer_feedback import build_answer_feedback
         from .answer_autoplay import autoplay_answer
-        u = ui()
         q, row_id = self._tutor_current["question"], self._tutor_current["id"]
         from .pitch_practice import is_pitch_question, answer_label
         from .learning_pitch_ui import answer_diagram
@@ -569,7 +559,7 @@ class TutorUIMixin:
         return [message for message in messages if not _tutor_message_targets(message).intersection(unassisted)]
 
     def _tutor_message_nodes(self, messages, origin):
-        u, nodes = ui(), []
+        nodes = []
         for message in messages:
             node = u.label(message['text'], size=15 if message['role'] == 'assistant' else 13,
                            color=u.INK if message['role'] == 'assistant' else u.MUTED)
@@ -599,7 +589,6 @@ class TutorUIMixin:
 
     @page_view()
     def show_tutor_chat(self, widget=None, *, general=False, **kwargs):
-        u = ui()
         self.tutor_store().start()
         state = self.tutor_store().snapshot()
         if general:
@@ -673,13 +662,14 @@ class TutorUIMixin:
             if self.page != 'tutor_chat' or self._page_token != token or box is not self._tutor_suggestions_box:
                 return
             for text in suggestions:
-                box.add(ui().button(text, lambda w, value=text: self.use_tutor_suggestion(value),
+                box.add(u.button(text, lambda w, value=text: self.use_tutor_suggestion(value),
                                     compact=True, multiline=True))
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception as exc:
             # Suggestions are optional; failure must not disturb immediate input.
-            pass
+            from .diagnostic_events import record_error
+            record_error('tutor_suggestions', 'request', exc)
 
     def use_tutor_suggestion(self, text):
         if self.page != 'tutor_chat' or getattr(self, '_tutor_busy', False):
@@ -778,7 +768,6 @@ class TutorUIMixin:
         from .tutor_service import make_tutor_request
         if getattr(self, "_tutor_busy", False):
             return
-        u = ui()
         context = context or self._tutor_context()
         base_fingerprint = context["context_fingerprint"]
         state = self.tutor_store().snapshot()
@@ -962,7 +951,6 @@ class TutorUIMixin:
     def show_tutor_profile(self, widget=None, **kwargs):
         from .tutor_memory import TutorMemoryStore
         from .learning_evidence import LearningEvidenceStore
-        u = ui()
         self.tutor_store().start()
         notes = TutorMemoryStore(self.store).current(limit=20)
         context = self._tutor_context()
@@ -1043,7 +1031,7 @@ class TutorUIMixin:
 
             async def confirm():
                 try:
-                    accepted = await self.main_window.dialog(ui().toga.ConfirmDialog(
+                    accepted = await self.main_window.dialog(u.toga.ConfirmDialog(
                         "返回首页？", "练习和已输入的答案已保存，可以稍后继续。"))
                     if accepted and self._page_token == token:
                         self.leave_tutor_home()

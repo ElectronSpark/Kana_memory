@@ -7,20 +7,16 @@ from uuid import uuid4
 from .navigation import page_view
 from .answer_result_ui import answer_text
 from .retention_session import DiagnosticStore, BUDGETS, LIVE
-from .question_presentation import question_instruction
+from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role
 from .retention_ai_ui import DiagnosticAIUIMixin
 from .retention_dialogue_ui import DiagnosticDialogueUIMixin
+from . import ui_components as u
 
 DIAGNOSTIC_PAGES = {'diagnostic_scope', 'diagnostic_question', 'diagnostic_feedback', 'diagnostic_wait', 'diagnostic_done', 'diagnostic_dialogue'}
 RUNNING_PAGES = {'diagnostic_question', 'diagnostic_feedback', 'diagnostic_dialogue'}
 PURPOSE_LABELS = {'只检查，不改复习间隔': 'check_only', '用有效作答调整复习': 'check_and_adjust'}
 BUDGET_LABELS = {'快速 · 6 项 / 5 分钟': 'quick', '深入 · 12 项 / 10 分钟': 'deep'}
-
-
-def ui():
-    from . import ui_components as app
-    return app
 
 
 def result_view(result):
@@ -41,7 +37,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
     @page_view()
     def show_diagnostic_scope(self, widget=None, *, scope_ids=None, intent='active', message='', form_id=None, **kwargs):
         if self.page == 'diagnostic_scope': self._save_diagnostic_scope()
-        u = ui(); active = self.diagnostics().active()
+        active = self.diagnostics().active()
         if active: return self.continue_diagnostic(active['id'])
         saved = self.scope_forms().get(form_id) if form_id else None
         if saved is None and scope_ids is None and not message and intent == 'active':
@@ -92,7 +88,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                 self._show_diagnostic_ai_result(context, job, self._diagnostic_ai_values(context))
 
     def _render_diagnostic_scope(self):
-        u = ui(); context = self._diagnostic_scope; box = context['tree']; box.clear()
+        context = self._diagnostic_scope; box = context['tree']; box.clear()
         limit = BUDGETS[BUDGET_LABELS[context['budget'].value]][0]
         context['count'].text = f"已选 {len(context['selected'])} 项 / 最多 {limit} 项"
         missing = context['selected'] - {item['content_id'] for item in context['items']}
@@ -136,7 +132,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                         exposed.add((cid, 'reading'))
             try:
                 self.diagnostics().expose_visible(exposed)
-            except Exception:
+            except Exception as exc:
+                from .diagnostic_events import record_error
+                record_error('diagnostic_scope', 'save', exc)
                 context['status'].text = '显示记录暂未保存，请重试。'
                 continue
             context['exposed'].update(exposed)
@@ -208,7 +206,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                 try:
                     self._save_diagnostic_input()
                     value = self.diagnostics().consume(context['episode'], min(600000, max(0, round((now - previous) * 1000))))
-                except Exception:
+                except Exception as exc:
+                    from .diagnostic_events import record_error
+                    record_error('diagnostic_time', 'save', exc)
                     context['status'].text = '检查时间暂未保存，请稍后重试。'; continue
                 self._diagnostic_tick_at = now
                 self._diagnostic_budget_label(context, value)
@@ -229,12 +229,17 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
             self._diagnostic_pause_at = monotonic() if at is None else at
             self._stop_diagnostic_timer()
             try: self._flush_diagnostic_time(pause=True, at=self._diagnostic_pause_at)
-            except Exception: self._diagnostic_context['status'].text = '暂停记录暂未保存。'
+            except Exception as exc:
+                from .diagnostic_events import record_error
+                record_error('diagnostic_time', 'save', exc)
+                self._diagnostic_context['status'].text = '暂停记录暂未保存。'
         else:
             context = getattr(self, '_diagnostic_context', None)
             if context:
                 try: self._flush_diagnostic_time(pause=True, at=getattr(self, '_diagnostic_pause_at', None))
-                except Exception:
+                except Exception as exc:
+                    from .diagnostic_events import record_error
+                    record_error('diagnostic_time', 'save', exc)
                     context['status'].text = '暂停记录暂未保存，请稍后重试。'; return
                 if self.page == 'diagnostic_dialogue':
                     self.show_diagnostic_dialogue(context['episode'], context['row']['id'])
@@ -267,7 +272,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         if self.page in RUNNING_PAGES:
             context = self._diagnostic_context
             async def confirm():
-                approved = await self.main_window.dialog(ui().toga.ConfirmDialog('暂停检查？', '题目和输入会保留，可从首页继续。'))
+                approved = await self.main_window.dialog(u.toga.ConfirmDialog('暂停检查？', '题目和输入会保留，可从首页继续。'))
                 if approved and self.page in RUNNING_PAGES and self._diagnostic_context is context:
                     self._diagnostic_home()
             self.loop.create_task(confirm())
@@ -285,7 +290,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         context['budget'].text = f'{answers}/{cap} · {seconds // 60}:{seconds % 60:02d} · {purpose}'
 
     def diagnostic_permission_control(self, context):
-        u = ui(); value = self.diagnostics().get(context['episode'])
+        value = self.diagnostics().get(context['episode'])
         if value.get('material_id'):
             return u.col()
         switch = u.toga.Switch('调整复习', value=value['purpose'] == 'check_and_adjust', style=u.Pack(margin_bottom=6))
@@ -308,7 +313,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
 
     def replace_diagnostic_question(self, identity):
         from .diagnostic_replacement import replace
-        u = ui(); service = self.diagnostics(); value = service.get(identity)
+        service = self.diagnostics(); value = service.get(identity)
         old = next((r for r in value['entries'] if r.get('content_retirement')), None) if value else None
         if old is None: return self.continue_diagnostic(identity)
         try:
@@ -323,7 +328,6 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
 
     @page_view(replace=True)
     def continue_diagnostic(self, identity):
-        u = ui()
         self._flush_diagnostic_time(pause=True)
         service = self.diagnostics(); value = service.get(identity)
         if value is None: return self.show_retention_check_center()
@@ -356,20 +360,22 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
             prompt = build_prompt_block(self, q, clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
         prompt._feedback_fragment.update({'kind': 'diagnostic', 'episode_id': identity, 'entry': deepcopy(row), 'purpose': row['purpose']})
         children = [context['budget'], self.diagnostic_permission_control(context), u.row(u.button('显示答案', lambda w: self.submit_diagnostic(context, '', revealed=True), compact=True), self.diagnostic_help_controls(context)), prompt]
-        instruction = question_instruction(q)
-        if instruction: children.append(u.label(instruction, size=13, color=u.MUTED))
+        children.extend(instruction_widgets(u, q))
         if q.get('audio_text'):
             async def play(widget=None):
                 if self.page != 'diagnostic_question' or self._diagnostic_context is not context: return
+                from .diagnostic_events import record_error
                 try:
                     await self.platform.play(q['audio_text'])
                     success = True
-                except Exception:
+                except Exception as exc:
+                    record_error('diagnostic_audio', 'play', exc)
                     success = False
                 if self.page == 'diagnostic_question' and self._diagnostic_context is context:
                     if success:
                         try: service.save_draft(identity, row['id'], {'audio_ok': True})
-                        except Exception:
+                        except Exception as exc:
+                            record_error('diagnostic_audio', 'save', exc)
                             context['status'].text = '播放记录未保存，请重试。'
                     else: context['status'].text = '播放未完成，可重试。'
             children.append(u.speaker_button(play))
@@ -410,7 +416,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         self._arm_diagnostic_timer(context)
 
     def diagnostic_word_blocks(self, context):
-        u = ui(); row = context['row']; q = row['question']
+        row = context['row']; q = row['question']
         used = list(row['draft'].get('used', []))
         composed = u.label(''.join(q['choices'][i] for i in used) or '点击词块组成句子', size=20)
         buttons = []
@@ -436,7 +442,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
     def submit_diagnostic(self, context, answer, *, revealed=False):
         if self.page != 'diagnostic_question' or self._diagnostic_context is not context: return
         from .answer_input_ui import prepare_submission
-        ready, answer = prepare_submission(context['row']['question'], answer, context['status'], revealed=revealed)
+        ready, answer = prepare_submission(context['row']['question'], answer, context['status'], revealed=revealed, field=context.get('field'))
         if not ready:return
         try:
             value = self._flush_diagnostic_time()
@@ -451,7 +457,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         from .answer_feedback import build_answer_feedback
         from .answer_result_ui import entered_answer_row, distinct_explanation
         from .answer_autoplay import autoplay_answer
-        u = ui(); row = context['row']; q = row['question']; result = row['result']; viewed = result_view(result)
+        row = context['row']; q = row['question']; result = row['result']; viewed = result_view(result)
         text = self._learning_answer_audio_text(q)
         value = self.diagnostics().get(context['episode'])
         if value.get('material_id') and q.get('family') == 'word':
@@ -479,7 +485,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                 return
             try:
                 expose_answer_audio()
-            except Exception:
+            except Exception as exc:
+                from .diagnostic_events import record_error
+                record_error('diagnostic_audio', 'save', exc)
                 context['status'].text = '播放记录未保存，请重试。'
                 return
             self.speak_text(text)
@@ -520,7 +528,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         self.continue_diagnostic(identity)
 
     def show_diagnostic_summary(self, value):
-        u = ui(); children = []
+        children = []
         covered = {r['question']['target_id'] for r in value['entries'] if r['result'] is not None}
         children.append(u.label(f"本次检查了 {len(covered)}/{len(value['scope_ids'])} 项", size=19, bold=True))
         adjusted = sum(bool((r['settlement'] or {}).get('scheduled')) for r in value['entries'])

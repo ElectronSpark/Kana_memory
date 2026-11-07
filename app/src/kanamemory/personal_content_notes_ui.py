@@ -3,6 +3,8 @@ from copy import deepcopy
 
 from .personal_content_notes import PersonalContentNoteStore
 
+NOTE_TITLE = '个人注释 · 待核'
+
 
 def render_actions(app, u, plan, group, box, active):
     service = PersonalContentNoteStore(app.store, app.feedback_analysis())
@@ -34,22 +36,36 @@ def append_notes(app, u, children, kind, resource, *, page):
     service = PersonalContentNoteStore(app.store)
     selected = service.for_resource(kind, resource)
     if selected is None: return
-    content, status = u.col(), u.label('', size=12, color=u.MUTED)
-    opened = [False]
+    content = u.col()
+    opened, exposed = [False], [False]
+    def set_opened(value):
+        opened[0] = value
+        trigger.text = NOTE_TITLE + (' ▾' if value else ' ▸')
+    def forget_shown():
+        content.clear()
+        if hasattr(content, '_feedback_fragment'): delattr(content, '_feedback_fragment')
+    def say(text):
+        # An empty status label would still reserve a line under the button.
+        forget_shown(); content.add(u.label(text, size=12, color=u.MUTED))
     def reveal(widget=None):
-        if app.page != page or opened[0]: return
+        if app.page != page: return
         # Never use a stale page closure to reveal another question's notes.
         if kind == 'question' and getattr(app, '_learning_question', {}).get('id') != resource['id']: return
+        if opened[0]:
+            forget_shown(); set_opened(False); return
         from .feedback_bindings import current_resource
-        binding = {'resource_kind': kind, 'resource_id': resource['id'], 'example_id': resource.get('example_id', '')}
+        binding = {'version': 1, 'resource_kind': kind, 'resource_id': resource['id'], 'example_id': resource.get('example_id', '')}
         current = current_resource(binding, **app.feedback_analysis().resources)
         fresh = service.for_resource(kind, current) if current else None
         if fresh is None or fresh != selected:
-            status.text = '注释或原内容已变化，请重新打开。'; return
-        try: _expose(app, kind, current)
-        except Exception:
-            status.text = '显示记录暂未保存，注释仍隐藏。'; return
-        opened[0] = True
+            say('注释或原内容已变化，请重新打开。'); return
+        # Reopening text already shown on this page is not a new viewing.
+        if not exposed[0]:
+            try: _expose(app, kind, current)
+            except Exception:
+                say('显示记录暂未保存，注释仍隐藏。'); return
+            exposed[0] = True
+        forget_shown(); set_opened(True)
         from .feedback_analysis_ui import FIELD_LABELS
         content._feedback_fragment = {'kind': 'personal_content_note',
             'personal_revision': selected['event']['id'], 'canonical_owner_kind': kind,
@@ -58,10 +74,10 @@ def append_notes(app, u, children, kind, resource, *, page):
         for row in selected['entries']:
             content.add(u.label(FIELD_LABELS.get(row['field'].split('.')[-1], '说明'), size=12, color=u.MUTED),
                         u.label(row['text'], size=15))
-    section = u.col(u.button('个人注释 · 待核', reveal, compact=True), status, content)
+    trigger = u.button(NOTE_TITLE + ' ▸', reveal, compact=True)
+    section = u.col(trigger, content)
     def reset():
-        content.clear(); opened[0] = False; status.text = ''
-        if hasattr(content, '_feedback_fragment'): delattr(content, '_feedback_fragment')
+        forget_shown(); set_opened(False); exposed[0] = False
     section._personal_note_reset = reset
     children.append(section)
 

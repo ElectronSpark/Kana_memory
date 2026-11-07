@@ -79,7 +79,8 @@ def admission_snapshot(app, plan, *, overview=None, now=None, read=None):
     result["new_direction_count"] = len(new_directions)
 
     # First teaching is a content-level task, separate from scheduled reviews.
-    introduction_ids = {("learning", cid) for cid in app.store.queries.unfinished_course_ids()}
+    introduction_ids = {("learning", cid) for cid in app.store.queries.unfinished_course_ids(
+        read.course_rows if read is not None else None)}
     introduction_ids.update(("kana", entry["content_id"], entry["script"])
                             for entry in entries.values() if entry["kind"] == "kana"
                             and entry.get("state") in {"added", "started"})

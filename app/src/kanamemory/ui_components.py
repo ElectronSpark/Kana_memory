@@ -45,6 +45,27 @@ def switch(*args: Any, style: Any = None, **kwargs: Any) -> toga.Switch:
     return configure_text(toga.Switch(*args, style=text_style(**dict(style or {})), **kwargs), minimum_height=48)
 
 
+def dismiss_keyboard(control: toga.Widget) -> None:
+    """Hide the soft keyboard once a text entry is confirmed; Android only."""
+    if current_platform != "android":
+        return
+    native = control._impl.native
+    # "input_method" is android.content.Context.INPUT_METHOD_SERVICE.
+    native.getContext().getSystemService("input_method").hideSoftInputFromWindow(native.getWindowToken(), 0)
+
+
+def use_done_key(control: toga.Widget) -> None:
+    """Show Done on the soft keyboard, so confirming stays on this field; Android only.
+
+    With another field below, Android otherwise shows Next, which moves the
+    cursor there even though confirming hides the keyboard.
+    """
+    if current_platform != "android":
+        return
+    # 6 is android.view.inputmethod.EditorInfo.IME_ACTION_DONE.
+    control._impl.native.setImeOptions(6)
+
+
 def selection(*args: Any, style: Any = None, **kwargs: Any) -> toga.Selection:
     return configure_selection(toga.Selection(*args, style=text_style(**dict(style or {})), **kwargs))
 

@@ -81,7 +81,7 @@ def _bundled_dependency_signature(cid):
     if current is None:
         return None
     return (item_fingerprint(current), tuple(current.get("source_ids", ())),
-            frozenset(current.get("abilities", ())), tuple(dependencies_of(current)))
+            frozenset(current.get("abilities", ())) - {"listening"}, tuple(dependencies_of(current)))
 
 
 def effective_dependencies(learning, content, *, preserved=None):
@@ -105,7 +105,7 @@ def effective_dependencies(learning, content, *, preserved=None):
     authored, sources, abilities, current = signature
     if (item_fingerprint(content) != authored
             or tuple(content.get("source_ids", ())) != sources
-            or frozenset(content.get("abilities", ())) != abilities):
+            or frozenset(content.get("abilities", ())) - {"listening"} != abilities):
         return original
     if not set(current).difference(original):
         return original

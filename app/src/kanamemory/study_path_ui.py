@@ -10,11 +10,7 @@ import sqlite3
 from .navigation import page_view
 from .typography import configure_study_ranges
 from .tree_checkbox import tree_checkbox, update_tree_checkbox
-
-
-def ui():
-    from . import ui_components as app
-    return app
+from . import ui_components as u
 
 
 def progress_text(progress, *, sections=True):
@@ -69,7 +65,6 @@ class StudyPathUIMixin:
         return section["title"] + "\n" + status + " · " + progress
 
     def _path_next_controls(self, overview, *, compact=False):
-        u = ui()
         next_section = overview.get("next_section")
         children = []
         available = getattr(self, "study_path_can_continue", None)
@@ -94,7 +89,6 @@ class StudyPathUIMixin:
 
     @page_view()
     def show_study_path(self, widget=None, **kwargs):
-        u = ui()
         overview = self.study_path_service().overview()
         children = self._path_next_controls(overview)
         for stage in overview.get("stages", []):
@@ -110,7 +104,6 @@ class StudyPathUIMixin:
 
     @page_view(detail=True)
     def show_study_stage(self, identity):
-        u = ui()
         stage = self._path_stage(identity)
         if stage is None:
             self.show_study_path()
@@ -124,7 +117,6 @@ class StudyPathUIMixin:
 
     @page_view(detail=True)
     def show_study_unit(self, unit_id, stage_id):
-        u = ui()
         stage = self._path_stage(stage_id)
         unit = next((unit for unit in (stage or {}).get("units", []) if unit["id"] == unit_id), None)
         if unit is None:
@@ -144,7 +136,6 @@ class StudyPathUIMixin:
 
     @page_view(detail=True)
     def show_study_section(self, identity):
-        u = ui()
         section = self.study_path_service().section(identity)
         self._study_path_section_id = identity
         references = [entry for entry in section.get("entries", []) if entry.get("kind") == "reference"]
@@ -200,7 +191,6 @@ class StudyPathUIMixin:
         from .presentation import payload
         from .romanization import kana_learning_romaji
 
-        u = ui()
         entry = self.study_path_service().reference_entry(entry_id)
         if entry["state"] != "added":
             self.continue_study_path()
@@ -245,7 +235,6 @@ class StudyPathUIMixin:
 
     def _show_study_path_add(self, read, *, selection_key=None):
         from .study_path_selection import StudyPathSelection
-        u = ui()
         overview = read.overview()
         self._study_selection = StudyPathSelection(overview)
         self._study_expanded = set()
@@ -309,7 +298,6 @@ class StudyPathUIMixin:
         return result
 
     def _render_study_selection_tree(self):
-        u = ui()
         self._study_node_controls = {}
         blocks = []
         parents = []
@@ -345,7 +333,6 @@ class StudyPathUIMixin:
 
     def _update_study_selection_node(self, key):
         """Project one model read into all consumers without redundant setters."""
-        u = ui()
         check, description, block, value = self._study_node_controls[key]
         status = self._study_selection.node_status(key)
         counts, state = status.counts(), status.state
@@ -405,7 +392,6 @@ class StudyPathUIMixin:
         self._update_study_selection_feedback()
 
     def _render_study_selection_dependencies(self):
-        u = ui()
         plan = self._study_selection_plan
         blocks = []
         if plan is None:
@@ -470,7 +456,6 @@ class StudyPathUIMixin:
         self._update_study_selection_feedback()
 
     def _toggle_study_shortcut(self, widget=None):
-        u = ui()
         self._study_shortcut_open = not self._study_shortcut_open
         self._study_selection_shortcut.clear()
         if self._study_shortcut_open:
@@ -486,7 +471,6 @@ class StudyPathUIMixin:
         return int(value)
 
     def refresh_study_path_add(self, *, read=None):
-        u = ui()
         self.study_section_preview.clear()
         self.study_section_preview._feedback_fragment = {
             "kind": "study_path_add_preview", "snapshot_scope": "displayed_batch_preview",
@@ -576,7 +560,6 @@ class StudyPathUIMixin:
 
     @page_view()
     def show_study_path_notes(self, widget=None, **kwargs):
-        u = ui()
         sources = (
             ("GENKI：词汇与语法并进", "https://genki3.japantimes.co.jp/en/intro/index.html", "23课、约1700基本词汇的初级教材实例，不是考试门槛。"),
             ("Marugoto：课程阶段", "https://marugoto.jpf.go.jp/en/about/", "国际交流基金的课程系列与阶段介绍。"),

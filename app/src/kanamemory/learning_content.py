@@ -42,7 +42,8 @@ def _kana_identity(value):
 def learning_item_from_word(word: dict, sense_index: int = 0, *, enrich: bool = True) -> dict:
     """Select an attested reading/sense, without promoting the whole word entry.
 
-    Dictionary-only entries deliberately have no productive/use/listening units.
+    Dictionary-only entries deliberately have no productive/use units; listening
+    only asks which written word was heard, from the fields selected here.
     We never invent an example or translate a missing sense. A missing/restricted
     sense is returned as instruction_missing so enrollment can retain a pending
     item while question generation refuses it.
@@ -85,7 +86,7 @@ def learning_item_from_word(word: dict, sense_index: int = 0, *, enrich: bool = 
     result = {
         "id": identity, "content_id": identity, "family": "word", "title": form,
         "reading": reading, "meaning": meaning, "revision": revision,
-        "abilities": ["understanding"] + ([] if _kana_identity(form) == _kana_identity(reading) else ["reading"]),
+        "abilities": ["understanding"] + ([] if _kana_identity(form) == _kana_identity(reading) else ["reading"]) + ["listening"],
         "dictionary_only": True,
         "instruction_status": "ready" if allowed else "instruction_missing",
         "material_status": "dictionary_sense; usage_examples_not_pedagogically_reviewed",
@@ -141,6 +142,11 @@ def _extend_catalogue():
     ordered = validate_catalog(catalogue)
     _ITEMS.clear()
     _ITEMS.update((identity, catalogue[identity]) for identity in ordered)
+    # Every word can be heard: the task derives from the lesson's own fields.
+    # Reviewed teaching and its fingerprint do not include the ability list.
+    for item in _ITEMS.values():
+        if item.get("family") == "word" and "listening" not in item.get("abilities", ()):
+            item["abilities"] = [*item.get("abilities", ()), "listening"]
 
 
 _extend_catalogue()

@@ -4,15 +4,11 @@ from uuid import uuid4
 
 from .navigation import page_view
 from .retention_check import RetentionCheckStore
-from .question_presentation import question_instruction
+from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, learning_text_role, clean_prompt_preferences
 from .typography import configure_text_role
 from .retention_session_ui import DiagnosticUIMixin
-
-
-def ui():
-    from . import ui_components as app
-    return app
+from . import ui_components as u
 
 
 class RetentionCheckUIMixin(DiagnosticUIMixin):
@@ -21,7 +17,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
 
     @page_view()
     def show_retention_check_center(self, widget=None, **kwargs):
-        u=ui();active=self.retention_checks().active()
+        active=self.retention_checks().active()
         children=[u.label('检查已学内容，或先试做新内容再决定是否加入。',size=14)]
         diagnostic = self.diagnostics().active()
         if diagnostic:
@@ -89,7 +85,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
     def continue_retention_check(self,episode_id):
         if self.diagnostics().get(episode_id) is not None:
             return self.continue_diagnostic(episode_id)
-        u=ui();value=self.retention_checks().get(episode_id)
+        value=self.retention_checks().get(episode_id)
         if value is None:return self.show_retention_check_center()
         self._retention_episode_id=episode_id
         if value['status']=='completed':
@@ -112,9 +108,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         q=row['question'];children=[u.button('显示答案',lambda w:self.submit_retention_check(context,'',revealed=True),compact=True),
             build_prompt_block(self,q,clean_prompt_preferences(self.store.get_setting('prompt_display_v1',{})))]
         children[-1]._feedback_fragment.update({'kind':'retention_check','episode_id':episode_id,'entry':deepcopy(row),'purpose':'check_only'})
-        instruction=question_instruction(q)
-        if instruction:
-            children.append(u.label(instruction,size=13,color=u.MUTED))
+        children.extend(instruction_widgets(u,q))
         if q.get('input_mode','choice')=='choice':
             children.extend(u.button(answer,lambda w,a=answer:self.submit_retention_check(context,a),multiline=True) for answer in q.get('choices',[]))
         else:
@@ -126,6 +120,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
             field,controls=answer_controls(u,q,row['draft'],save,
                 lambda:self.page=='retention_question' and self._retention_context is context,
                 system_japanese=system_japanese_enabled(self.store))
+            context['field']=field
             children.extend(controls)
             if available(q,system_japanese=system_japanese_enabled(self.store)):
                 children.append(u.button('提交',lambda w:self.submit_retention_check(context,field.value or ''),primary=True))
@@ -142,7 +137,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
     def submit_retention_check(self,context,answer,*,revealed=False):
         if self.page!='retention_question' or self._retention_context is not context:return
         from .answer_input_ui import prepare_submission
-        ready, answer = prepare_submission(context['row']['question'], answer, context['status'], revealed=revealed)
+        ready, answer = prepare_submission(context['row']['question'], answer, context['status'], revealed=revealed, field=context.get('field'))
         if not ready:return
         try:
             self.retention_checks().submit(context['episode'],context['row']['id'],answer,self.learning_preferences()['enabled'],revealed=revealed)
@@ -154,7 +149,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         from .answer_feedback import build_answer_feedback
         from .answer_result_ui import entered_answer_row, distinct_explanation
         from .answer_autoplay import autoplay_answer
-        u=ui();row=context['row'];q=row['question'];result=row['result']
+        row=context['row'];q=row['question'];result=row['result']
         children=[build_answer_feedback(result),u.label(q['answer'],size=20,text_role=learning_text_role(q,'answer'))]
         text=self._learning_answer_audio_text(q)
         if text:children[-1]=u.row(children[-1],u.speaker_button(lambda w:self.speak_text(text)))

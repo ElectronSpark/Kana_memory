@@ -66,7 +66,9 @@ def controls(app, u, question, draft, on_change, on_submit, is_active, *, prompt
             return
         try:
             result = on_change(deepcopy(proposal))
-        except Exception:
+        except Exception as exc:
+            from .diagnostic_events import record_error
+            record_error("multi_cloze", "save", exc)
             status.text = "输入未保存，请重试。"
             return
         if result is False:
@@ -96,7 +98,9 @@ def controls(app, u, question, draft, on_change, on_submit, is_active, *, prompt
         render()
         try:
             result = on_submit(context["draft"]["answer"])
-        except Exception:
+        except Exception as exc:
+            from .diagnostic_events import record_error
+            record_error("multi_cloze", "commit", exc)
             result = False
         if result is False:
             context["locked"] = False

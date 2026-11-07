@@ -227,14 +227,18 @@ def candidate_cards(store, kinds, now):
     return result
 
 
-def deduplicate_questions(store, questions, now, *, new_abilities=False):
-    """Only newly generated spaced questions; never consume a saved suffix."""
+def deduplicate_questions(store, questions, now, *, new_abilities=False, unlocked=None):
+    """Only newly generated spaced questions; never consume a saved suffix.
+
+    ``unlocked(question)`` marks a form the learner has earned. Choosing one
+    form per new ability must not drop all of them for a content and script.
+    """
     units = active_units(store)
     if not units and not new_abilities:
         return questions
     cards = {(c["content_id"], c["skill"], c["script"]): c for c in project_cards(store, aliases=True, units=units)}
     future_keys = prospective_identities(store, ((q.content_id, q.kind, q.script) for q in questions)) if new_abilities else {}
-    groups, chosen = {}, set()
+    groups, chosen, unassigned = {}, set(), []
     for q in questions:
         ability = SKILL_TO_ABILITY.get(q.kind)
         uid = ability_unit_id(q.content_id, q.script, ability) if ability else None
@@ -250,6 +254,16 @@ def deduplicate_questions(store, questions, now, *, new_abilities=False):
             # Builders already filtered scaffolding. Keep their mixed order;
             # choosing the lowest-level mode here hides every unlocked input.
             chosen.add(id(group[0]))
+            unassigned.append(group)
+    if unlocked is not None:
+        satisfied = {(q.content_id, q.script) for q in questions if id(q) in chosen and unlocked(q)}
+        for group in unassigned:
+            owner = group[0].content_id, group[0].script
+            earned = next((q for q in group if unlocked(q)), None)
+            if earned is not None and owner not in satisfied:
+                chosen.discard(id(group[0]))
+                chosen.add(id(earned))
+                satisfied.add(owner)
     return [q for q in questions if id(q) in chosen]
 
 

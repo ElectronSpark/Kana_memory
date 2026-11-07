@@ -7,6 +7,7 @@ import json
 
 from .navigation import page_view
 from .feedback_analysis_ui import FeedbackAnalysisUIMixin
+from . import ui_components as u
 
 
 CATEGORIES = {
@@ -17,11 +18,6 @@ STATUSES = {"待处理": "open", "已解决": "resolved", "已归档": "archived
 FILTERS = {"全部状态": None, **STATUSES}
 PAGE_SIZE = 12
 EXPORT_FORMATS = {"ZIP 文件（含截图）": "zip", "复制到剪贴板": "text"}
-
-
-def ui():
-    from . import ui_components as app
-    return app
 
 
 def _caption(mapping, value, default):
@@ -69,7 +65,6 @@ def feedback_preview(context):
 
 class FeedbackUIMixin(FeedbackAnalysisUIMixin):
     def _feedback_context_panel(self, context, has_screenshot=False):
-        u = ui()
         body = u.col()
         opened = [False]
 
@@ -87,7 +82,6 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         return u.col(trigger, body)
 
     def render_feedback_editor(self, context, screenshot=None):
-        u = ui()
         context = deepcopy(context)
         state = {"context": context, "screenshot": screenshot, "saved_id": None,
                  "initial_note": "", "initial_category": "other", "confirming": False}
@@ -164,7 +158,7 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             try:
                 if not current_editor():
                     return
-                accepted = await self.main_window.dialog(ui().toga.ConfirmDialog("放弃未保存的修改？", "尚未保存的反馈文字和分类修改将不会保留。"))
+                accepted = await self.main_window.dialog(u.toga.ConfirmDialog("放弃未保存的修改？", "尚未保存的反馈文字和分类修改将不会保留。"))
                 if accepted and current_editor():
                     leave()
             except Exception as exc:
@@ -179,7 +173,6 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         self._render_feedback_manager(status=status, query=query, offset=offset)
 
     def _render_feedback_manager(self, *, status="open", query="", offset=0):
-        u = ui()
         try:
             service = self.feedback_store()
             total = service.count_records(status=status, query=query)
@@ -346,7 +339,7 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             try:
                 if not current():
                     return
-                accepted = await self.main_window.dialog(ui().toga.ConfirmDialog('删除这条反馈？',
+                accepted = await self.main_window.dialog(u.toga.ConfirmDialog('删除这条反馈？',
                     '将删除此反馈及其页面快照，无法撤销。' + ('未保存的修改也会丢弃。' if detail and self._feedback_dirty(state, detail=True) else '')))
                 if not accepted or not current():
                     return
@@ -379,7 +372,7 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             try:
                 if not current_selection():
                     return
-                accepted = await self.main_window.dialog(ui().toga.ConfirmDialog("删除这些反馈？", f"将删除所选 {len(identities)} 条反馈及其页面快照。此操作无法撤销。"))
+                accepted = await self.main_window.dialog(u.toga.ConfirmDialog("删除这些反馈？", f"将删除所选 {len(identities)} 条反馈及其页面快照。此操作无法撤销。"))
                 if not accepted or not current_selection():
                     return
                 self.feedback_store().delete_many(identities)
@@ -395,7 +388,6 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         self.loop.create_task(confirm())
 
     def _feedback_export_options(self):
-        u = ui()
         defaults = getattr(self, "_feedback_export_defaults", {"format": "zip", "archive": True})
         controls = {
             "format": u.selection(items=list(EXPORT_FORMATS),
@@ -477,7 +469,7 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
             status.text = "正在准备导出…"
         if actions is not None:
             actions.clear()
-            actions.add(ui().button("取消准备", lambda w: cancel_prepare(), compact=True))
+            actions.add(u.button("取消准备", lambda w: cancel_prepare(), compact=True))
 
         def current_page():
             return self.page == page and self._page_token == token
@@ -538,7 +530,9 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
                             token = self._page_token
                             status = getattr(self, "_feedback_export_status", None)
                             actions = getattr(self, "_feedback_export_actions", None)
-                    except Exception:
+                    except Exception as exc:
+                        from .diagnostic_events import record_error
+                        record_error("feedback_export", "refresh", exc)
                         message += " 列表暂未刷新，可重新打开查看。"
                 if current_page():
                     if status is not None:
@@ -554,7 +548,7 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
                         status.text = message
                     if actions is not None:
                         actions.clear()
-                        actions.add(ui().button("改用 ZIP 导出", lambda w: self.export_feedback_records(
+                        actions.add(u.button("改用 ZIP 导出", lambda w: self.export_feedback_records(
                             identities=identities, format="zip"), compact=True))
                     else:
                         self.alert(message)
@@ -579,7 +573,6 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
         self._render_feedback_detail(identity)
 
     def _render_feedback_detail(self, identity):
-        u = ui()
         try:
             record = self.feedback_store().get(identity)
         except Exception as exc:

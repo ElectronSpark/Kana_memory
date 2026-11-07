@@ -76,7 +76,8 @@ def handoff(store, question_id):
 
 def enabled_question(store, question, enabled=None):
     current = store.get_setting('learning_preferences_v1', {})
-    selected = current.get('enabled') if isinstance(current, dict) else None
+    from .learning_questions import stored_enabled_kinds
+    selected = stored_enabled_kinds(current) if isinstance(current, dict) and 'enabled' in current else None
     return ((enabled is None or question['kind'] in enabled)
             and (not isinstance(selected, list) or question['kind'] in selected))
 
@@ -239,8 +240,9 @@ def authorize_course(learning, question_id, context):
 
 
 def latest_anchor(db, uid):
-    row = db.execute("SELECT event_id FROM learning_event WHERE unit_id=? AND role='primary' ORDER BY rowid DESC LIMIT 1", (uid,)).fetchone()
-    return row[0] if row else None
+    from .study_queries import StudyQueries
+    row = StudyQueries(db).latest_primary_event(uid)
+    return row["event_id"] if row else None
 
 
 def formal_ready(learning, entry, now, *, settling=False):
@@ -398,7 +400,7 @@ class DiagnosticStore:
 
     def _candidates(self, cid, enabled, *, material_id=None, canonical_items=None):
         from .retention_sources import current_item, trusted_question
-        from .learning_questions import build_learning_question, question_kinds
+        from .learning_questions import SOUND_KINDS, build_learning_question, question_kinds
         from .answer_input import available, system_japanese_enabled
         item = ((canonical_items if canonical_items is not None else self._material_items(material_id)).get(cid)
                 if material_id else current_item(self.store, cid, repo=self.repo))
@@ -412,10 +414,13 @@ class DiagnosticStore:
         candidates = []
         from .learning_practice_policy import practice_candidates
         from .learning_dependencies import independent_ready_ids
-        descriptors = list(practice_candidates(item, question_kinds(cid, item=item),
+        # A check prefers choices, so the practice-only sound kinds would silently
+        # replace what it measures (typed reading, word sense).
+        kinds = [kind for kind in question_kinds(cid, item=item) if kind not in SOUND_KINDS]
+        descriptors = list(practice_candidates(item, kinds,
             known_background_ids=independent_ready_ids(self.learning),
             system_japanese=system_japanese_enabled(self.store)))
-        for kind in question_kinds(cid, item=item):
+        for kind in kinds:
             if not enabled_question(self.store, {'kind': kind}, enabled): continue
             for variant in [d['variant'] for d in descriptors if d['kind'] == kind]:
                 q = build_learning_question(item, kind, variant=variant)

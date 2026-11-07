@@ -30,7 +30,10 @@ Android/桌面配置仍在 app/pyproject.toml，根 pyproject.toml 只配置开�
   python -m pip install -r environment/requirements-public.txt -r environment/requirements-quality.txt
   python -X utf8 tools/check_python.py
   python -X utf8 -m pytest tests/test_study_path_selection.py -q
+  python -X utf8 -m pytest -m "not slow" -q    # 快速路径：跳过 slow 标记的多年模拟/长循环测试
 
+slow 标记在 pytest.ini 注册（--strict-markers 下未注册标记会报错）；只用于实测耗时长的多年模拟
+或大循环测试，不用来跳过失败的测试。要跑全部就不加 -m。
 已有 .venv 时用其 python。根 pytest.ini 设置 app/src、tests、tools、environment 搜索路径；
 无需手动设置 PYTHONPATH。共享fixture/helper已迁到tests/support，消费者显式导入；
 保留pytest默认prepend模式，不引入无需求的导入模式变更。原test模块的显式兼容导入

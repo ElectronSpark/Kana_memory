@@ -119,11 +119,11 @@ def _all_disabled(service, entries):
     Unknown/kana candidates conservatively keep the existing request; their
     effective session-specific kind policy is not owned by this helper.
     """
-    from .learning_questions import DEFAULT_KINDS, KIND_ABILITIES, question_kinds
+    from .learning_questions import KIND_ABILITIES, question_kinds, stored_enabled_kinds
     raw = service.store.get_setting('learning_preferences_v1', {})
     if not isinstance(raw, dict):
         return False
-    kinds_setting = raw.get('enabled', list(DEFAULT_KINDS))
+    kinds_setting = stored_enabled_kinds(raw)
     if (not isinstance(kinds_setting, list)
             or any(not isinstance(kind, str) or kind not in KIND_ABILITIES for kind in kinds_setting)):
         return False

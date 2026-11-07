@@ -2,11 +2,7 @@
 from .navigation import page_view
 from .material_study import MaterialStudyStore
 from .material_share_ui import MaterialShareUIMixin
-
-
-def ui():
-    from . import ui_components as app
-    return app
+from . import ui_components as u
 
 
 class MaterialStudyUIMixin(MaterialShareUIMixin):
@@ -49,7 +45,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
             saved = current_selection(self.store, text, draft_key=form_context["key"])
         except ValueError:
             saved = {"spans": []}
-        u = ui()
         context = self._material_selection_context = object()
         rows, controls = [], []
         for start, end in paragraph_ranges(text):
@@ -116,7 +111,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
         return MaterialStudyStore(self.store, self.learning_store, repo=self.repo, examples=self.example_store())
 
     def material_study_actions(self, identity):
-        u = ui()
         try:
             targets = self.material_study().teaching_targets(identity)
             from .material_eligibility import pretest_targets
@@ -162,7 +156,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
         from .material_qualification import targets
         item = next((item for item in targets(self.store, identity, repo=self.repo, examples=self.example_store())
                      if item['id'] == target_id), None)
-        u = ui()
         if item is None:
             self.alert('相关依据已变化，原检查记录已保留。')
             return
@@ -179,7 +172,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
                     u.button('回到材料', lambda w: self.show_material_task(identity), compact=True))
 
     def material_enrollment_actions(self, identity):
-        u = ui()
         ready = self.material_study().enrollment_readiness(identity)
         state = self.material_study().get(identity)
         same_targets = state is None or set(ready['target_ids']) <= set(state['target_ids'])
@@ -196,7 +188,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
     @page_view(detail=True, refresh=True)
     def show_material_ability_admission(self, identity):
         from .material_admission import MaterialAdmissionStore
-        u = ui()
         service = MaterialAdmissionStore(self.material_study())
         options = service.options(identity)
         context = self._material_admission_context = object()
@@ -265,7 +256,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
 
     @page_view(detail=True, refresh=True)
     def show_material_study(self, identity):
-        u = ui()
         try:
             state = self.material_study().present(identity)
         except ValueError as exc:
@@ -333,7 +323,6 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
 
     @page_view(detail=True, refresh=True)
     def show_material_enrollment(self, identity):
-        u = ui()
         try:
             preview = self.material_study().enrollment_preview(identity)
         except ValueError as exc:

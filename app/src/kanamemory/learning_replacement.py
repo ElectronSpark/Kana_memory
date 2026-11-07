@@ -101,10 +101,10 @@ class LearningReplacementStore:
         self.learning, self.store, self.db = learning, learning.store, learning._db
 
     def _options(self, item, ability=None):
-        from .learning_questions import DEFAULT_KINDS, KIND_ABILITIES, question_kinds
+        from .learning_questions import KIND_ABILITIES, question_kinds, stored_enabled_kinds
         from .answer_input import system_japanese_enabled
         prefs = self.store.get_setting('learning_preferences_v1', {})
-        enabled = prefs.get('enabled', DEFAULT_KINDS)
+        enabled = stored_enabled_kinds(prefs)
         admitted = [ability] if ability else item['enrolled_abilities']
         kinds = [k for k in question_kinds(item) if k in enabled and KIND_ABILITIES[k] in admitted]
         known = {item['id'], *(r[0] for r in self.db.execute(

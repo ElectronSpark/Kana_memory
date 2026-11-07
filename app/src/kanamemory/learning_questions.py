@@ -7,6 +7,7 @@ are unresolved, not confidently marked wrong by a string mismatch.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import hashlib
 import json
 import random
@@ -20,11 +21,17 @@ from . import multi_cloze
 
 _CONTENT = load_namespace("learning_questions", {})
 _PRACTICE = load_namespace("varied_practice", {})
+_SOUND_MIX = load_namespace("word_sound_mix", {})
 from .kana_orthography import allowed_word_spellings, same_kana_sound
+from . import word_sound_questions as sound_questions
 
-WORD_KINDS = ("vocab_meaning", "vocab_audio_meaning", "vocab_reading", "vocab_recall",
-              "vocab_orthography", "vocab_usage", "vocab_zh_ja_contrast",
-              "reading_comprehension", "listening_comprehension")
+AUDIO_WORD_KIND = sound_questions.AUDIO_WORD
+READING_CHOICE_KIND = sound_questions.READING_CHOICE
+SOUND_KINDS = (AUDIO_WORD_KIND, READING_CHOICE_KIND)
+AUTHORED_WORD_KINDS = ("vocab_meaning", "vocab_audio_meaning", "vocab_reading", "vocab_recall",
+                       "vocab_orthography", "vocab_usage", "vocab_zh_ja_contrast",
+                       "reading_comprehension", "listening_comprehension")
+WORD_KINDS = (*AUTHORED_WORD_KINDS, *SOUND_KINDS)
 GRAMMAR_KINDS = ("grammar_meaning", "grammar_cloze", "grammar_transform",
                  "grammar_reorder", "targeted_correction", "controlled_sentence_production")
 PRONUNCIATION_KINDS = ("pronunciation_rule", "pronunciation_application")
@@ -38,13 +45,19 @@ KIND_LABELS = {
     "grammar_reorder": "排列句子", "targeted_correction": "修正一处错误",
     "controlled_sentence_production": "按要求造句",
     "pronunciation_rule": "读音规则辨析", "pronunciation_application": "读音规则应用",
+    AUDIO_WORD_KIND: "听词选词", READING_CHOICE_KIND: "看词选读音",
 }
 EXPERIMENTAL_KINDS = ("free_writing_translation", "situational_dialogue",
                       "pitch_discrimination", "shadowing_read_aloud", "spoken_recall")
-LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension"}
+# Heard-meaning tasks stay opt-in. The heard-word task is on by default but still
+# needs a working voice, which the UI checks through audio_ready_kinds.
+OPT_IN_LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension"}
+LISTENING_KINDS = {*OPT_IN_LISTENING_KINDS, AUDIO_WORD_KIND}
 TEXT_KINDS = {"vocab_reading", "vocab_recall", "grammar_transform",
               "targeted_correction", "controlled_sentence_production"}
-DEFAULT_KINDS = tuple(k for k in (*WORD_KINDS, *GRAMMAR_KINDS, *PRONUNCIATION_KINDS) if k not in LISTENING_KINDS)
+DEFAULT_KINDS = tuple(k for k in (*WORD_KINDS, *GRAMMAR_KINDS, *PRONUNCIATION_KINDS)
+                      if k not in OPT_IN_LISTENING_KINDS)
+SOUND_PREFERENCE_VERSION = "sound_kinds_version"
 KIND_ABILITIES = {
     "vocab_meaning": "understanding", "vocab_audio_meaning": "listening",
     "vocab_reading": "reading", "vocab_recall": "use", "vocab_orthography": "use",
@@ -54,7 +67,32 @@ KIND_ABILITIES = {
     "grammar_transform": "application", "grammar_reorder": "application",
     "targeted_correction": "application", "controlled_sentence_production": "application",
     "pronunciation_rule": "understanding", "pronunciation_application": "application",
+    AUDIO_WORD_KIND: "listening", READING_CHOICE_KIND: "reading",
 }
+
+
+def stored_enabled_kinds(raw):
+    """Enabled kinds from the saved setting, before any device capability check.
+
+    A list saved before the sound kinds existed gains them once: leaving them
+    out then was not a choice. Saving the settings page records the version, so
+    switching them off afterwards stays off. An empty list was a choice to
+    practise nothing, and a malformed value stays malformed for its caller to
+    refuse. Reading never writes the setting.
+    """
+    if not isinstance(raw, dict):
+        return []
+    if "enabled" not in raw:
+        return list(DEFAULT_KINDS)
+    enabled = raw["enabled"]
+    if not isinstance(enabled, list) or not enabled or raw.get(SOUND_PREFERENCE_VERSION) == 1:
+        return enabled
+    return list(dict.fromkeys([*enabled, *SOUND_KINDS]))
+
+
+def audio_ready_kinds(kinds, audio_ready):
+    """Without a Japanese voice the heard-word task cannot be presented."""
+    return [kind for kind in kinds if audio_ready or kind != AUDIO_WORD_KIND]
 
 
 def learning_order_translation_source(question):
@@ -196,13 +234,13 @@ def retired_practice_variants(item, templates):
     from .material_review import item_fingerprint
     if item.get('ai_generated') or not isinstance(templates, dict):
         return frozenset()
+    result = set(_cognate_mapping_variants(item, templates))
     entries = _PRACTICE.get('template_retirements', {}).get(item.get('id'), {})
     if not entries:
-        return frozenset()
+        return frozenset(result)
     retired = entries.get(item_fingerprint(item), {})
     if not isinstance(retired, dict):
         raise ValueError('Invalid exact template retirement')
-    result = set()
     for kind, hashes in retired.items():
         if (not isinstance(hashes, list) or any(not isinstance(value, str)
                 or re.fullmatch(r'[0-9a-f]{64}', value) is None for value in hashes)):
@@ -212,6 +250,32 @@ def retired_practice_variants(item, templates):
             if _template_fingerprint(raw) in fingerprints:
                 result.add((kind, variant))
     return frozenset(result)
+
+
+def _cognate_mapping_variants(item, templates):
+    """Word-to-Chinese tasks that a shared written form makes nearly automatic.
+
+    The reviewed list binds id, title and reading, so an edited word falls back
+    to its full bank. Two tasks keep the understanding ability alive; they need no
+    other known word, or a learner with no background would have nothing to answer.
+    Base-form recall from a sentence stays: it tests the form, not a translation.
+    Selection only: saved questions, drafts and history still rebuild as before.
+    """
+    entry = _SOUND_MIX.get("cognate_words", {}).get(item.get("id"))
+    if not entry or entry.get("title") != item.get("title") or entry.get("reading") != item.get("reading"):
+        return ()
+    meaning = templates.get("vocab_meaning", [])
+    def keep_order(pair):
+        practice = pair[1].get("practice") if isinstance(pair[1], dict) else None
+        return (bool(practice and practice.get("background_ids")), not practice, pair[0])
+    # A bare base task always exists and needs nothing, so the second place goes to it.
+    ranked = [index for index, _ in sorted(enumerate(meaning), key=keep_order)]
+    bare = [index for index in ranked if not (isinstance(meaning[index], dict) and meaning[index].get("practice"))]
+    kept = {*ranked[:1], *bare[:1]} if bare else set(ranked[:2])
+    retired = [("vocab_meaning", i) for i in range(len(meaning)) if i not in kept]
+    retired.extend(("vocab_recall", i) for i, raw in enumerate(templates.get("vocab_recall", []))
+                   if not (isinstance(raw, dict) and "基本形是" in str(raw.get("task", ""))))
+    return retired
 
 
 def _practice_source(item, kind, raw):
@@ -296,7 +360,38 @@ def reviewed_practice_context(question):
     return deepcopy(context) if isinstance(context, dict) else None
 
 
+@lru_cache(maxsize=1)
+def _word_pool():
+    """The bundled catalogue is fixed for a process; options must not rescan it."""
+    from .learning_content import learning_items
+    return sound_questions.word_pool(learning_items("word"))
+
+
+def _sound_templates(item, kind):
+    """Sound tasks only derive from a lesson's own fields; never AI or custom text."""
+    if (item.get("family") != "word" or item.get("ai_generated")
+            or str(item.get("id", "")).startswith("local:")
+            or not item.get("title") or not item.get("reading")
+            or KIND_ABILITIES[kind] not in item.get("abilities", ())):
+        return []
+    build = (sound_questions.audio_word_templates if kind == AUDIO_WORD_KIND
+             else sound_questions.reading_choice_templates)
+    return build(item, _word_pool())
+
+
 def practice_templates(item):
+    """Reviewed tasks for an exact lesson, plus sound tasks from its fields."""
+    result = _reviewed_templates(item)
+    if result is None:
+        return None
+    for kind in SOUND_KINDS:
+        variants = _sound_templates(item, kind)
+        if variants:
+            result[kind] = variants
+    return result
+
+
+def _reviewed_templates(item):
     """Reviewed append-only tasks for an exact lesson, without changing it.
 
     Existing template positions, revision, examples and saved queue snapshots
@@ -316,7 +411,7 @@ def practice_templates(item):
         # exact-bound additions follow them. Already-issued questions remain
         # frozen in their queues, including historical larger variant values.
         base = {}
-        for kind in WORD_KINDS:
+        for kind in AUTHORED_WORD_KINDS:
             if KIND_ABILITIES[kind] in item.get("abilities", []):
                 raw = _word_question(item, kind, 0)  # Legacy raw ignores variant.
                 base[kind] = [deepcopy(raw) for _ in range(4)]
@@ -349,12 +444,13 @@ def question_kinds(content_id, dimension=None, *, ability=None, item=None):
         kinds = []
     else:
         kinds = ("vocab_meaning", "vocab_reading") if target.get("dictionary_only") else (
-            WORD_KINDS if target["family"] == "word" else GRAMMAR_KINDS)
+            AUTHORED_WORD_KINDS if target["family"] == "word" else GRAMMAR_KINDS)
+        kinds = (*kinds, *(kind for kind in SOUND_KINDS if _sound_templates(target, kind)))
     wanted = ability or dimension
     copy_reading = (target["family"] == "word" and target.get("reading")
                     and _reading_normal(target["title"]) == _reading_normal(target["reading"]))
     return [k for k in kinds if (wanted is None or KIND_ABILITIES[k] == wanted)
-            and not (copy_reading and k == "vocab_reading")]
+            and not (copy_reading and k in {"vocab_reading", READING_CHOICE_KIND})]
 
 
 def _normal(text):
@@ -436,6 +532,11 @@ def _background_support(prompt, target, raw, kind, *, guided=False):
 
 
 def _word_question(item, kind, variant):
+    if kind in SOUND_KINDS:
+        variants = _sound_templates(item, kind)
+        if not variants:
+            raise ValueError("No sound task is available for this word")
+        return variants[variant % len(variants)]
     form, reading, meaning = item["title"], item["reading"], item["meaning"]
     instruction = item["instruction"]
     # This branch serves the original four lessons and conservative dictionary

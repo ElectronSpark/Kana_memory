@@ -711,10 +711,12 @@ def learning_text_role(question, field="prompt"):
                 ("grammar_transform", "grammar_transform")}):
             return "study"
         kinds = {"vocab_meaning", "vocab_reading", "vocab_usage", "vocab_zh_ja_contrast",
-                 "grammar_meaning", "grammar_cloze", "reading_comprehension", "targeted_correction"}
+                 "grammar_meaning", "grammar_cloze", "reading_comprehension", "targeted_correction",
+                 "vocab_audio_word", "vocab_reading_choice"}
         return "study" if kind in kinds else "ui"
     if field in {"answer", "choice", "input"}:
         kinds = {"vocab_reading", "vocab_recall", "vocab_orthography", "vocab_usage",
+                 "vocab_audio_word", "vocab_reading_choice",
                  "grammar_cloze", "grammar_transform", "grammar_reorder",
                  "targeted_correction", "controlled_sentence_production"}
         return "study" if kind in kinds else "ui"

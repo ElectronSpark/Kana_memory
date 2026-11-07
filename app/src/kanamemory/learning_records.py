@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .domain import _utc
-from .learning_questions import DEFAULT_KINDS
+from .learning_questions import stored_enabled_kinds
 from .learning_store import _ability_due, _latest_due
 
 ABILITY_LABELS = {"understanding": "理解", "reading": "读法", "use": "提取与使用",
@@ -25,7 +25,7 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
     offset = min(offset, max(0, ((total - 1) // limit) * limit)) if total else 0
     reviewed = queries.reviewed_course_count()
     preferences = learning.store.get_setting("learning_preferences_v1", {})
-    enabled = set(preferences.get("enabled", DEFAULT_KINDS)) if isinstance(preferences, dict) else set()
+    enabled = set(stored_enabled_kinds(preferences))
     # Use the same queued opportunities as the home screen. Counting the
     # underlying FSRS cards here would miss earlier free-retrieval probes and
     # would include disabled, paused or answer-feedback cooling opportunities.

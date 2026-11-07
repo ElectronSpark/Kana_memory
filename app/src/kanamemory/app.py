@@ -77,7 +77,7 @@ else:
 PRACTICE_PAGES = {"question", "word_question", "ink_question", "feedback", "session_done", "session_wait", "dependency_wait"}
 FOCUSED_PAGES = PRACTICE_PAGES | {"practice_setup", "word_drill_setup", "free_ink", "kana_introduction", "kana_intro_wait"} | LEARNING_PAGES | AI_PRACTICE_PAGES | TUTOR_PAGES | DIAGNOSTIC_PAGES
 DETAIL_PAGES = {"kana_detail", "kana_readings", "word_detail", "word_references",
-                "character_catalog", "character_readings", "source", "notices", "card_detail",
+                "character_catalog", "character_readings", "source", "notices", "progress", "cards", "card_detail",
                 "learning_detail", "learning_feedback_detail", "learning_sources", "learning_dependencies", "learning_settings", "learning_data", "learning_records", "prompt_settings",
                 "item_examples", "example_detail", "example_sources", "example_picker", "example_editor", "example_library", "example_exchange",
                 "lexical_example_detail", "lexical_example_sources", "lexical_example_library",
@@ -187,7 +187,6 @@ def audio_file_available(audio):
 
 class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin, LearningUIMixin, toga.App):
     def startup(self):
-        self._study_path_enabled = True
         # Refuse missing/mismatched teaching data before opening learner state.
         from .content_pack import validate_installed_pack
         validate_installed_pack()
@@ -247,10 +246,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.subtitle_label = ui.label("每天一点，听懂也写得出", color="#D7ECE1", size=12, margin_bottom=0)
         self.header_back_slot = ui.col()
         self.header_back_button = ui.button("‹", self.go_back, compact=True, width=44, font_size=18,
-                                         color=WHITE, background_color=GREEN, margin_right=8, margin_bottom=0)
+                                         color=WHITE, background_color=GREEN, margin_right=0, margin_bottom=0)
         if current_platform == "android":
             self.header_back_button._impl.native.setContentDescription("返回首页")
-        self.header_title_box = ui.col(self.title_label, self.subtitle_label, flex=1)
+        self.header_title_box = ui.col(self.title_label, self.subtitle_label, flex=1, margin_left=8)
         self.header_feedback_button = ui.button("反馈", self.begin_page_feedback, compact=True,
             width=max(56, round(40 * ui.font_scale())), font_size=12, color=WHITE, background_color=GREEN, margin_left=4, margin_bottom=0)
         if current_platform == "android":
@@ -266,6 +265,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.main_window.content = self.root
         self.show_home()
         self.main_window.show()
+        self.platform.fit_content_above_keyboard()
         self.platform.register_back_handler(self.go_back)
         register_visibility = getattr(self.platform, 'register_activity_visibility', None)
         if callable(register_visibility):
@@ -551,7 +551,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     if self.question.kind in WORD_PRACTICE_KINDS else "已查看答案或学习提示，本题仅安排再学一次。")
         if self.page == "home":
             self.store.practice_lane = "main"
-            self.home_stats_label.text = self._stats_summary(self.store.stats())
             self.refresh_model_ui()
             self.refresh_home_actions()
             self.refresh_shared_material_notice()
@@ -1189,9 +1188,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return
         if KanaMemory._activate_practice_lane(self, "main") is False:
             return
-        # The study-path home supplies its own progress text below. Do not read
-        # the entire review history for a legacy summary that is never shown.
-        summary = "" if getattr(self, "_study_path_enabled", False) else self._stats_summary(self.store.stats())
+        # The study-path home fills in its own progress text.
+        summary = ""
         self.home_stats_label = ui.label(summary, size=14,
                                       margin_bottom=0)
         self.home_action_slot = ui.col(padding=16, margin_bottom=12, background_color=WHITE)
@@ -1210,104 +1208,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         KanaMemory._arm_home_review_refresh(self)
 
     def refresh_home_actions(self):
-        if getattr(self, "_study_path_enabled", False):
-            self.refresh_study_home()
-            return
-        self.home_action_slot.clear()
-        self.home_secondary_slot.clear()
-        pending = self.store.load_session_progress()
-        availability = summarize_queue_availability(self.store, pending,
-            allowed_kinds=KanaMemory._queue_kinds(self, pending) if pending else None)
-        remaining, waiting = availability.ready_count, availability.waiting_count
-        self._home_queue_due = (app_clock.localize(datetime.fromisoformat(availability.next_due_utc))
-                                if availability.next_due_utc else None)
-        wait_hint = ""
-        if waiting:
-            due = self._home_queue_due
-            when = due.strftime("%H:%M:%S" if due.date() == app_clock.local_now().date()
-                                else "%m月%d日 %H:%M:%S")
-            wait_hint = f"待到期 {waiting} 题，最早 {when} 可复习。"
-        titles = {value: key for key, value in PRACTICE_KINDS.items()}
-        # The shortcut opens adaptive mixed practice, whose enabled directions
-        # are the saved mixed selection, even after using a single-kind mode.
-        # A different direction is a separate card; it cannot discharge a
-        # disabled direction's due review merely by sharing the same kana.
-        preferences = KanaMemory._clean_preferences(getattr(self, "_practice_preferences", {}))
-        enabled = set(preferences["mixed_kinds"])
-        due = [card for card in self.store.get_due() if card["skill"] not in WORD_PRACTICE_KINDS]
-        # Count only cards the current exercise builder can actually offer.
-        # Imported old/unknown content and ambiguous handwriting are excluded.
-        from .domain import _eligible_kana
-        kana_records = {item["id"]: item for item in self.repo.kana_list()} if due else {}
-        categories = {category for values in PRACTICE_SCOPES.values() for category in values}
-        due_count = 0
-        for card in due:
-            skill, script = card["skill"], card["script"]
-            if skill not in enabled or skill not in titles or script not in {"hiragana", "katakana"}:
-                continue
-            item = kana_records.get(card["content_id"])
-            if (item is None or item.get("category") not in categories or
-                    not _eligible_kana(item, script, True, audio_only=skill == "kana_handwriting", kind=skill)):
-                continue
-            due_count += 1
-        if remaining:
-            title = "接着上次学"
-            hint = wait_hint or "未完成题目和复习时间已保存。"
-            caption, handler = f"继续上次练习（可答 {remaining} 题）", self.resume_practice
-        elif waiting:
-            title, hint = "等待下次复习", "现在可答 0 题。" + wait_hint
-            caption, handler = f"查看复习安排（{waiting} 题待到期）", self.resume_practice
-        elif availability.content_blocked_count:
-            title, hint = '题目内容已更新', '原题和草稿已保存，可更新待练题目。'
-            caption, handler = '更新待练题目', self.resume_practice
-        elif availability.blocked_count:
-            title, hint = "先完成前置假名", f"{availability.blocked_count} 题等待前置假名，原题与进度已保留。"
-            caption, handler = "继续学习", self.resume_practice
-        elif due_count:
-            title, hint = "该复习了", "先巩固已学假名，再开始新内容。"
-            caption = f"开始复习（{due_count} 张卡到期）"
-            handler = lambda w, **kw: self.show_due_practice({"research": False, "due": due_count})
-        else:
-            title, hint = "开始今天的学习", "选择假名范围、数量和题型，再开始练习。"
-            caption, handler = "开始练习", self.show_practice_setup
-        self.home_action_slot.add(
-            ui.label(title, size=22, bold=True, color=GREEN),
-            ui.label(hint, size=13, color=MUTED, margin_bottom=16),
-            ui.button(caption, handler, primary=True, multiline=True, margin_bottom=0),
-        )
-        if remaining or waiting or availability.blocked_count or availability.content_blocked_count or due_count:
-            self.home_secondary_slot.add(ui.row(
-                ui.button("学习新假名", self.show_new_batch, flex=1, multiline=True,
-                       margin_right=8, font_size=13),
-                ui.button("练习设置", self.show_practice_setup, flex=1, multiline=True, font_size=13),
-            ))
-        word_pending = self.store.load_session_progress(lane="word_romaji")
-        word_count = KanaMemory._word_drill_remaining(self, word_pending)
-        word_caption = (f"继续单词拼写（剩 {word_count} 词）" if word_count else
-            '更新待练单词' if KanaMemory._word_drill_needs_update(self, word_pending) else '单词拼写')
-        self.home_secondary_slot.add(ui.button(word_caption,
-            lambda w, **kw: KanaMemory.open_home_word_drill(self), multiline=True))
-        if hasattr(self, "learning_store"):
-            counts = self.learning_store.counts(self.learning_preferences()["enabled"])
-            if counts.get("next_due_at_utc"):
-                learning_due = app_clock.localize(datetime.fromisoformat(counts["next_due_at_utc"]))
-                self._home_queue_due = min(self._home_queue_due, learning_due) if self._home_queue_due else learning_due
-            if counts["ready"] or counts["instruction"]:
-                caption = ("继续学习新内容" if counts["instruction"] else f"继续课程学习（可答 {counts['ready']} 题）")
-                self.home_action_slot.clear()
-                self.home_action_slot.add(ui.label("接着学", size=22, bold=True, color=GREEN),
-                    ui.label("已保留学习进度与复习时间。", size=13, color=MUTED),
-                    ui.button(caption, self.continue_learning, primary=True, multiline=True))
-                self.home_secondary_slot.add(ui.button("假名专项", handler, multiline=True))
-            elif counts["pending"]:
-                caption = "课程学习 · 查看安排"
-                self.home_secondary_slot.add(ui.button(caption, self.continue_learning, multiline=True))
-            else:
-                caption = "学习课程"
-                self.home_secondary_slot.add(ui.button(caption, self.show_learning_library, multiline=True))
-            if counts["content"]:
-                self.home_stats_label.text = "假名：" + self._stats_summary(self.store.stats()) + f"\n课程：已加入 {counts['content']} 项 · 现在可答 {counts['ready']} 题"
-        KanaMemory._arm_home_review_refresh(self)
+        self.refresh_study_home()
 
     def open_home_word_drill(self, widget=None, **kwargs):
         if self.page != "home":
@@ -1336,8 +1237,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         due = self._home_queue_due
         delay = (due - app_clock.local_now(due.tzinfo)).total_seconds() if due else 0
         if delay <= 0:
-            if hasattr(self, "home_stats_label"):
-                self.home_stats_label.text = KanaMemory._stats_summary(self, self.store.stats())
             self.refresh_home_actions()
         else:
             # Recheck infrequently for clock changes, without saving progress.
@@ -1428,8 +1327,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         return kinds
 
     def _lazy_practice_questions(self):
-        return (getattr(self, "_study_path_enabled", False)
-                and getattr(self.store, "practice_lane", "main") == "main")
+        return getattr(self.store, "practice_lane", "main") == "main"
 
     def _reconcile_practice_kinds(self, pending=None):
         lazy = KanaMemory._lazy_practice_questions(self)
@@ -1464,6 +1362,21 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self._audio_serial = getattr(self, "_audio_serial", 0) + 1
         return revised
 
+    def _checkpoint_mark(self, signature):
+        """Identify a saved checkpoint; None means it cannot be proven unchanged.
+
+        Navigation re-saves only after the answer, ink or draft state changed
+        or some connection wrote the study database since the last save (A5);
+        an identical write would only refresh updated_at_utc.
+        """
+        read = getattr(self.store, "read_revision", None)
+        if not callable(read) or getattr(self.store, "in_transaction", None) is not False:
+            return None
+        try:
+            return signature, read()
+        except Exception:
+            return None
+
     def _checkpoint(self):
         if getattr(self, "_backup_busy", False):
             return False
@@ -1477,6 +1390,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if getattr(self, "_restoring_practice", False) or not getattr(self, "session_id", None):
             return
         if getattr(self, "page", None) not in PRACTICE_PAGES:
+            away = ("away", self.session_id,
+                    frozenset(index for sid,index in self._assisted_attempts if sid == self.session_id))
+            mark = KanaMemory._checkpoint_mark(self, away)
+            saved = getattr(self, "_checkpoint_saved_mark", None)
+            # Any save of this session already merged these assisted indices; a
+            # re-save from a non-practice page would copy back unchanged rows.
+            if (mark is not None and saved is not None and saved[1] == mark[1]
+                    and saved[0][1] == self.session_id and away[2] <= saved[0][4 if saved[0][0] == "page" else 2]):
+                return
+            self._checkpoint_saved_mark = None
             try:
                 pending = (self.store.load_session_progress(lazy_questions=True)
                            if KanaMemory._lazy_practice_questions(self) else self.store.load_session_progress())
@@ -1487,11 +1410,13 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     question = pending["questions"][index] if index < len(pending["questions"]) else None
                     self.store.save_session_progress(self.session_id, index, pending["session_right"], assisted, pending["state"],
                         question_fingerprint=fingerprint(question) if question is not None else None)
+                    self._checkpoint_saved_mark = KanaMemory._checkpoint_mark(self, away)
             except Exception as exc:
                 self.alert("未完成练习暂未保存：" + error_message(exc))
                 return False
             return
         if self.question_index >= len(self.questions):
+            self._checkpoint_saved_mark = None
             self.store.clear_session_progress()
             return
         state = {"page": self.page, "answer_revealed": bool(getattr(self, "answer_revealed", False)),
@@ -1520,9 +1445,18 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             state.update(strokes=getattr(self, "strokes", []), ink_width=getattr(self, "ink_width", 360), ink_height=getattr(self, "ink_height", 210))
         assisted = [index for sid,index in self._assisted_attempts if sid == self.session_id]
         try:
+            import json
             from .session_content import fingerprint
+            question_fingerprint = fingerprint(self.question)
+            saved = ("page", self.session_id, self.question_index, self.session_right, frozenset(assisted),
+                     question_fingerprint, json.dumps(state, sort_keys=True, ensure_ascii=False, default=repr))
+            mark = KanaMemory._checkpoint_mark(self, saved)
+            if mark is not None and mark == getattr(self, "_checkpoint_saved_mark", None):
+                return
+            self._checkpoint_saved_mark = None
             self.store.save_session_progress(self.session_id, self.question_index, self.session_right, assisted, state,
-                question_fingerprint=fingerprint(self.question))
+                question_fingerprint=question_fingerprint)
+            self._checkpoint_saved_mark = KanaMemory._checkpoint_mark(self, saved)
         except Exception as exc:
             self.alert("未完成练习暂未保存：" + error_message(exc))
             return False
@@ -1779,7 +1713,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         grid.add(status)
 
         async def render():
-            started = time.perf_counter()
             children = []
             # Let the new page paint, then yield between native row builds.
             # Everything expands automatically, without a pagination control.
@@ -1790,7 +1723,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     await asyncio.sleep(0)
                 grid.clear()
                 grid.add(*children)
-                print(f"Kana table ready: {len(items)} items in {time.perf_counter() - started:.3f}s")
             except asyncio.CancelledError:
                 return
         task = loop.create_task(render())
@@ -2376,6 +2308,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         preferences = preferences if isinstance(preferences, dict) else {}
         self.word_drill_count_input = toga.TextInput(value=str(preferences.get("count", "10")),
             placeholder="本组单词数", style=Pack(margin_bottom=8))
+        if current_platform == "android":
+            self.word_drill_count_input._impl.native.setInputType(2)
         def picker(mapping, key):
             value = preferences.get(key)
             return ui.selection(items=list(mapping), value=value if value in mapping else next(iter(mapping)),
@@ -2612,10 +2546,63 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                                     self.rounds_slot,
                                     self.practice_count_hint, index=0))
         for control in (self.kind_picker, self.script_picker, self.word_table_picker, self.practice_word_collection_picker,
-                        self.research_switch, self.count_picker, self.custom_count_input, self.batch_picker, self.rounds_input, self.schedule_picker,
+                        self.research_switch, self.count_picker, self.batch_picker, self.schedule_picker,
                         *self.mixed_kind_switches.values(), *self.scope_switches.values()):
             control.on_change = self.refresh_practice_setup
+        for control in (self.custom_count_input, self.rounds_input):
+            KanaMemory._debounce_text_input(self, control, "practice_setup", self.refresh_practice_setup)
         self.refresh_practice_setup()
+
+    TEXT_INPUT_DELAY = 0.3
+
+    def _debounce_text_input(self, control, page, refresh):
+        """Run refresh once typing pauses, or at once on confirm (A4/A9).
+
+        Each keystroke otherwise saved preferences and re-ran the batch planner
+        (practice setup) or re-queried and rebuilt the card list. The callback
+        is dropped if the page changed meanwhile.
+        """
+        def flush(widget=None, **kwargs):
+            handle = getattr(self, "_text_input_handle", None)
+            self._text_input_handle = None
+            if handle is not None:
+                handle.cancel()
+            if self.page == page:
+                refresh(control)
+                ui.dismiss_keyboard(control)
+
+        def changed(widget=None, **kwargs):
+            handle = getattr(self, "_text_input_handle", None)
+            if handle is not None:
+                handle.cancel()
+            token = self._page_token
+
+            def run():
+                if getattr(self, "_text_input_handle", None) is not scheduled[0]:
+                    return
+                self._text_input_handle = None
+                if self.page == page and self._page_token == token:
+                    refresh(control)
+            scheduled = [None]
+            scheduled[0] = self._text_input_handle = self.loop.call_later(KanaMemory.TEXT_INPUT_DELAY, run)
+            # Toga's Android loop only arranges a wakeup from call_soon. Without
+            # this, a timer armed from a native text callback sleeps until some
+            # unrelated async work happens to run.
+            self.loop.call_soon(lambda: None)
+
+        control.on_change = changed
+        control.on_confirm = flush
+        ui.use_done_key(control)
+        return flush
+
+    def _flush_text_input(self):
+        """Apply a pending typed edit before acting on the form."""
+        handle = getattr(self, "_text_input_handle", None)
+        if handle is None:
+            return False
+        self._text_input_handle = None
+        handle.cancel()
+        return True
 
     def enable_mixed_practice(self, widget=None, **kwargs):
         if self.page != "practice_setup":
@@ -2637,8 +2624,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.note("同一内容统一暂停或暂缓；各题型、平片假名保留各自记录。尚未测试的能力不算已掌握。"),
             self.card_query, self.card_state_picker,
             self.card_page_label, self.card_results, ui.row(self.card_previous_button, self.card_next_button))
-        for control in (self.card_query, self.card_state_picker):
-            control.on_change = self.refresh_cards
+        self.card_state_picker.on_change = self.refresh_cards
+        KanaMemory._debounce_text_input(self, self.card_query, "cards", self.refresh_cards)
         self.refresh_cards()
 
     def page_cards(self, direction):
@@ -2972,6 +2959,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
     async def start_practice(self, widget=None, *, replace_session_id=None, **kwargs):
         if self._starting_practice or self.page != "practice_setup":
             return
+        if KanaMemory._flush_text_input(self):
+            # Save and show a typed number that had not been applied yet;
+            # _start_practice still validates the current field values.
+            self.refresh_practice_setup(self.custom_count_input)
         self._starting_practice = True
         start_token = self._practice_start_token = object()
         self._practice_start_task = asyncio.current_task()
@@ -3143,10 +3134,19 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     @page_view(replace=True)
     def show_question(self, *, _first_teaching=False, _first_teaching_targets=None):
+        from .new_dispatch import study_path_available
         lazy = KanaMemory._lazy_practice_questions(self)
         pending = ((self.store.load_session_progress(lazy_questions=True) if lazy else
                     self.store.load_session_progress()) if getattr(self, "session_id", None) else None)
         waiting_until, prepared = None, None
+        if (pending is None and getattr(self, "session_id", None)
+                and self.question_index == 0 and self.session_right == 0):
+            # A just-started queue has no checkpoint yet. Its frozen snapshot
+            # owns the questions: start_session may stamp metadata (the kana
+            # ability route) that the builder's in-memory copies lack.
+            frozen = self.store.get_session_questions(self.session_id, lazy=lazy)
+            if len(frozen) == len(self.questions):
+                self.questions = frozen
         if isinstance(pending, dict) and pending["session_id"] == self.session_id:
             pending = KanaMemory._reconcile_practice_kinds(self, pending)
             if pending is False:
@@ -3183,7 +3183,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         seal(self.store)
         if self.question_index >= len(self.questions):
             from .practice_round import active as fixed_round
-            if (fixed_round(self.store) and getattr(self, "_study_path_enabled", False)
+            if (fixed_round(self.store) and study_path_available(self)
                     and getattr(self.store, "practice_lane", "main") == "main"):
                 self.continue_study_path(_checkpoint_saved=True)
                 return
@@ -3206,7 +3206,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     ui.button("回到今日", self.show_home))
                 return
             next_controls = (self._path_next_controls(self.study_path_service().overview())
-                if getattr(self, "_study_path_enabled", False) else [ui.button("增加新批次", self.show_new_batch, primary=True)])
+                             if study_path_available(self) else [])
             self.screen("session_done", "本批完成", ui.label(completion + extra, size=24, bold=True),
                 *next_controls, ui.button("查看复习记录", self.show_progress), ui.button("回到今日", self.show_home))
             return
@@ -3284,8 +3284,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 ui.label(f"下一题可在 {due} 开始", size=15, color=MUTED),
                 self.note(f"已保存 {summarize_queue_availability(self.store, prepared).waiting_count} 道后续复习题，到期后自动继续。也可以先回到今日。"),
                 self._review_wait_button,
+                # Standalone course controllers have no route runtime.
                 *(self._path_next_controls(self.study_path_service().overview(), compact=True)
-                  if getattr(self, "_study_path_enabled", False) else []),
+                  if study_path_available(self) else []),
                 ui.button("回到今日", self.show_home))
             # Start from ready work: a timer scheduled directly in an Android
             # touch callback does not wake Toga's idle Python event loop.
@@ -3360,8 +3361,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     def continue_spaced_practice(self, widget=None, **kwargs):
         if self.page == "session_wait" and not getattr(self, "_leave_confirmation_active", False):
-            if (getattr(self, "_study_path_enabled", False)
-                    and getattr(self.store, "practice_lane", "main") == "main"):
+            from .new_dispatch import study_path_available
+            if study_path_available(self) and getattr(self.store, "practice_lane", "main") == "main":
                 self.continue_study_path()
             else:
                 self.show_question()
@@ -4151,8 +4152,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.back_stack.discard(PRACTICE_PAGES)
         self._navigating = True
         try:
-            if (getattr(self, "_study_path_enabled", False)
-                    and getattr(self.store, "practice_lane", "main") == "main"):
+            from .new_dispatch import study_path_available
+            if study_path_available(self) and getattr(self.store, "practice_lane", "main") == "main":
                 # record_review has already advanced the durable checkpoint.
                 # Capturing this old feedback page would attach its answer to
                 # the next question, so dispatch without another checkpoint.

@@ -185,6 +185,33 @@ def ready_units(db, row):
                    (row['content_id'], ability))
 
 
+def _admissible(content):
+    """A frozen word snapshot predating listening can still gain that one unit."""
+    abilities = set(content['abilities'])
+    return abilities | {'listening'} if content.get('family') == 'word' else abilities
+
+
+def word_listening_candidates(db, limit):
+    """Oldest actually studied words without a listening unit, in insertion order."""
+    from .learning_store import _load
+    result = []
+    for row in db.execute("""SELECT content_id,content_json FROM learning_content c
+            WHERE family='word' AND NOT EXISTS (SELECT 1 FROM learning_unit u
+                WHERE u.content_id=c.content_id AND u.ability='listening')
+            AND EXISTS (SELECT 1 FROM learning_unit u WHERE u.content_id=c.content_id
+                AND u.suspended=0 AND u.review_count>0)
+            ORDER BY c.rowid"""):
+        content = _load(row['content_json'])
+        if (row['content_id'].startswith('local:') or content.get('ai_generated')
+                or not content.get('title') or not content.get('reading')
+                or content.get('instruction_status') == 'instruction_missing'):
+            continue
+        result.append(content)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def append(db, item, selected, now):
     from .learning_store import _load, _dump, _unit_id, ALGORITHM_VERSION
     row = db.execute('SELECT * FROM learning_content WHERE content_id=?', (item['id'],)).fetchone()
@@ -194,7 +221,7 @@ def append(db, item, selected, now):
     if not missing:
         return []
     if (_dump({k: item.get(k) for k in original}) != _dump(original)
-            or not set(missing) <= set(original['abilities'])):
+            or not set(missing) <= _admissible(original)):
         raise ValueError('新能力的教案版本与原记录不同，请先核对内容修订。')
     state = read(db, item['id']) or {'version': 1, 'content_id': item['id'],
         'revision': row['revision'], 'source_sha256': sha256(row['content_json'].encode()).hexdigest(),
@@ -228,7 +255,7 @@ def validate_database(db):
         actual = {r[0] for r in db.execute('SELECT ability FROM learning_unit WHERE content_id=?', (state['content_id'],))}
         if (set(state['original_abilities']) & set(state['additions'])
                 or set(state['original_abilities']) | set(state['additions']) != actual
-                or not actual <= set(json.loads(content['content_json'])['abilities'])):
+                or not actual <= _admissible(json.loads(content['content_json']))):
             raise ValueError('Additional ability scope disagrees with enrolled units')
         for ability, value in state['additions'].items():
             if not isinstance(value, dict) or set(value) != FIELDS or value['stage'] not in STAGES:

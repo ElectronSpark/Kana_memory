@@ -19,6 +19,8 @@ OPERATIONS = frozenset({
     "platform_back", "platform_link", "platform_index", "platform_model",
     "platform_tts", "platform_recording", "feedback_review", "feedback_field",
     "feedback_sources", "feedback_delete",
+    "diagnostic_time", "diagnostic_audio", "tutor_suggestions", "multi_cloze",
+    "feedback_export",
 })
 STAGES = frozenset({"play", "save", "commit", "sync", "refresh", "request", "read", "decode",
                     "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal"})
@@ -61,8 +63,10 @@ _buffer = DiagnosticBuffer()
 def record_error(operation: str, stage: str, error: BaseException) -> None:
     try:
         _buffer.record(operation, stage, error)
-    except Exception:
-        pass  # Diagnostics cannot mask the operation's failure or recovery.
+    except (TypeError, RuntimeError):
+        # Unhashable/non-text fields or a broken lock: diagnostics cannot
+        # mask the operation's own failure or recovery.
+        pass
 
 
 def error_events() -> list[dict]:

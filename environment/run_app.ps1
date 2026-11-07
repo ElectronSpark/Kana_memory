@@ -18,7 +18,7 @@ database = Path(sys.argv[1]).resolve()
 if len(sys.argv) > 2 and sys.argv[2] and Path(sys.argv[2]).resolve() == database.parents[3]:
     raise SystemExit('Generated app directory resolves to the source app directory.')
 with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as db:
-    row = db.execute("SELECT value FROM metadata WHERE key='audio_policy'").fetchone()
+    row = db.execute('SELECT value FROM metadata WHERE key=?', ('audio_policy',)).fetchone()
     policy = json.loads(row[0]) if row else {}
 print('true' if policy.get('personal_audio_included') is True else 'false')
 '@
@@ -258,7 +258,7 @@ with zipfile.ZipFile(apk) as outer:
                 raise SystemExit('Public APK contains leftover personal audio: ' + ', '.join(stale[:3]))
             db = sqlite3.connect(':memory:')
             db.deserialize(raw)
-            row = db.execute("SELECT value FROM metadata WHERE key='audio_policy'").fetchone()
+            row = db.execute('SELECT value FROM metadata WHERE key=?', ('audio_policy',)).fetchone()
             policy = json.loads(row[0]) if row else {}
             db.close()
             if policy.get('personal_audio_included') or policy.get('contains_audio_without_public_redistribution_clearance'):
@@ -313,7 +313,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $appSource 'pyproject.toml'))) { thr
 if ($LASTEXITCODE -ne 0) { throw 'Build environment differs from the declared lock; see docs/build-environment.txt.' }
 Assert-PublicContent
 if (-not $PublicBuild) {
-    $teachingCheck = 'import sys; sys.path.insert(0, sys.argv[1]); from kanamemory.content_pack import validate_pack; m = validate_pack(sys.argv[2]); assert m["profile"] == "personal", "Personal build requires its complete teaching pack"'
+    $teachingCheck = 'import sys; sys.path.insert(0, sys.argv[1]); from kanamemory.content_pack import validate_pack; m = validate_pack(sys.argv[2]); assert m[''profile''] == ''personal'', ''Personal build requires its complete teaching pack'''
     & $projectPython -X utf8 -c $teachingCheck (Join-Path $appSource 'src') (Join-Path (Split-Path -Parent $sourceDatabase) 'teaching_content.sqlite3')
     if ($LASTEXITCODE -ne 0) { throw 'Personal teaching pack is missing, incomplete, or corrupt. Rebuild it before packaging.' }
 }

@@ -36,6 +36,10 @@ copied from a lesson just because the strings happen to be equal.
             add('meaning', 'answer', 'accepted_answers', 'choices', 'options')
         if kind in {'vocab_meaning', 'vocab_reading', 'vocab_zh_ja_contrast'}: add('title', 'prompt')
         if kind == 'vocab_audio_meaning': add('reading', 'audio_text')
+        if kind == 'vocab_audio_word':
+            add('reading', 'audio_text'); add('title', 'answer', 'accepted_answers', 'choices', 'options')
+        if kind == 'vocab_reading_choice':
+            add('title', 'prompt'); add('reading', 'answer', 'accepted_answers', 'choices', 'options')
         elif kind == 'vocab_reading':
             add('meaning', 'task'); add('reading', 'answer', 'accepted_answers')
             add('alternative_readings', 'alternative_answers'); add('accepted_readings', 'alternative_answers')
