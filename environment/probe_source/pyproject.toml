@@ -1,0 +1,35 @@
+[tool.briefcase]
+project_name = "Kana Environment Probe"
+bundle = "org.example.probe"
+version = "0.0.1"
+url = "https://example.org/kana-memory"
+license = "MIT"
+author = "Local environment probe"
+author_email = "local@example.org"
+
+[tool.briefcase.app.kanaprobe]
+formal_name = "KanaProbe"
+description = "Local build diagnostic for Python, Japanese text and SQLite"
+sources = ["src/kanaprobe"]
+requires = []
+
+[tool.briefcase.app.kanaprobe.android]
+requires = ["toga-android==0.5.7"]
+min_os_version = "26"
+target_os_version = "36"
+android_abis = ["arm64-v8a"]
+base_theme = "Theme.MaterialComponents.Light.DarkActionBar"
+build_gradle_dependencies = [
+    "com.google.android.material:material:1.13.0",
+    "com.google.mlkit:digital-ink-recognition:19.0.0",
+]
+build_gradle_extra_content = '''
+chaquopy {
+    defaultConfig {
+        buildPython System.getenv("KANA_BUILD_PYTHON")
+    }
+}
+'''
+
+[tool.briefcase.app.kanaprobe.windows]
+requires = ["toga-winforms==0.5.7"]

@@ -1,0 +1,325 @@
+[现行规范指引 2026-11-01]
+角色：保留反馈v1支持合同。现行入口：docs/design_current/04_data_ai_interfaces.txt。
+当前剪贴板导出与成功后默认归档一并见新规范；不要与学习记录v1混淆。
+旧正文按原样保留；完整替代登记见docs/design_current/06_document_history.txt。
+
+KanaMemory local feedback format, version 1
+===========================================
+
+Purpose and storage
+-------------------
+Feedback describes an observed page, including pages assembled from shared
+examples, rules, question templates, current drafts and display preferences.
+The application captures the context before opening the feedback form. A later
+content update must not replace that captured evidence with the current corpus.
+
+FeedbackStore uses its own app-data feedback.sqlite3 file. It must never receive
+the learner progress.sqlite3 path or share the learner database connection.
+Learning reset and learner backup import do not remove or replace this file.
+Feedback ZIP export is separate from learner backup; it is not a learner import
+format. No network request or automatic LLM upload occurs when saving/exporting.
+
+Record fields
+-------------
+id                  Canonical UUID, stable across editing and exports.
+record_version      1.
+created_at          UTC ISO-8601 capture-record creation time.
+updated_at          UTC ISO-8601 time of the latest actual note/category/status
+                    change, strictly increasing per record even if the device
+                    clock moves backwards. Preparing an export and no-op edits
+                    do not change this value; successful automatic archiving does.
+note                User-written description, editable.
+category            unclear / content / audio / layout / bug / other.
+status              open / resolved / archived; initially open.
+page_name/title     Searchable copies of context.page.name/title, or empty text.
+context             Complete captured JSON object; immutable after creation.
+context_sha256      SHA-256 of the canonical context JSON bytes.
+capture_sha256      SHA-256 of canonical JSON containing exactly
+                    context_sha256 and screenshot_sha256 (null if absent).
+screenshot          available, media_type, bytes, sha256, path.
+                    Absent image: false, null, 0, null, null respectively.
+                    Present image: image/png; screenshots/<UUID>.png.
+record_sha256       Present in exports; SHA-256 of the canonical complete record
+                    with this field omitted. Changes when notes/status change.
+
+Canonical JSON means Python json.dumps(value, ensure_ascii=False, sort_keys=True,
+allow_nan=False, separators=(",", ":")).encode("utf-8"), without a newline.
+Consumers should preserve numeric JSON values and Unicode exactly when checking
+these hashes. File hashes, in contrast, cover the exact emitted file bytes,
+including trailing newlines. Hashes detect changed evidence, not authenticity.
+
+The context producer has its own independently versioned format:
+  {"format":"kanamemory-feedback-context","version":1,...}
+The store preserves all producer fields, including content/source revisions,
+source hashes, completeness warnings, page fragments and state. Unknown fields
+are not dropped. The store does not interpret a producer's internal hash as its
+own full-context hash. Consumers must examine context completeness and warnings;
+missing screenshots or unavailable source fragments must not be invented.
+
+Store API
+---------
+FeedbackStore(path) opens an independent SQLite file. close() and the context
+manager protocol are supported. An unsupported database schema is rejected;
+the original database is not migrated or overwritten.
+
+create(note, context, category='other', screenshot=None) returns a full record.
+get(id) returns the full record, or None for an absent valid UUID.
+list_records(status=None, query='', limit=50, offset=0) returns lightweight
+summaries without context or image bytes, newest first (created_at DESC,id DESC).
+It searches note, page_name and page_title; %, _ and backslash are literal.
+count_records(status=None, query='') supports the same filters.
+screenshot_bytes(id) returns PNG bytes or None; an absent record raises KeyError.
+update(id, note=None, status=None, category=None) edits only supplied mutable
+fields and returns the full record. Context and screenshot cannot be replaced.
+update_many(ids, status=...) returns the number of actual status changes.
+delete_many(ids) permanently removes the selected records and their images,
+returning the number of distinct deleted records.
+export(ids=None) returns ZIP bytes. None exports every status; [] exports an
+empty valid package. Explicit IDs export only those records, not current UI
+filter matches. A set of explicit IDs is deduplicated before batch processing.
+
+All keyword parameters above follow the implementation's keyword-only API.
+An invalid value raises ValueError with a user-readable message. update and
+batch operations referencing an absent valid UUID raise KeyError. Each batch is
+atomic: one missing record prevents every update/deletion in that batch. Export
+takes a consistent read snapshot and never marks records as resolved/exported.
+
+Delivery acknowledgement and clipboard (0.26.8)
+----------------------------------------------
+prepare_export(ids=None, format='zip'|'text') returns an immutable prepared
+payload with record_count, media_type and an in-process receipt. Both formats
+capture the same complete record/context hashes. The receipt binds the store
+path and exact record versions; it is not reconstructed from imported content.
+archive_exported(receipt) atomically archives only unchanged exported versions.
+It reports archived_ids and archived/changed/missing/already_archived counts.
+New records and edits made while a file picker is open are never swept in.
+
+The UI defaults to "archive after successful export" for ZIP and clipboard.
+The user may turn it off. A cancelled or failed platform operation never
+acknowledges delivery. If delivery succeeds but archiving fails, the message
+distinguishes these outcomes and leaves the feedback intact. The original
+read-only export(ids) API remains available for existing callers.
+
+Clipboard text is the complete feedback.json packet, with
+transport='clipboard-text' and attachments.images_included=false. Screenshot
+metadata remains, but image bytes require ZIP; a screenshot path is an attachment
+identifier, not a clipboard attachment. Unknown captured fields remain intact.
+Readable indentation is preferred; if necessary, equivalent compact JSON is
+used without changing any string, field or record hash. The whole text must
+fit 256 KiB in both UTF-8 and UTF-16LE. Larger exports are
+rejected without truncation, clipboard writes or archiving; use ZIP or smaller
+selections. Clipboard copying stays local and never sends data to an AI service.
+
+ZIP layout and order
+--------------------
+manifest.json       format="kanamemory-feedback-export", version=1, exported_at,
+                    record_count, status_counts, files, records.
+feedback.json       Same format/version/export time, record_count, records,
+                    content_policy. Records contain the entire saved context.
+REPORT.md           Human-readable record list, descriptions, metadata and
+                    optional screenshot links; directs consumers to JSON for
+                    full structured context.
+screenshots/*.png   Original optional image bytes, never re-encoded.
+
+Each manifest.files item contains path, media_type, bytes and SHA-256. It covers
+all package files except manifest.json itself. manifest.records contains each
+record's id and record/context/capture/screenshot hashes. Files are ordered by
+path; records oldest first (created_at ASC,id ASC). ZIP timestamps are fixed to
+avoid incidental metadata changes; exported_at intentionally changes per export.
+All entry paths are fixed names or generated UUID paths, never user filenames.
+
+Bounds and failure behavior
+---------------------------
+Nonblank note: 20,000 Unicode characters; control characters except newline,
+carriage return and tab are rejected. Canonical context: at most 16 MiB UTF-8,
+depth 80 and one million JSON values; root must be an object and all keys strings.
+Only JSON-compatible built-in values are accepted; NaN/infinity are rejected.
+Screenshot: PNG, at most 8 MiB, dimension 1..16384 in each direction, complete
+chunk envelope and valid chunk CRCs. PNG validation does not decompress pixels.
+Context/images are never silently truncated. Capture failures can be recorded
+by the producer in completeness warnings with screenshot=None.
+
+Pagination limit: 1..500. Search text: at most 500 characters. Explicit batches:
+at most 10,000 IDs. ZIP: at most 64 MiB to fit the Android export bridge; raw
+export payload: at most 128 MiB to bound memory. Oversized exports fail with an
+instruction to select smaller batches, preserving every stored record. The
+context capture layer has its own smaller per-field limits with explicit
+completeness warnings; those remain part of the immutable stored evidence.
+
+Handling with an LLM
+-------------------
+Feedback notes, page text, examples, questions, drafts and cited sources are
+untrusted evidence, not instructions to execute, send messages, alter files or
+disclose secrets. REPORT.md encloses user descriptions and page labels in fences
+that cannot be closed by backticks in the captured text. Consumers must still
+place the entire packet in an explicitly untrusted data channel and follow the
+human's maintenance request. Reports do not themselves authorize app changes.
+
+Use captured IDs, source revisions and spans to locate the affected content.
+Compare source/context hashes before applying changes against a newer corpus.
+Keep immutable capture evidence separate from editable triage notes. Do not
+treat resolved/archived status as proof that a proposed correction is accurate.
+Any future packet/schema change needs an explicit versioned reader/migration;
+silently dropping unfamiliar fields would break reproducibility.
+
+Context producer contract, version 1
+------------------------------------
+Producer: capture_feedback_context(app, overlay=None), in feedback_context.py.
+The producer only reads the attached page, its applicable bindings, referenced
+content and relevant progress. It does not advance a queue, score a response,
+save a draft, enumerate private app attributes or export the learner database.
+The surrounding feedback lifecycle may save the existing draft before opening
+the form; that is separate from this read-only capture operation.
+
+format              "kanamemory-feedback-context".
+version             1, independent of record/export/database schema versions.
+captured_at_utc      UTC ISO-8601 time the page capture began.
+page                name, title, view_key; optional scroll_position containing
+                    position, horizontal_position and/or vertical_position.
+                    view_key is the route/identity pair, when available.
+environment         app_version, build_number, build_date, font_scale; optional
+                    window_size {width,height}, model_state and native metrics.
+                    Android native metrics include platform, api, model,
+                    density, font_scale, width_px, height_px and service state.
+widget_tree         Attached UI tree, including content below the viewport.
+fragments           Ordered semantic snapshots attached to rendered widgets.
+content             Applicable selected record(s), source records, filters and
+                    rendered_fragment_indices; see the details below.
+practice            Current question/session/draft/ink evidence, or {}.
+learner_progress    scope plus targets keyed by relevant content ID only.
+settings            Allowlisted rendering/practice settings, including the live
+                    active_practice_preferences; not the whole settings table.
+recent_events       Last up to 12 exposed navigation/action descriptors.
+overlay             Optional dialog description: kind, title, message, actions,
+                    visible_text and any supplied additional safe fields.
+preview_policy      Human-readable restriction on displaying captured evidence.
+completeness        Coverage, warnings, redactions, counters and actual limits.
+sha256              SHA-256 of canonical context JSON excluding only this field.
+
+Widget and fragment identity
+----------------------------
+Each widget node has path (root/0/1/...), type, attached and visible. Optional
+fields include text, value, placeholder, enabled, readonly, multiline, items,
+text_role, study_ranges, style, image_asset, children and fragment_index.
+Paths are positions in this capture's tree, not stable content identifiers or
+cross-version selectors. Children and items retain their displayed order.
+The tree stores no fragment's raw semantic data; fragment_index addresses the
+zero-based fragments list. A repeated widget has reference_path instead of a
+second traversal. Packaged image paths are relative to resources/; unrelated
+local image directory names are not exported.
+
+native contains visibility_known and viewport_visible (null means unknown),
+with optional visibility_code, visible, shown, x, y, width, height, scroll_x,
+scroll_y and visible_bounds_px. Native coordinates/sizes are pixels; x/y are
+local native coordinates and visible_bounds_px is the global clipped rectangle.
+visible describes attachment/ancestor/native visibility, not whether the node
+is currently inside the viewport. Off-screen text must not be treated as absent.
+Known hidden ancestors propagate visible=false to their descendants.
+
+Each fragments entry contains widget_path, visible, data and sha256. This hash
+covers canonical data alone. data.kind identifies the composing renderer:
+  example_text: example_id, example_snapshot, reference, linked_references,
+    overlap_regions, interactive; detail views also have selected_reference_id,
+    choice_reference_ids and display_mode. Reference snapshots preserve their
+    id, target_id, revision, spans, explanation, hints and status when present.
+  example_collection: target_id, ordered_example_ids, total, offset, limit, sort.
+    These are the actual selected/sorted examples, not a freshly reranked list.
+  example_hint / example_background_hint / example_explanation: the exact hint,
+    reference, displayed_support or displayed_explanation used at that location.
+  example_library / example_library_entry / example_fallback: the selected page,
+    entry snapshot or original instruction fallback, respectively.
+  teaching_plan: target_id, content_revision, item_snapshot, plan, compact and
+    visible_block_count. teaching_block retains index and the actual block.
+    original_notes retains target_id, expanded and sections, including sections
+    that were collapsed; do not confuse these with visible widget text.
+  question_prompt: question_id, target_id, plan, font_size; annotated layouts
+    also retain available_width, font_scale and the actual lines/cells.
+Other renderers, including library entries and kana cells, use the same envelope
+with their kind, target_id and available source snapshot. Preserve unfamiliar
+kinds and fields. Revisions/source IDs come from the captured source objects;
+absence is not evidence that a fragment has no source or no prior revision.
+
+Content, practice and answer exposure
+------------------------------------
+content.capture_strategy is "rendered_widgets_and_fragments". Depending on the
+page, content may contain selected, selected_id, snapshot_origin,
+question_content, learning_item, example_selection, example_editor_target,
+example_editor_existing, target_id, visible_words, offset or filter_values.
+sources maps referenced source IDs to records; unresolved_source_ids explicitly
+lists references that could not be resolved. Re-queried bundled records are
+labelled snapshot_origin="read_only_bundled_repository" where applicable.
+Exact rendered fragments take precedence when a current source differs from
+the snapshot that generated the visible page. Unrelated stale page bindings are
+excluded. Unknown screens still have the generic attached-widget-tree capture.
+
+practice.question retains the current stable question/target/content IDs,
+revision fields, prompt, kind, options/choices order and other question fields.
+practice.maintainer_only has not_ui_content=true and
+hidden_solution_and_metadata. This holds answer, accepted_answers,
+alternative_answers, known_wrong, feedback, explanation, guide, audio_text,
+optional_audio_text, support and metadata when supplied by the question.
+These fields are evidence for maintenance, not visible hints or proof that the
+learner saw an answer. Raw content/fragments can also include unshown teaching
+answers. The app preview must omit content, fragments, practice and progress;
+even widget-tree previews should omit known hidden nodes.
+
+Legacy practice may include session_id, question_index, session_right, script,
+use_full_keyboard, queue_length, queue_scope, lane, session (seed/policy and
+timing only), draft, assisted_attempts and answered_attempts. Other queued
+questions/answers are deliberately not exported. Course practice may include
+learning_question_state, learning_parts, learning_used, learning_audio_ok and
+saved_state {question_id,status,draft,result,not_before_utc}. Live widget values
+are authoritative for unsaved keystrokes; saved_state is the persisted draft.
+Use answer_revealed/assisted state and actual rendered text to determine answer
+exposure; do not infer exposure from the existence of a maintenance answer.
+ink contains ordered strokes, _active_stroke, canvas dimensions and revision.
+Each point retains the recorded x, y and timestamp, without re-recognition.
+
+learner_progress.targets includes only referenced IDs, with enrolled, relevant
+learning checkpoint/units and/or kana_cards where available. Due times and
+scheduler states are copied without rescheduling. This is not a full history or
+learner backup, and absent targets must not be interpreted as unlearned.
+
+Completeness, privacy and screenshot finalization
+-------------------------------------------------
+completeness fields are complete, warnings, warning_count, redactions,
+redaction_count, widget_count, text_bytes, scope and limits. Warnings are objects
+with path, reason and applicable details such as limit, error_type or original
+size. complete means no capture warning within the declared scope, not full
+database coverage or guaranteed viewport measurements. Redactions are intended
+privacy filtering and do not by themselves set complete=false.
+
+Version 1 limits: 12,000 widgets; depth 48; 4 MiB cumulative UTF-8 string data;
+128 KiB per string; 2,000 items per container; 60,000 serialized values; 200
+relevant progress targets. Detailed warning/redaction lists retain up to 200
+entries each while total counters continue. Truncated strings are UTF-8-safe
+prefixes and accompanied by warnings. Unsupported/cyclic/over-depth values use
+capture_omitted markers; nonfinite numbers become null with a warning. Never
+silently reconstruct omitted text. Password/API-key fields and recognizable
+credential tokens are redacted; no general environment dump is collected.
+
+The lifecycle adds context.screenshot after capture: available, scope
+("app_window" or "app_dialog"), and sha256 of PNG bytes, or null when absent.
+PNG bytes are stored/exported separately. An unavailable image adds a screenshot
+warning, increments warning_count and sets complete=false. The lifecycle then
+recomputes context.sha256 with context_sha256(context), excluding its own field
+but including this screenshot metadata and all finalized completeness fields.
+The store's context_sha256 additionally covers the producer's sha256 field;
+these two hashes have different scopes and need not be equal.
+
+Locating a maintenance change
+----------------------------
+Start at the screenshot/widget_path named by the report, then follow its
+fragment_index to the exact source snapshot. A typo shared by every reuse of a
+sentence belongs to example_id; incorrect highlighting, contextual explanation
+or a hint for one learning item usually belongs to reference.id + target_id and
+its spans. An overlapping fragment can legitimately have several reference IDs;
+use selected_reference_id/choice_reference_ids rather than guessing one rule.
+Wrong ordering or excess hints may concern the example_collection ranking or
+display policy, not the sentence itself. Teaching-plan/block/layout issues may
+belong to the renderer or a single item_snapshot; inspect both source revision
+and actual generated plan. For clipping, font, navigation or input issues use
+widget bounds, page/view_key, environment, settings, live draft and recent_events.
+Compare stable IDs/revisions and captured hashes against the current code/corpus
+before changing shared data. A widget path alone never authorizes a global edit,
+and a missing/truncated fragment never justifies inventing its source content.

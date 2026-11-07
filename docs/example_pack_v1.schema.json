@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kanamemory:example-pack:1",
+  "title": "KanaMemory shared examples v1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "status",
+    "examples",
+    "references"
+  ],
+  "properties": {
+    "format": {
+      "const": "kanamemory-example-pack"
+    },
+    "version": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "reviewed"
+      ]
+    },
+    "examples": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/example"
+      }
+    },
+    "references": {
+      "type": "array",
+      "maxItems": 30000,
+      "items": {
+        "$ref": "#/$defs/reference"
+      }
+    }
+  },
+  "$defs": {
+    "example": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S+$"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S+$"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4000,
+          "minLength": 1
+        },
+        "translation": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "order_translation": {
+          "anyOf": [
+            {"$ref": "#/$defs/order_translation"},
+            {"type": "null"}
+          ]
+        },
+        "reading": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "source_ids": {
+          "type": "array",
+          "maxItems": 40,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^\\S+$"
+          }
+        }
+      }
+    },
+    "order_translation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "status", "source_text", "source_translation", "text"],
+      "properties": {
+        "version": {"const": 1},
+        "status": {"const": "experimental"},
+        "source_text": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "source_translation": {"type": "string", "maxLength": 4000},
+        "text": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": [
+        "start",
+        "end",
+        "quote"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "$comment": "Unicode codepoint offsets; end > start, end <= len(text) and quote == text[start:end] are checked by validate_pack."
+    },
+    "hint": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "meaning": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "reading": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "rule": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "$comment": "At least one nonblank hint is required by validate_pack."
+    },
+    "reference": {
+      "type": "object",
+      "required": [
+        "id",
+        "example_id",
+        "example_revision",
+        "target_id",
+        "spans",
+        "hint"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S+$"
+        },
+        "example_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S+$"
+        },
+        "example_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S+$"
+        },
+        "target_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^\\S+$"
+        },
+        "spans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/span"
+          }
+        },
+        "hint": {
+          "$ref": "#/$defs/hint"
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "weight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10
+        },
+        "surface_hint": {
+          "type": "boolean",
+          "description": "Optional: hint.rule explicitly explains the focused surface form and its reading; keep while reading is unfamiliar."
+        },
+        "reading_scope": {
+          "enum": [
+            "lemma",
+            "span"
+          ],
+          "description": "Optional: reading hint describes the dictionary lemma or the exact highlighted inflected form."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "surface_hint"
+            ],
+            "properties": {
+              "surface_hint": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "hint": {
+                "required": [
+                  "rule"
+                ],
+                "properties": {
+                  "rule": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "reading_scope"
+            ]
+          },
+          "then": {
+            "properties": {
+              "hint": {
+                "required": [
+                  "reading"
+                ],
+                "properties": {
+                  "reading": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$comment": "Authoring contract. validate_pack also enforces UTF8 byte budget, Unicode controls, unique IDs, known targets and immutable referenced text. Runtime accepts an omitted status as reviewed only for compatibility; producers must supply status."
+}

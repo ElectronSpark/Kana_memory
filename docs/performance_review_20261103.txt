@@ -1,0 +1,88 @@
+KanaMemory 有限性能审查与例句读取优化 — 2026-11-03
+
+范围与基线
+开发仓基线fe1ce09，已发布产品0.28.5/293131b。本轮检查代码并使用合成数据做有限探针，
+只修复已确认的例句重复汇总问题。其他热点记录为后续任务，不扩大已完成的工程目标。
+未启动模拟器、APK构建、真实API或暂停的长期模拟，未读取/修改用户学习数据库。
+以下毫秒数均为电脑端Python/SQLite与轻量UI替身的耗时，不代表Android原生布局或实机帧率。
+
+已修复：例句展示重复汇总完整历史
+example_store._statuses原本在每次references/display_hints时聚合learning_event，再加载
+learning_content和learning_unit。example_ui先排例句，再为各行生成链接/背景提示，多次
+读取同一进度。100条合成例句、3个目标、20,000条合法关联的历史事件下：
+- 例句库显示10条：11次全历史汇总，中位59.327ms；无历史时同路径2.274ms。
+- 单学习项显示8条：17次汇总，中位94.922ms。
+- 学习项预览2条：5次汇总，中位30.870ms。
+
+改后同一探针/数据规模、各三次测量：
+- 例句库10条：1次汇总，中位6.843ms（原59.327ms）。
+- 单学习项8条：1次汇总，中位8.729ms（原94.922ms）。
+- 学习项预览2条：1次汇总，中位7.972ms（原30.870ms）。
+所有路径零数据库写入；完整探针1.260秒。改善来自减少历史汇总，不是少展示例句或删除
+学习记录。原始次数与耗时见content/after-main/results.json、run.json及probe_after_main.py。
+这些数字只支持该合成场景；单项预览仍复制100条候选，未把未解决的工作量隐去。
+
+ExampleStore.read_operation为一次同步页面构建共享独立的进度投影，覆盖以上页面和详情页。
+原始SQL、熟悉度计算、排序与提示政策保持不变。嵌套范围不延长生命周期，退出释放。
+本连接total_changes、外部data_version变化及refresh使缓存失效；事务内不复用，查询期间
+发生变化则丢弃缓存；返回值深复制。最终评分和入队不使用展示缓存。
+没有新持久化格式、迁移、队列重建、调度参数或评分权重变更。
+
+已确认但本轮未修复的热点
+后续状态：以下1—5已在performance_optimization_20261103.txt所述增量处理。
+此处保留0d1ca07之前的审查事实；不把后续验证倒写成当时已经完成。
+1. 添加内容页：admission_workload经identity/unit_for逐卡读取active_units的版本。
+   274张合成卡下802条SQL，其中788条PRAGMA data_version。仅在探针中把路由映射
+   提升为单次读取后为14条SQL，完整overview/plan/workload相同、数据库不变。
+   三次未加profiler中位43.3→30.0ms；有噪声，且未测共享路由、事务或外部修改，
+   不能把此原型当已完成修复。后续需明确路由投影的读范围及最新提交检查。
+2. 首页课程缺题预览：study_path_runtime._study_path_unqueued_courses重复get_item/get_unit、
+   前置检查及全局曝光读取。1/10/50个合成课程、各两个实际可用方向时分别74/704/3504条
+   SQL，约5.3/14.3/73.3ms。50项场景get_unit与事件COUNT各400次，正确保留100个方向。
+   可按本次content/scope复用前置结果并显式传now/exposure_times；须保留题型、预约、
+   冷却、前置、挂起和路由语义，不能通过少安排题目减少工作量。
+3. 课程词块拼答：learning_ui._edit_learning_parts每选一项/撤回都进入continue_learning，
+   重读前置/候选/当前题并重建整页。单项探针每次76条SQL（72 SELECT），约12ms。
+   同题草稿仅保存对照12条、约1.2ms，但该对照草稿未变化，不能当成修复收益。
+   后续宜先可靠保存，再局部更新词块与按钮；保留旧回调身份、失败重试和反馈返回。
+4. AI提问输入：每次on_change经tutor_store创建Store并校验整段历史，_mutate前后两次
+   重算已完成互动的判定以验证数据，然后完整序列化。0/50/200条合成已完成互动下，
+   每次草稿保存中位2.534/16.374/59.544ms，旧结果验证次数0/100/400；各33条SQL，
+   其中20条CREATE IF NOT EXISTS。它没有重新评分或更改旧进度，探针确认旧互动不变。
+   后续需要已验证版本与增量保存边界；不能简单跳过损坏校验或延迟保存而丢草稿。
+5. 单项例句预览：for_item仍复制所有候选后由UI截取2/8条；合成100条候选下仍复制100条。
+   例句库examples_page已按页物化，此问题只在for_item消费者。可另加分页投影，需保持
+   首次学习优先、熟悉度排序、总数、个人替换版本及同片段多关联。此轮不改其接口。
+
+较低优先级或尚未证实
+StudyPathService._overview后StudyPathSelection.refresh再次深复制目录，profile记录大量
+递归copy调用；两处都维护隔离合同，尚无独立耗时/替代实现验证。
+普通假名键盘未发现每键整页重建，手写move仍保留采样、合并绘制且不存草稿，仅up/cancel
+保存，未发现旧重复invalidate问题回归。同步草稿落盘及反馈PNG捕获的设备长尾未测实。
+
+证据位置（.test_runs下不纳入产品或公开源码）
+- content/run1/results.json、run.json、probe_examples.py：例句基线与探针。
+- readpaths/report.txt、profile.json、unqueued-courses-ready.json：添加页/首页；较早的
+  unqueued-courses.json没有实际就绪题型，不用于100个方向的性能结论。
+- input/report.txt、reorder-results.json、run/：词块流程，1项探针通过。
+- main/tutor-results.json、tutor_probe.py：AI草稿三组各三次，未请求模型。
+上述路径均相对.test_runs/perf-1103。tutor探针为独立脚本，无RunEvidence运行包装，
+保留这一限制，不补造历史运行回执。
+
+验证与交付
+第一组test_example_store/test_example_ui/test_example_browse_performance：46通过、1失败。
+失败为test_draft_activation_and_id_conflicts_rejected_without_overwrite第105行，再次导入
+同ID、修改译文的材料。合并保留原译文，但来源登记对未采用的新译文计算哈希，报来源版本冲突。
+在独立进程加载HEAD fe1ce09的原版example_store.py仍同样失败（1.38秒），证据baseline/
+source.json、results.xml；与本轮缓存无关。保留原断言和失败，不将其改成通过或扩张本轮修改。
+后续修复应只针对本次输入ID，用最终实际保存的规范快照登记来源；不能登记整个merged包
+而为无关AI材料增添external许可。来源版本保护仍须保留，并增加重复/混合来源回归。
+第二组test_example_refresh_cache/test_example_intro_ranking/test_example_tts：34通过。
+以上运行证据为main/regression-r1/、main/regression-r2/，均记录源文件指纹。
+标准tools/check_python.py：Ruff、架构边界、构建环境声明通过，120项有限工程测试通过；
+运行证据.test_runs/q-bazk2ckd/run.json、results.xml。未运行全量App测试。
+新增test_example_read_operation：9通过，覆盖同范围复用、返回副本、补读新目标、
+本连接/外连接提交、事务提交/回滚、嵌套异常退出、refresh及读期间修改不得混合两版状态。
+证据main/read-contracts/。相关回归合计89通过、1项已确认基线失败；不宣称全绿。
+无新增生产模块，公开清单不变；结构契约已写入07_engineering_structure v16及README。
+本轮源码变更尚未进入APK或GitHub公开版本，不宣称手机端验证通过。

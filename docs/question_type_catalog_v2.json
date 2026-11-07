@@ -1,0 +1,1327 @@
+{
+  "schema_version": 2,
+  "status": "design_only",
+  "runtime_connected": false,
+  "language": "zh-CN",
+  "purpose": "扩展到词汇、语法和基于已学内容的 LLM 出题时使用的题型规范；不直接改变现有排期或学习记录。",
+  "phase_definitions": {
+    "core": "扩展版首期应明确支持；包含当前已有题型及首期新增题型。",
+    "extended": "后续扩展，沿用同一证据模型，具备审核内容或可靠评分后开放。",
+    "experimental": "依赖语音或开放回答评分的实验功能；完成可靠性验证前不自动调整 SRS。"
+  },
+  "memory_dimensions": {
+    "K识读": "假名字形到约定读法的映射，按平假名和片假名区分。",
+    "K拼写": "读法提示到假名字形序列的映射，按平假名和片假名区分。",
+    "K听辨": "日语音频到假名的辨认，按实际测量的目标记录。",
+    "K手写": "从非字形提示回忆并手写假名；临写不视为独立回忆。",
+    "V理解": "一个词位中合法读法—义项关系的文字理解。",
+    "V读法": "词位中具体书写与合法读法—义项关系的映射。",
+    "V提取与使用": "由意图主动提取词语并恰当使用；书写形式、搭配和语体是子能力标签。",
+    "V听辨理解": "启用听力学习时记录词语听觉理解；纯文字成功不能替代该维度证据。",
+    "G理解": "语法构式在特定功能与约束下的含义理解。",
+    "G应用": "在明确情境下使用目标构式、接续或规则形态变化。",
+    "P发音训练": "音段、节奏和音高训练日志，与语义记忆分开；默认不进入 SRS。"
+  },
+  "shared_rules": [
+    "题型是刺激与回答方式，不等于新记忆项。有限选项、完整表和键入等支架变化不各自创建记忆卡。",
+    "每题生成前绑定主目标、能力维度、可评分范围与允许的辅助目标。复合题必须先定义逐目标评分规则。",
+    "主目标只有获得可靠、可归因的评估才更新对应能力；句中出现、阅读过、播放过或选项中出现不构成成功证据。",
+    "只有明确支持、可可靠归因的 K 辅助映射可进入既有低权重和有上限的到期调整策略；0.25/±25%不得机械套用于 V/G 或未验证的新 K 映射。其他辅助观察仅作诊断与选题。一次根作答中同一单位去重，错误优先；同一单位已获得主评分时不得再叠加辅助调整。",
+    "答案不可可靠对齐、词义或语境有歧义、识别或音频故障时，不调整无法归因单位的 SRS。",
+    "提示、查看答案、反馈后重做、同一目标的即时改写题均保留依赖关系，不不断产生新的独立成功证据。",
+    "单词拼写工具只辅助假名。只有用户明确加入词汇学习才创建 V；既往辅助练习不自动变成已学词汇记录。",
+    "LLM 是材料生成方式，不是记忆单位或单独题型。生成内容绑定已学读法—义项和语法功能 ID，并审核答案、歧义与难度。",
+    "已学词的一个义项不代表其余义项已学。必要的新背景词提供短释义，并记录对相关评分的提示影响。",
+    "平假名与片假名的直接题分开。孤立同音不能凭音频或相同罗马音要求唯一字形答案；须补充分辨语境或接受等价答案。",
+    "小假名在拼写键盘中独立可选。组合罗马片段不是单字孤立读音，不能把 k/sh 片段当作 き/し 独立识读成功。",
+    "音高线和调号仅用于题面或词条介绍，不进入回答字串；拼写题不得因音高展示泄露答案假名。",
+    "当代日语题只使用与题目匹配的现代日语读音。历史读音、汉语方言音与字源材料仅作参考，不混入默认考题。",
+    "界面只显示完成当前任务所需内容；来源、许可证、生成过程和长解释放入按需详情。",
+    "关闭题型只改变可用测量方式，保留内容状态、历史证据和到期时间；重新开启不当作新内容。",
+    "P 发音训练默认只记录反馈和进步，不根据 ASR 转写正确自动更新词义、读法或假名记忆。",
+    "每道题实例出题前冻结 declared_primary_units，只能从该题型 allowed_primary_dimensions 选取；其余涉及的能力不因答对或答错临时升级为主目标。",
+    "听音手写的双目标成功、失败归因、有限诊断和一次最终保存遵循 memory_model_v2.txt 第 6.1 节。复合失败先 pending_attribution，不能对两个目标直接同时判 Again。",
+    "诊断属于同一 root_attempt_id/exposure_group，不独立调用 scheduler；每未判定目标最多一次诊断机会。答案展示后写对只记曝光，未确定或设备失败无 FSRS 更新。",
+    "最终保存以 root_attempt_id × unit_id 幂等，每目标至多一次主更新；目标评分、辅助记录和 checkpoint 同一事务保存，不能先扣分再在诊断后重复扣分。",
+    "首次学习默认先介绍、再引导、最后独立提取；介绍是共同流程而非新题型。语法必须先说明当前功能、接续与完整示例，不能要求用户从零猜规则。",
+    "题型 evidence_mode 是允许的最高评分方式；实例处于 introducing/guided 时一律降为 exposure_only，禁止主评分与低权重间隔调整。",
+    "介绍／引导中的答案和关键规则按 exposure_group 记录；相同答案的即时重做、教学后直接测均不伪装独立回忆。先交错并使用新实例，或预约稍后检验。",
+    "只有已准备好的能力进入独立检验；必要前置知识未介绍导致失败不扣目标记忆。首次教学错误只纠正，不写 Again 或长期 lapse。",
+    "教过的选择题可在新实例中独立检验有选项识别；引导中规则或答案可见的选择不能冒充该证据。无选项覆盖从首次有效独立成功计算。",
+    "查看答案锁 Again 的规则仅适用于已进入独立检验的目标，不适用于新内容介绍和引导；教学完成按钮不创建成功记录。",
+    "选择题附加朗读遵循 optional_prompt_audio_policy：只有完整公开日语题干且不考读音/拼写/填空、不会泄露目标答案时才加喇叭；原生听力刺激另行保留，播放本身不产生记忆证据。",
+    "题干假名与数字调号遵循 optional_prompt_annotation_policy，按当前考点分别门控；安全辅助不算答案提示，不凭已显示读音奖励读法或听辨。"
+  ],
+  "question_types": [
+    {
+      "id": "kana_read",
+      "label": "看假名选或拼罗马音",
+      "phase": "core",
+      "prompt": "显示一个目标假名，明确平假名或片假名；单字和组合的干扰项保持同类。",
+      "response": "初学从有限罗马音选项选择；熟悉后用系统键盘输入罗马音。",
+      "primary_dimension": "K识读",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "不证明听辨、反向拼写或手写能力。",
+        "不能通过同一轮反复改变选项来制造新证据。"
+      ],
+      "grading": "按约定罗马字方案及允许别名确定性判分；支架与提示记录到证据，选择和键入不拆成独立记忆项。",
+      "notes": [
+        "保留当前 kana_choice、kana_romaji 两种实现方式。",
+        "每轮选项稳定，跨轮可随机；单假名题不混入假名组罗马音。",
+        "教学写法 o/wo 与现代发音关系在内容中明确，不能用含糊提示硬判错。"
+      ],
+      "observed_dimensions": [
+        "K识读"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "K识读"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "kana_spell",
+      "label": "看罗马音选或拼假名",
+      "phase": "core",
+      "prompt": "给出目标罗马音与要求的文字体系。",
+      "response": "从少量假名选择，或从完整假名表逐字符组装。",
+      "primary_dimension": "K拼写",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "不证明听辨或手写。",
+        "无语境时不能凭同音罗马字区分多个合法字形。"
+      ],
+      "grading": "将规范化回答与允许字形集合比较；选项与全表是同一能力的不同支架。",
+      "notes": [
+        "对应当前 romaji_kana、romaji_kana_full。",
+        "完整表保留小假名作为单独按钮，组合由字符拼出。"
+      ],
+      "observed_dimensions": [
+        "K拼写"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "K拼写"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "kana_listen",
+      "label": "听音选或拼假名",
+      "phase": "core",
+      "prompt": "播放可辨认的现代日语音频；需要区别同音写法时提供必要语境。",
+      "response": "从少量选项选择，或从完整假名表拼出目标。",
+      "primary_dimension": "K听辨",
+      "auxiliary_evidence": [
+        "目标字形与声音有可靠一一对应时，可提供低权重 K拼写证据。"
+      ],
+      "blocked_evidence": [
+        "仅看到正确选项不能证明会手写。",
+        "音频故障、不可辨认样本或孤立同音歧义不记为学习错误。"
+      ],
+      "grading": "按音频实际表达与允许字形集合判分；记录重播与提示，不因重播本身伪造掌握。",
+      "notes": [
+        "先少选项，再完整表。",
+        "不对不能独立发音的小假名和长音符直接生成孤立听辨题。"
+      ],
+      "observed_dimensions": [
+        "K听辨"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "K听辨"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "no_new_transcript",
+        "accent_number": "target_hidden",
+        "scope": "独立听力不新增隐藏字幕或目标注音；已公开非考点文字仍需局部检查。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "kana_write_from_romaji",
+      "label": "看罗马音手写假名",
+      "phase": "core",
+      "prompt": "显示目标罗马音和目标文字体系，不显示待写字形。",
+      "response": "手写并确认识别结果。",
+      "primary_dimension": "K手写",
+      "auxiliary_evidence": [
+        "经确认的正确回忆可提供低权重 K拼写证据。"
+      ],
+      "blocked_evidence": [
+        "识别候选列表中包含目标不是手写正确的证明。",
+        "模型缺失或识别失败不更新 SRS。"
+      ],
+      "grading": "先区分笔迹输入、识别结果与用户确认，再按允许目标字形评分；必要时支持明确自评。",
+      "notes": [
+        "对应当前 romaji_handwriting。",
+        "应能实时显示笔迹，并在答案已显示时标记为辅助练习。"
+      ],
+      "observed_dimensions": [
+        "K手写"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "K手写"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "kana_write_from_audio",
+      "label": "听音手写假名",
+      "phase": "core",
+      "prompt": "播放目标读音，指定文字体系；必要时补充消歧语境。",
+      "response": "手写并确认识别结果。",
+      "primary_dimension": "K手写",
+      "auxiliary_evidence": [
+        "若只预声明一个主目标，其余可归因表现只作辅助观察；只有存在明确支持的 K 映射时才可按相应策略低权重处理，不能事后升为主评分。"
+      ],
+      "blocked_evidence": [
+        "复合失败先保存 pending_attribution，不同时降低听辨和手写。",
+        "识别错误和音频故障不作为学习失败。",
+        "同一根作答诊断不再建立独立复习，不得预扣分后追加处罚。",
+        "答案字形展示后的写对只记曝光；未判定目标不改间隔。"
+      ],
+      "grading": "出题前可声明 K听辨或 K手写单目标，也可显式声明两者。音频正常、同音歧义已处理、未见可抄答案、识别经确认且字形正确时，双目标各获一次相关联成功证据。失败先冻结未判定结果，按 memory_model_v2.txt 6.1 在同一根作答内有限诊断；每目标至多一次诊断机会，confirmed_correct/confirmed_incorrect/assisted_failure 才可评分，unresolved/device_failure 不更新。全部确定结果统一 finalization，以 root_attempt_id × unit_id 去重。",
+      "notes": [
+        "对应当前 kana_handwriting。",
+        "无语境同音多写法接受等价答案；不能以目标内部 ID 强迫唯一答案。",
+        "双目标共享相关性组，不能冒充两次独立练习。",
+        "退出或跳过诊断时保留已确定结果，未确定部分在原到期安排中另作延迟单目标检查，不立即扩张题单。"
+      ],
+      "observed_dimensions": [
+        "K听辨",
+        "K手写"
+      ],
+      "evidence_mode": "conditional",
+      "allowed_primary_dimensions": [
+        "K听辨",
+        "K手写"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "no_new_transcript",
+        "accent_number": "target_hidden",
+        "scope": "独立听力不新增隐藏字幕或目标注音；已公开非考点文字仍需局部检查。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "kana_copy",
+      "label": "描红与临写",
+      "phase": "core",
+      "prompt": "显示目标字形或笔顺示范。",
+      "response": "沿示范描写或临写。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "答案可见，不能作为独立回忆成功更新任何 SRS。"
+      ],
+      "grading": "记录完成与书写练习反馈，不作记忆掌握判定。",
+      "notes": [
+        "用于初见教学及纠错后练习。",
+        "与遮住示范后的手写回忆明确区分。"
+      ],
+      "observed_dimensions": [
+        "K手写"
+      ],
+      "evidence_mode": "exposure_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "not_assessment",
+        "assessment_audio": "instruction_example_only",
+        "rule": "临写是教学曝光，可播放已显示范例，不产生独立评分。"
+      },
+      "prompt_annotations": {
+        "furigana": "instruction_or_reference",
+        "accent_number": "verified_reference_only",
+        "scope": "教学/跟读中可展示可靠参考，但不产生读法或听力独立成功。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "word_romaji_to_kana_tool",
+      "label": "罗马音拼单词：练假名",
+      "phase": "core",
+      "prompt": "显示整词罗马音和必要词义，不显示答案假名。",
+      "response": "逐字符选择假名组成整词。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [
+        "经可靠对齐的假名目标获得低权重实际排期证据，遵循统一去重与间隔保护策略。"
+      ],
+      "blocked_evidence": [
+        "不创建 V，不证明词义、词读法或主动词汇提取。",
+        "同一词内重复假名不重复计权，额外误输入字符不惩罚无关假名。"
+      ],
+      "grading": "整词提交后逐字符对齐，区分错字、漏字、重复、顺序、小假名、浊音与文字体系；无法可靠归因的片段不调整对应单位。",
+      "notes": [
+        "保留现有单独入口、草稿、追加批次和断点续练。",
+        "整个拗音不是一个键盘按钮。",
+        "低权重来源是情境化假名练习；不得自动升级为假名直接测验。"
+      ],
+      "observed_dimensions": [
+        "K拼写"
+      ],
+      "evidence_mode": "auxiliary_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "word_kana_to_romaji_tool",
+      "label": "单词假名逐字拼罗马音：练假名",
+      "phase": "core",
+      "prompt": "显示整词假名，以当前字符位置为操作单位。",
+      "response": "逐字符选罗马片段，最终拼出整词罗马音并提交。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [
+        "独立假名映射明确时只给低权重 K识读证据；组合字符只给相应上下文组合规则证据。"
+      ],
+      "blocked_evidence": [
+        "不创建 V。",
+        "きゃ 中的 k 或 しゃ 中的 sh 不能记为 き→ki 或 し→shi 的直接识读成功。",
+        "没有组合规则目标可承接时，片段结果只记训练日志，不强塞入单字能力。"
+      ],
+      "grading": "验证逐字计划与整词规范化罗马音一致；按单字、组合、促音、长音等上下文边界归因，不能将任意字符片段当独立读音。",
+      "notes": [
+        "保留现有 word_romaji 的逐字操作，不改成整词四选一。",
+        "当前实现示例：きゃ 为 k/ya，しゃ 为 sh/a；界面将其称为拼写片段。"
+      ],
+      "observed_dimensions": [
+        "K识读"
+      ],
+      "evidence_mode": "auxiliary_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "word_audio_to_kana_tool",
+      "label": "听词拼假名：练假名",
+      "phase": "core",
+      "prompt": "播放单词音频，可按设置显示词义提示或不含答案的音高线。",
+      "response": "逐字符用假名拼出读音。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [
+        "只有可可靠对齐的位置才给对应 K听辨或 K拼写低权重证据。"
+      ],
+      "blocked_evidence": [
+        "没有显式加入词汇学习时不创建或更新 V。",
+        "音频故障、同音写法歧义与无法对齐片段不更新相关单位。"
+      ],
+      "grading": "整词匹配并逐位置分析；保留错误来源与提示记录，重做不重复增加成功证据。",
+      "notes": [
+        "对应现有 word_kana。",
+        "默认不把猜测词义当作已经掌握词汇。"
+      ],
+      "observed_dimensions": [
+        "K听辨"
+      ],
+      "evidence_mode": "auxiliary_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "no_new_transcript",
+        "accent_number": "target_hidden",
+        "scope": "独立听力不新增隐藏字幕或目标注音；已公开非考点文字仍需局部检查。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_meaning",
+      "label": "看词理解词义",
+      "phase": "core",
+      "prompt": "显示目标日文词与足以消歧的短语境。",
+      "response": "选择对应含义，或写简短释义。",
+      "primary_dimension": "V理解",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "凭汉字猜到词义不能提高 V读法或 V听辨理解。",
+        "回答另一个义项不能自动证明题目目标义项已掌握。"
+      ],
+      "grading": "初学用审核过的意义选项，后期接受等价释义；开放释义不确定时请求确认，不自动改 SRS。",
+      "notes": [
+        "词义以合法读法—义项关系定位，不按汉字字符串合并全部含义。",
+        "中文翻译允许合理语义表达，不以单一中文措辞判错。"
+      ],
+      "observed_dimensions": [
+        "V理解"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V理解"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_audio_meaning",
+      "label": "听词理解词义",
+      "phase": "core",
+      "prompt": "播放目标词或短语境音频，默认不先展示汉字。",
+      "response": "选择含义、图片，或给简短释义。",
+      "primary_dimension": "V听辨理解",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "不能因文字理解正确就替代听辨理解证据。",
+        "音频或识别条件不足时不扣词义、读法或假名分。"
+      ],
+      "grading": "以可辨认音频和已审核语义答案判分；显示文字或翻译后标记提示。",
+      "notes": [
+        "仅在用户启用听力学习时建立该能力安排。",
+        "防止中文母语者长期只靠汉字识义而跳过听觉理解。"
+      ],
+      "observed_dimensions": [
+        "V听辨理解"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V听辨理解"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "no_new_transcript",
+        "accent_number": "target_hidden",
+        "scope": "独立听力不新增隐藏字幕或目标注音；已公开非考点文字仍需局部检查。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_reading",
+      "label": "单词读法",
+      "phase": "core",
+      "prompt": "显示日文书写与用于消歧的义项或语境。",
+      "response": "从读法选项选择，或主动输入假名；可允许约定罗马音输入。",
+      "primary_dimension": "V读法",
+      "auxiliary_evidence": [
+        "可可靠对齐的假名书写错误才给相应 K 低权重证据。"
+      ],
+      "blocked_evidence": [
+        "不证明该词所有义项已掌握。",
+        "同形多读法且语境不足时不得硬判唯一读法。"
+      ],
+      "grading": "按该语境允许的读法集合判断；假名输入与罗马音输入记录不同支架，但不因此拆新记忆内容。",
+      "notes": [
+        "文字答案中的音高标注不参与拼写比较。",
+        "不得把汉语对应字的读音当作日语读法答案。"
+      ],
+      "observed_dimensions": [
+        "V读法"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V读法"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_recall",
+      "label": "按含义或情境提取单词",
+      "phase": "core",
+      "prompt": "给出释义、情境或图片，必要时限定语体和目标意义。",
+      "response": "输入相应日语词语。",
+      "primary_dimension": "V提取与使用",
+      "auxiliary_evidence": [
+        "目标词已明确且字形位置可对齐时，提供 K 低权重证据。"
+      ],
+      "blocked_evidence": [
+        "答出合理同义词不等于回忆出指定目标词。",
+        "缺少消歧条件时不能以唯一词库答案否定合理表达。"
+      ],
+      "grading": "接受明确的允许答案；合理替代表达可判任务成功，但目标词无回忆证据时不延长其排期。",
+      "notes": [
+        "从短释义逐步转为情境提示。",
+        "书写形式按目标要求判定；不额外要求题目未声明的汉字书写。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_orthography",
+      "label": "单词书写形式",
+      "phase": "core",
+      "prompt": "给出读音、含义与必要语境，要求目标词的适当书写。",
+      "response": "选择或输入合适汉字、假名或词条允许的写法。",
+      "primary_dimension": "V提取与使用",
+      "auxiliary_evidence": [
+        "明确测到的假名书写部分可给 K 低权重证据。"
+      ],
+      "blocked_evidence": [
+        "不创建额外的全局汉字掌握状态。",
+        "不会因为某词写对就推断会该汉字所有词中的读法。"
+      ],
+      "grading": "使用词条级允许书写集合；中文简体、繁体与日文异体不一律等价，也不在未要求书写差别时过度纠错。",
+      "notes": [
+        "使用 orthography 子能力标签，不再增加独立维度。",
+        "日常接受的异体与学习目标字形由内容规范明确。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "target_hidden",
+        "accent_number": "separate_leak_check",
+        "scope": "读法/拼写/字形目标不可被公开；已有音高线/数字提示仅在原任务允许且不泄题时保留。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_usage",
+      "label": "语境选词与搭配",
+      "phase": "core",
+      "prompt": "给出已知词构成的句子、语境与一个目标词槽。",
+      "response": "选词或填词。",
+      "primary_dimension": "V提取与使用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "句中背景词不因出现获得成功证据。",
+        "目标搭配错不能直接推断基本词义也遗忘。"
+      ],
+      "grading": "审核近义词、搭配与语体边界；支持多个自然答案，必要时以子能力标签记录使用错误。",
+      "notes": [
+        "LLM 可生成情境，但选项与答案必须经过歧义检查。",
+        "词义提示应简短，来源与长说明放详情。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "vocab_zh_ja_contrast",
+      "label": "中日表达差异辨析",
+      "phase": "core",
+      "prompt": "给出明确情境，呈现容易受中文影响的日语词义、搭配或语体选择。",
+      "response": "选择合适表达，或修正一处不合适用法。",
+      "primary_dimension": "V提取与使用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "相同汉字不自动视为相同词义。",
+        "不能把所有中日差异另建一套重复记忆卡。"
+      ],
+      "grading": "以日语语境与目标义项判分；同形异义、义域、搭配和语体分别标注错因，不靠逐字中文对译判断。",
+      "notes": [
+        "中日易混关系作为内容关联和错误标签。",
+        "纯意义辨析题主维度可在生成时明确指定 V理解，不能答后任意改换目标。"
+      ],
+      "observed_dimensions": [
+        "V理解",
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V理解",
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "grammar_meaning",
+      "label": "理解语法含义",
+      "phase": "core",
+      "prompt": "显示含目标构式的短句或对话；背景词已知或给短释义。",
+      "response": "选择或说明含义、时间关系、意图或成立条件。",
+      "primary_dimension": "G理解",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "背景词的出现不更新其词汇记忆。",
+        "因未知词读不懂时不直接判定目标语法遗忘。"
+      ],
+      "grading": "按特定功能与约束评分；多个可能解释时补语境或跳过评分。",
+      "notes": [
+        "同一构式的不同功能可拆内容关系，不按表面字串一概合并。",
+        "解释避免占据题面主位置。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G理解"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "G理解"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "grammar_cloze",
+      "label": "语法选择与填空",
+      "phase": "core",
+      "prompt": "给出情境与句子缺口，明确需完成的助词、接续或结构。",
+      "response": "从有限选项选择，或键入目标形式。",
+      "primary_dimension": "G应用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "不因选对结构就推断能自由造句。",
+        "无充分语境的多解题不进行唯一答案惩罚。"
+      ],
+      "grading": "按审核的允许形式集合及约束判分；选择到键入属于支架升级。",
+      "notes": [
+        "确保干扰项差异对应目标规则，不靠冷僻词义猜答案。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G应用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "G应用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_non_target_spans_only",
+        "accent_number": "safe_non_target_spans_only",
+        "scope": "缺口与变形/纠错/排序目标不标注；不得借注音补全或修正答案。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "grammar_transform",
+      "label": "活用与句式转换",
+      "phase": "core",
+      "prompt": "给出辞书形或完整句子及明确变化要求。",
+      "response": "输入否定、过去、条件等目标形式或改写句。",
+      "primary_dimension": "G应用",
+      "auxiliary_evidence": [
+        "经明确归因的假名书写只有存在受支持的 K 映射时才可给低权重证据。"
+      ],
+      "blocked_evidence": [
+        "词干错误与规则错误无法分开时不同时惩罚所有相关单位。",
+        "规则活用成功不自动证明原词全部含义。"
+      ],
+      "grading": "区分规则、词汇例外与输入拼写错误；题目生成时确定主目标，不能答错后扩大处罚范围。",
+      "notes": [
+        "一般规则归 G应用；词汇特例可显式以 V提取与使用作为该题主维度。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_non_target_spans_only",
+        "accent_number": "safe_non_target_spans_only",
+        "scope": "缺口与变形/纠错/排序目标不标注；不得借注音补全或修正答案。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "grammar_reorder",
+      "label": "句子重组",
+      "phase": "core",
+      "prompt": "给出词块、语境与表达意图。",
+      "response": "排列词块形成句子。",
+      "primary_dimension": "G应用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "词块已经给出，不能计为词汇主动提取成功。",
+        "不能将重组成功等同于自由造句。"
+      ],
+      "grading": "接受语境中自然成立的多种顺序；只评价预设语序或接续目标。",
+      "notes": [
+        "作为初学支架，不无限滞留在此题型。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G应用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "G应用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_non_target_spans_only",
+        "accent_number": "safe_non_target_spans_only",
+        "scope": "缺口与变形/纠错/排序目标不标注；不得借注音补全或修正答案。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "targeted_correction",
+      "label": "找错并修正",
+      "phase": "core",
+      "prompt": "显示一个包含明确目标问题的短句，限定检查范围。",
+      "response": "定位并修正目标处。",
+      "primary_dimension": "G应用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "不能将自然但不常见的表达当错。",
+        "未能定位问题时不惩罚整句所有词和规则。"
+      ],
+      "grading": "首期只采用有确定可接受改法的目标错误；词汇用法题在生成时显式绑定 V提取与使用。",
+      "notes": [
+        "一次通常一个目标，减少多种错误互相遮掩。",
+        "修正后的即时重复不产生新的独立成功。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_non_target_spans_only",
+        "accent_number": "safe_non_target_spans_only",
+        "scope": "缺口与变形/纠错/排序目标不标注；不得借注音补全或修正答案。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "reading_comprehension",
+      "label": "短篇阅读理解",
+      "phase": "core",
+      "prompt": "展示以已学词和语法构成的短文，并提出一个可定位的问题。",
+      "response": "选择答案或给简短回答。",
+      "primary_dimension": "V理解",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "阅读过不等于掌握文中全部词汇和语法。",
+        "答对常识问题不能冒充理解语言目标。"
+      ],
+      "grading": "出题前从 V理解、G理解 中声明具体主目标；只有问题明确测到且有独立可区分评分依据的目标才更新。读过的其他词和语法只记曝光。无法定位到明确目标时仅记阅读练习，不根据整题正确批量更新。",
+      "notes": [
+        "点击查词、译文和提示记录到对应评估。",
+        "避免词义或语法之外的背景知识决定成败。"
+      ],
+      "observed_dimensions": [
+        "V理解",
+        "G理解"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V理解",
+        "G理解"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "conditional",
+        "assessment_audio": "not_required",
+        "rule": "只有该实例是选择题、题干完整且不考读音或任何形式的填空，并通过泄露检查时，才朗读已公开日语题干。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional",
+        "accent_number": "conditional",
+        "scope": "当前公开题干的安全词段；每实例检查语义/读音歧义，非选择题也不得显示目标输出。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "listening_comprehension",
+      "label": "短句听力理解",
+      "phase": "core",
+      "prompt": "播放已学材料构成的短句或对话，不先显示全文。",
+      "response": "回答针对目标含义、关系或意图的问题。",
+      "primary_dimension": "V听辨理解",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "原因不明的听不懂不能批量降低所有词汇、假名和语法。",
+        "显示全文后不能计作未提示的听觉成功。"
+      ],
+      "grading": "出题前从 V听辨理解、G理解 中声明具体主目标；语法与听觉理解若同时声明须有可区分判分依据。按允许回答与可靠音频评分；不确定原因不扩散扣分。字幕、翻译与重播记录到对应目标的提示状态。",
+      "notes": [
+        "听力关闭时保留已有能力记录和到期状态。",
+        "主目标为纯语法时应在题目前声明，不能事后根据错误猜测。"
+      ],
+      "observed_dimensions": [
+        "V听辨理解",
+        "G理解"
+      ],
+      "evidence_mode": "primary",
+      "allowed_primary_dimensions": [
+        "V听辨理解",
+        "G理解"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "no_new_transcript",
+        "accent_number": "target_hidden",
+        "scope": "独立听力不新增隐藏字幕或目标注音；已公开非考点文字仍需局部检查。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "controlled_sentence_production",
+      "label": "受控造句",
+      "phase": "core",
+      "prompt": "给出意图、指定已学目标与必要情境。",
+      "response": "写一句包含目标用法的日语句子。",
+      "primary_dimension": "G应用",
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "句中其他词正确出现不自动批量加分。",
+        "LLM低置信度或仅风格偏好不能自动触发 SRS 更新。"
+      ],
+      "grading": "出题前从 G应用、V提取与使用 中冻结目标；只有满足可靠评分与逐目标归因条件才产生主证据。首期限制目标数量；自然度或风格意见仅反馈。对 V/G 不机械使用辅助权重，不确定目标保持未判定。",
+      "notes": [
+        "若主目标是词汇用法，生成前改用 V提取与使用。",
+        "词汇或语法提示已透露目标时记录为辅助作答。",
+        "新语法目标必须先经过 first_learning_flow；在引导阶段可复用此题型，但只能记录教学曝光，不按本题型的正式 evidence_mode 评分。"
+      ],
+      "observed_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "evidence_mode": "conditional",
+      "allowed_primary_dimensions": [
+        "G应用",
+        "V提取与使用"
+      ],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_non_target_spans_only",
+        "accent_number": "safe_non_target_spans_only",
+        "scope": "缺口与变形/纠错/排序目标不标注；不得借注音补全或修正答案。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "free_writing_translation",
+      "label": "自由写作与翻译",
+      "phase": "extended",
+      "prompt": "给出情境、表达任务或需要转述的短文。",
+      "response": "开放式书面表达或翻译。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "开放回答整体分数不能直接分摊到所有词汇和语法。",
+        "不同于参考答案不等于错误；风格建议不影响 SRS。"
+      ],
+      "grading": "当前只保存作品、反馈与错因，不自动改变排期。多种合理表达必须接受；未来评分能力验证完成后需显式升级模式，不能在训练中临时加主证据。",
+      "notes": [
+        "当前只保存作品、用法反馈和错误标签，涉及语法不意味着建立 G 主评分。",
+        "正式更新前应有逐目标评分、置信度门槛和争议反馈入口。",
+        "本规范的 training_only 模式不允许任何主评分。未来如启用可验证目标评分，须另行版本化改为 conditional 并声明允许维度，不能仅凭 LLM 给出分数自动升级。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "training_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_prompt_spans_only",
+        "accent_number": "safe_prompt_spans_only",
+        "scope": "仅给公开的背景材料标注；不生成目标答案或回应脚本，按实际目标决定。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "situational_dialogue",
+      "label": "情景对话",
+      "phase": "experimental",
+      "prompt": "给出角色和任务，由 LLM 围绕已学内容推进对话。",
+      "response": "多轮文字或口语回答。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "参与对话或完成任务不等于掌握对话中全部语言内容。",
+        "模型改写、暗示或补全后的回答不记独立回忆。"
+      ],
+      "grading": "当前仅记录任务完成、提示、对话和反馈；training_only 下不自动调整 SRS。未来只有逐目标评分得到验证且模式被显式升级后才允许主评分。",
+      "notes": [
+        "控制新词、新义项与新语法密度。",
+        "会话重复出现同一目标只保留依赖练习，不反复延长间隔。",
+        "本规范的 training_only 模式不允许任何主评分。未来如启用可验证目标评分，须另行版本化改为 conditional 并声明允许维度，不能仅凭 LLM 给出分数自动升级。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "training_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_prompt_spans_only",
+        "accent_number": "safe_prompt_spans_only",
+        "scope": "仅给公开的背景材料标注；不生成目标答案或回应脚本，按实际目标决定。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "pitch_discrimination",
+      "label": "音高辨识",
+      "phase": "extended",
+      "prompt": "播放经审核且对应同一读法与方言范围的音高样本，或给出音型选择。",
+      "response": "选择与目标词条匹配的音型。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "音高选择不提高词义、书写、假名或日语读法的 SRS。",
+        "未经审核的合成差别不能成为标准答案依据。"
+      ],
+      "grading": "以可靠音频与标注评估；默认存入独立发音日志，不进入 SRS。",
+      "notes": [
+        "词条允许多个音型时不能只认一个。",
+        "音高线和调号是独立显示选项，不混进回答字串。"
+      ],
+      "observed_dimensions": [
+        "P发音训练"
+      ],
+      "evidence_mode": "training_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "conditional_visible_text_only",
+        "accent_number": "target_hidden",
+        "scope": "不新增未公开转写；目标音高数字/音高线都隐藏。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "shadowing_read_aloud",
+      "label": "跟读与朗读",
+      "phase": "experimental",
+      "prompt": "给出目标音频或文字，要求模仿或朗读。",
+      "response": "录音。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "文本可见时不测词汇回忆。",
+        "ASR转写正确不等于音段、节奏或音高正确。",
+        "设备、噪音和识别问题不扣语义记忆分。"
+      ],
+      "grading": "按已验证能力提供音段、时长、节奏与音高反馈；未校准评分只作建议，默认不进入 SRS。",
+      "notes": [
+        "转写、发音评价和语义评价分别显示或记录。",
+        "不把无法可靠测量的维度包装成精确分数。"
+      ],
+      "observed_dimensions": [
+        "P发音训练"
+      ],
+      "evidence_mode": "training_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "preserve_required_stimulus",
+        "rule": "保留本题型预定义的听觉刺激；不得额外读出隐藏答案、字幕、正确音型或补全句。"
+      },
+      "prompt_annotations": {
+        "furigana": "instruction_or_reference",
+        "accent_number": "verified_reference_only",
+        "scope": "教学/跟读中可展示可靠参考，但不产生读法或听力独立成功。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    },
+    {
+      "id": "spoken_recall",
+      "label": "口头主动回答",
+      "phase": "experimental",
+      "prompt": "给出含义或情境，不展示目标答案文字。",
+      "response": "用日语口头回答。",
+      "primary_dimension": null,
+      "auxiliary_evidence": [],
+      "blocked_evidence": [
+        "识别不确定时不降低词汇或语法。",
+        "能说出内容不自动证明会写对应假名或汉字。"
+      ],
+      "grading": "先确认转写再给词汇、语法和发音反馈；当前 training_only 只保存训练日志，不更新 SRS。后续须完成可靠性验证并显式启用 conditional 模式后才可预声明主目标。",
+      "notes": [
+        "如果用户纠正 ASR 转写，不应把识别器错误当学习失败。",
+        "与看文字朗读分开：本题需要主动内容提取。",
+        "本规范的 training_only 模式不允许任何主评分。未来如启用可验证目标评分，须另行版本化改为 conditional 并声明允许维度，不能仅凭 LLM 给出分数自动升级。"
+      ],
+      "observed_dimensions": [
+        "V提取与使用"
+      ],
+      "evidence_mode": "training_only",
+      "allowed_primary_dimensions": [],
+      "prompt_audio": {
+        "optional_read_aloud": "disabled",
+        "assessment_audio": "none_by_default",
+        "rule": "不属于本次安全附加朗读范围，或声音可能泄露读音、字形、变形、语序/改错目标；反馈与教学音频另行控制。"
+      },
+      "prompt_annotations": {
+        "furigana": "safe_prompt_spans_only",
+        "accent_number": "safe_prompt_spans_only",
+        "scope": "仅给公开的背景材料标注；不生成目标答案或回应脚本，按实际目标决定。",
+        "source_rule": "读音与音高分别核验；缺可靠音高则只标假名，未知不写0，活用表层不盲用辞书形调号。"
+      }
+    }
+  ],
+  "evidence_modes": {
+    "primary": "可为出题前冻结的主目标提供证据；仍需可靠、可归因的评分，不能由模式本身自动调用调度器。",
+    "auxiliary_only": "只有明确支持的 K 辅助映射可产生有上限的低权重证据；不生成主 FSRS 评分。",
+    "exposure_only": "记录接触或答案可见的练习，不更新 SRS。",
+    "conditional": "只有符合预声明目标、可靠测量与归因条件才生成主评分；未满足时保持未判定、设备问题或训练记录。",
+    "training_only": "默认仅训练日志和反馈，不更新 SRS；未来启用主评分须另行版本化验证与显式模式变更。"
+  },
+  "field_contract": {
+    "primary_dimension": "题型默认候选主维度，不是必评分指令；无主评分的模式为 null。实际评估只使用出题前冻结的 declared_primary_units。",
+    "allowed_primary_dimensions": "可在出题前声明的主目标维度白名单。空数组禁止主评分；列表中出现不意味着同时评分，更不能答题后补目标。",
+    "observed_dimensions": "题型可能关联的观察或训练维度；不是 SRS 更新白名单。",
+    "evidence_mode": "先于 primary_dimension 判断能否产生主调度证据。辅助、曝光和训练模式绝不调用主评分。",
+    "declared_primary_units": "属于具体题目实例；从 allowed_primary_dimensions 中选择具体单位并冻结。复合题逐目标判定，统一在同一 root_attempt_id 内最终保存。",
+    "auxiliary_evidence": "只有明确支持且有可归因映射的 K 才能进入既有低权重策略；其他辅助观察仅用于诊断和选题，不机械采用 0.25。",
+    "prompt_annotations": "题型默认的题干注音/调号约束，不是无条件显示许可；实例须分别检查目标泄露、公开范围、词段对齐和来源，且服从显示开关。"
+  },
+  "first_learning_flow": {
+    "status": "design_only",
+    "is_question_type": false,
+    "default_entry": "introducing",
+    "scope": "按内容身份保存介绍进度，按能力保存独立检验准备状态；未引入内容先教再练。",
+    "states": [
+      {
+        "id": "unintroduced",
+        "label": "未引入",
+        "meaning": "已加入待学范围，但还未开始教学。",
+        "srs_update": false
+      },
+      {
+        "id": "introducing",
+        "label": "先学一学",
+        "meaning": "展示一个目标的意思、形式和必要示例，检查最小前置知识。",
+        "srs_update": false
+      },
+      {
+        "id": "guided",
+        "label": "跟着练",
+        "meaning": "关键规则或部分答案可见，复用选择、填空等现有题型完成小步骤。",
+        "srs_update": false
+      },
+      {
+        "id": "retrieval",
+        "label": "自己试试",
+        "meaning": "教学后交错，在新的等价实例中移去目标规则和答案提示，进行可归因的独立检验。",
+        "srs_update": "符合证据要求后按对应能力一次真实评分；初次进入 Learning，非直接长期毕业。"
+      },
+      {
+        "id": "spaced_review",
+        "label": "按时复习",
+        "meaning": "由调度器实际完成学习步骤后进入间隔复习；失败仅回补缺失知识。",
+        "srs_update": "沿用主证据、辅助证据及幂等规则。"
+      }
+    ],
+    "transitions": [
+      "unintroduced -> introducing：默认先介绍，不派发猜规则的测验。",
+      "introducing -> guided：用户继续且本任务必要知识已介绍；继续按钮不等于掌握。",
+      "guided -> retrieval：完成当前引导并准备好；相同答案的即时重做仍是教学，先交错再用新实例检验。",
+      "retrieval -> spaced_review：由真实作答和调度器学习步骤决定，不由介绍页按钮决定。",
+      "独立失败 -> 定向补教 -> 延迟／交错后的 retrieval：一次失败只结算一次，即时纠正不另计成功或失败。",
+      "任意教学阶段 -> 暂停／恢复：保存 checkpoint、输入、提示和曝光依赖，不扣记忆分，不重复添加。"
+    ],
+    "instruction_requirements": {
+      "K": "当前字形、读法、对应发音；按目标补最小易混区别或书写示范。",
+      "V": "当前词形、读法、一个核心义项及常用搭配或短例句；必要的中日区别就地一条。",
+      "G": "当前功能的直白解释、使用情境、接续、一个拆分后的完整例子；不先要求用户猜规则。",
+      "prerequisites": "未知接续先作最小补教；提供て形不等于已掌握て形转换。理解可在支持下教学，应用需单独满足准备条件。",
+      "metadata": "出处、许可、历史语源和审核过程放资料层，不混入必读教学。"
+    },
+    "evidence_gate": {
+      "introducing_and_guided": "强制 exposure_only；不调用 FSRS、不改变辅助间隔、不出现成功评级；错误只是教学反馈。",
+      "retrieval": "仍须符合题型 evidence_mode、预声明目标和提示规则；有选项的独立识别不冒充无选项回忆。",
+      "immediate_repetition": "同 exposure_group 下刚看过的同一答案，即使换题面也不能算新独立成功。",
+      "test_out": "仅作讲解展开前的次级入口；自述我会不计分，真实定级成功才建证据。已看过讲解则保留曝光，先交错／延迟，不能伪装基线测试。",
+      "first_learning_failure": "未教的先备知识、教学错误或资源故障不记为目标遗忘；定级失败返回介绍，不是长期复习 lapse。"
+    },
+    "resume_and_preferences": [
+      "保存 introduction_id、content_revision、stage、instruction_checkpoint、exposure_group 和各能力 instruction_ready。",
+      "追加批次不覆盖教学现场；introduction_id × checkpoint 幂等；内容计数不因重启或重复继续增长。",
+      "关闭题型保留教学和到期；换用兼容且已启用的方式，全部关闭则暂不可练，不能擅自启用听音或手写。",
+      "旧真实复习历史标为 legacy_introduced，保留 due；旧词拼写或浏览不能自动创建 V 的已介绍／已掌握状态。",
+      "新增能力仅补其必要示范，新增义项或语法功能必须有对应介绍；稍后继续不清掉已有 due。"
+    ],
+    "llm_scope": "基础讲解来自已核验内容；LLM 仅补充受约束示例。仍在未引入、介绍或引导阶段的目标不能当作已学应用任务中的已掌握背景。",
+    "reference": "memory_model_v2.txt 2.1；介绍与引导是流程层，不改变 29 类题型总数。",
+    "missing_material": "核心讲解、必要接续或示例缺失时标记 instruction_missing，保留待学并继续其它内容；不直接发测验，不用未核验的临时 LLM 规则替代。"
+  },
+  "optional_prompt_audio_policy": {
+    "status": "design_only",
+    "purpose": "为不考读音、拼写或填空的选择题提供安全的题干朗读；不是新的题型或记忆单位。",
+    "placement": "完整日语题干旁的小喇叭，accessible_name=朗读题干；不在中文答案选项或隐藏答案旁批量生成。",
+    "roles": {
+      "optional_prompt_read_aloud": "安全公开题干的附加呈现，须通过实例级泄露检查。",
+      "assessment_stimulus": "原生听力、音高、跟读题所需刺激，按原评分定义保留。",
+      "instruction_example": "介绍或引导中已显示的范例，不产生独立复习评分。",
+      "answer_feedback": "提交后的答案读音，不可在提交前使用同一未受限入口播放。"
+    },
+    "eligibility_all": [
+      "作答方式是选择，且题目预声明目标不包含读音、拼写、发音、音高或音素区分。",
+      "不存在显式空格、缺字，也不是需要补词、补接续、活用或重排的隐含填空任务。",
+      "朗读范围严格等于当前公开的日语题干片段，没有补全、改写、翻译、解析或选项正误信息。",
+      "声音不会凭同形异读、目标重音、纠正病句或异常停顿消除本题要考的区别。",
+      "音频或TTS读法经过对应内容核对，并匹配当前question_id、内容版本和payload_hash。"
+    ],
+    "payload_rules": [
+      "从visible_prompt_segments等白名单公开字段构建audible_segments；不从整页DOM、correct_answer或生成解析构建。",
+      "禁止读取隐藏假名、罗马音、正确选项、完整填空答案、中文答案选项和语法规则。",
+      "不将含空缺句替换成已填好句子；本轮范围内填空题直接禁用附加朗读。",
+      "LLM不能改写朗读稿或自行决定可播资格；不确定时不展示可播按钮。",
+      "不同题目不共享含答案的未隔离音频对象；离题停止朗读，迟到回调不得串题。"
+    ],
+    "evidence_rules": [
+      "通过资格检查的朗读不是查看答案；记录prompt_audio_played、重播数与text_plus_audio条件，理解主目标仍按实际作答评分。",
+      "文字可见时播放题干不自动产生听辨主证据，不新建听力卡，不产生逐词/逐假名辅助奖励；播放本身不算作答。",
+      "系统误播答案记invalid/unresolved与曝光，不按用户遗忘Again处罚；稍后换新实例检验。",
+      "可选音频失败不改评分和间隔，可继续视觉回答；原生听力必需音频失败则该听力证据无效。",
+      "提交后听答案只记反馈曝光，不倒改提交前的提示状态和首次回答。"
+    ],
+    "instance_fields": [
+      "audio_role",
+      "prompt_audio_policy",
+      "audible_segments",
+      "payload_hash",
+      "content_revision",
+      "leak_check_result",
+      "blocked_reason"
+    ],
+    "verification_cases": [
+      "完整句语法/词义选择有题干朗读，听到的内容与公开日语相同。",
+      "读音、拼写、显式/隐含填空和泄露目标音高的附加朗读被禁用。",
+      "只改变正确答案或错误选项，不改变同一公开题干的朗读payload。",
+      "原生听力刺激仍可播放，答案音频不提前开放。",
+      "声音故障、换题异步、重复点击均不产生额外记忆更新。"
+    ],
+    "reference": "memory_model_v2.txt 第6.3节"
+  },
+  "optional_prompt_annotation_policy": {
+    "status": "design_only",
+    "purpose": "在不泄露目标答案时，为当前公开日语题干提供上方假名注音与可靠的数字调号。",
+    "placement": "词或适当词段上方的 ruby：正文保留表层词形，上方显示对应假名与该词段数字调号；不为整句虚构统一调号。",
+    "settings": {
+      "furigana": "跟随题干假名注音开关",
+      "accent_number": "跟随数字调号开关",
+      "pitch_line": "沿用现有音高线开关，可与数字同时显示",
+      "precedence": "实例泄题限制优先于任何显示开关"
+    },
+    "eligibility": [
+      "从当前公开题干字段及可靠词段对齐构建，不从正确答案、解析或隐藏字幕生成。",
+      "分别检查假名与数字是否会给出读法、拼写、音高、正字法、活用或语义辨析的目标答案；不安全的分量不显示。",
+      "理解题的读法不是考点且注音不消除待考歧义时，可以使用注音，不因含汉字就一概禁用。",
+      "填空目标保持为空，不产生目标假名、调号、词长/拍数占位；仅允许已公开且安全的非目标片段。",
+      "原生听力题不增加未公开字幕或转写；教学或反馈有独立角色，不冒充听力独立检验。",
+      "正字法、变形、排序和改错目标不能被注音层规范化纠正；不确定时省略相应标注。"
+    ],
+    "data_rules": [
+      "假名须匹配当前表层词形、读法—义项、分词边界、上下文及版本。",
+      "调号须有对应词段、语种/方言与表层形式的可靠来源；不把辞书形调号直接套到活用短语。",
+      "词典调号不等于整句语调；不为一整句话虚构单一数字。",
+      "读音可靠而音高未知时只显示假名；未知不写0，也不由LLM或罗马音转换器猜测。",
+      "多个合法读音或音高变体须与当前实例相符，不能用默认读法暴露本来要考的区别。",
+      "不把注音、调号、音高线加入用户答案字串；选项本身不自动追加同类标注。"
+    ],
+    "evidence_rules": [
+      "安全辅助展示不是查看答案，不自动锁Again；记录实际可见注音/调号和aided_reading条件。",
+      "只评价原本声明且未被泄露的目标，展示假名不证明独立读法、假名识读或听辨掌握。",
+      "声明了读法的复合题若公开目标注音，必须在展示前撤去注音或改为教学/辅助任务；不能仍将读法计为独立成功。",
+      "系统误泄答案、错误调号或错位注音按invalid/unresolved与曝光处理，不作为用户遗忘处罚。",
+      "提交后查看读音属于反馈；显示设置和重启不能抹去已发生的目标曝光。"
+    ],
+    "instance_fields": [
+      "annotation_role",
+      "visible_span",
+      "surface_form",
+      "surface_reading",
+      "reading_source_id",
+      "accent_number",
+      "accent_source_id",
+      "accent_scope",
+      "pronunciation_variety",
+      "content_revision",
+      "leak_check_result",
+      "blocked_components"
+    ],
+    "verification_cases": [
+      "意义题安全注音",
+      "读法目标隐藏",
+      "音高目标隐藏",
+      "听力无新增转写",
+      "填空无目标注音或拍数",
+      "安全非目标局部注音",
+      "未知音高非0",
+      "活用音高不盲套辞书形",
+      "显示开关独立且不越过泄题门控",
+      "大字号注音和正文对齐",
+      "显示辅助不奖励读法/听力"
+    ],
+    "reference": "memory_model_v2.txt 第6.4节"
+  }
+}

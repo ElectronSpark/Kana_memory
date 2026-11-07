@@ -1,0 +1,41 @@
+例句逐词注音与调号 v1
+====================
+
+显示入口
+共享例句卡片、例句库、学习项详情、首次学习、词条例句及其详情、添加例句预览、AI候选例句共用按词标注组件。
+题中显式打开“再看讲解”与作答后“详细”的日文示范也使用该组件；中文或混合说明仍保留界面字体。
+汉字词和其送り仮名保持原文，上方显示假名及数字调号。数字针对对应词形/活用单位，不给整句虚构一个调号。
+原有重点高亮与片段多重关联索引继续使用原文 Unicode 偏移；注音本身不新增索引，也不拼入答案或朗读文本。
+“显示”里的日文假名注音与日文数字调号可分别开关；旧设置值保留，开关可刷新仍打开的例句。
+来源与生成方式放在“资料”；具体待核范围保留在页面反馈记录及构建报告中，不挤入主要例句旁。
+
+题目边界
+教学例句组件不直接用于正式题目。题目仍走 question_support 的考点、可见性、版本和片段校验。
+仅已明确允许读音辅助的公开完整理解类题干，才可只用其公开文字查询本地标注。
+读法、听力、手写、拼写、音高、读音规则、填空、转换、排序及未知题型不会启动整句标注查询。
+既有局部禁止标注的范围会限制覆盖它的较大词段。AI安全标记不能使题目绕过检查。
+本地补全仅影响渲染，不修改旧题快照、草稿、学习项、评分记录、队列或复习日期。
+最终显示的辅助状态仍按现有规则记录；看到注音不能算作独立识读成功。
+主动查看讲解先保存辅助作答状态；返回读音或听力题后仍隐藏题干注音，不把讲解显示状态带回题目。
+
+资源与可复现构建
+读取 app/src/kanamemory/resources/sentence_annotations.sqlite3，独立于学习数据库。
+格式 kanamemory-sentence-annotations，版本1；SQLite user_version也为1。
+sentence表按原文SHA256与原文双重核对；每段保存start/end/surface/reading/accent_number及来源。
+start/end使用Python Unicode codepoint，必须精确锚定原句；表层调号还必须同时匹配accent_surface与accent_reading。
+accent_scope为word或inflected_unit，未知调号为null，不能以0代替。多个词典调型保存在accent_alternatives。
+精确核实的多段音高使用可选accent_scope=phrase_sequence及accent_phrases；每段独立保存读法与调号。
+各段读法必须完整拼回原读法；整体accent_number保持null，界面用「｜」隔开调号，不造一个整词调号。
+该扩展仍兼容版本1，不改例句ID、学习数据库或旧题快照；两个显示开关仍独立生效。
+中文说明、历史引用和不能确定的人名等按精确句子及范围单独记录，不套上现代日语猜读。
+失败或未知版本退回原文；只读查询、关闭连接、缓存上限512条，不按学习进度写入此库。
+新添加文字先查原句；未收录的文字只允许词典中整段匹配且读法/调号无歧义的保守补全，不保证任意新句全覆盖。
+
+构建工具：tools/sentence_annotation_corpus.py 收集实际显示的公开文本，包含词库审校投影而非已修正前原文。
+tools/build_sentence_annotations.py 使用隔离安装的 pyopenjtalk-plus、Sudachi 与原有Kanjium词典进行预计算。
+tools/sentence_annotation_overrides.py 保存有证据的精确修正与排除。原始文本、例句ID和关联不被改写。
+data/enrichment/sentence_annotation_review_v1.json保存后续人工核对；tools/annotation_followup_review.py校验原句、范围和原读法后应用。
+无充分证据或资料冲突的项目保留待核；“资料”中显示具体范围与原因，主要例句旁不重复放来源说明。
+运行时只依赖Python标准库和已有App模块，不将分析器及其大词典装进手机。
+来源版本、依赖版本、覆盖数及未决清单写入 environment/sentence_annotation_coverage.json；许可文本随资源打包。
+自动上下文读法与音高连接规则并不等同逐词人工认证，覆盖率与语言准确性分别记录。

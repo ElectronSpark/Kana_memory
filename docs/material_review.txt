@@ -1,0 +1,88 @@
+Material and association review, 2026-10-26
+=========================================
+
+Scope and evidence
+------------------
+The review baseline contains 524 authored learning items (324 grammar, 166
+reading/sense-specific word lessons, 34 pronunciation lessons), 4,388 distinct
+shared examples and 5,707 contextual references. Review ledgers record item,
+example and reference IDs, findings, sources and candidate decisions. This is
+linguistic reading and source-assisted review, not a native-speaker certificate
+or a proof that language has no alternative analysis. Audio was not listened
+to in this textual audit.
+
+Association means an observable use in this sentence that can be pointed to
+with exact Unicode offsets and explained in the target lesson's sense. It does
+not include every logical prerequisite. General mora/intonation rules are
+linked only where the example explicitly demonstrates them, as requested.
+Candidate matching only retrieves material for review. Rejected or unresolved
+matches are retained in the audit ledger and are never promoted automatically.
+Repeated identical constructions may have a representative highlighted span;
+coverage of example-to-lesson relations is not a claim that every occurrence of
+every particle has been syntactically parsed.
+
+The separate content.sqlite3 dictionary has 3,003 entries, 8,823 candidate
+examples and 9,383 dictionary/example links. audit_lexical_provenance.py compares
+all entries' spelling/reading/sense records with the pinned JMdict snapshot,
+all selected forms with reading restrictions, Tatoeba text with the pinned
+export, and all 1,035 JMdict example/sense links with the primary source.
+The 7,396 word-only links and 952 authored/other links are NOT thereby promoted
+to reviewed sense-specific lesson references. Source equality is different
+from an independent review of translation quality or sentence naturalness.
+
+Reproducible integration
+------------------------
+tools/build_linguistic_review.py reads research/linguistic_audit/baseline_*.json,
+the three review finding ledgers and approved *_work/missing_references.json.
+It validates exact spans and the ten-distinct-example floor before atomically
+writing data/enrichment/learning_material_review.json and the bundled resource
+of the same name. These JSON artifacts are versioned with the private content pack.
+The compiler never activates a candidate merely because a regular expression
+matched. It uses checked, finite correction decisions, not a runtime classifier.
+
+The runtime format is kanamemory-material-review, version 1. Item repairs are
+guarded by complete teaching-field fingerprints. New references are attached
+only to matching target teaching snapshots, not a user-modified homograph with
+the same ID. Text or reference payload changes receive new IDs. Old imported
+known-bad references are repaired/retired in the active view; the saved custom
+pack remains intact and is still available through the archival custom export.
+Reference repair also checks its original example snapshot. Edited source
+material remains together with its own annotation; assigning a new ID alone
+does not reactivate an exact retired annotation.
+
+Progress and unanswered work
+----------------------------
+Existing learning rows, original queued question snapshots, drafts, review
+events and due dates are not rewritten. Known old material is corrected when
+read. Already graded results retain their original evidence. A newly submitted
+answer stores the corrected material_view with its result so feedback cannot
+fall back to the old incorrect answer after submission. A formerly ambiguous
+distractor is not penalized; an alternative valid answer such as 誰だか remains
+acceptable. No old event is recalculated and no new memory item is created.
+
+Example format additions
+-------------------------
+The v1 example format remains compatible. Optional reading_scope is "lemma"
+or "span"; span denotes the actual inflected form highlighted in this sentence
+(e.g. 止まって → とまって), not a reading of the entire sentence. Existing lemma
+hints and surface_hint remain supported. A relation_role of "contrast" can
+record an explicitly explained comparison, rather than claiming the sentence
+has only the prototypical reading of a construction.
+
+The finite import/export bound is now 16 MiB / 5,000 examples / 30,000 references,
+so the expanded shared annotation catalogue can still be exported and imported
+as a complete pack. Raw input text allows 32 MiB for pretty-printed JSON, but the
+normalized data budget stays 16 MiB; exports use compact JSON. The separate
+progress-backup bound remains 64 MiB.
+
+Resource indexes are rebuilt only when the saved example pack changes. Ordinary
+learning writes still refresh familiarity/ranking from current progress, without
+revalidating the entire bundled catalogue. Changed or restored custom material
+still goes through the full validator and collision checks.
+
+Validation records
+------------------
+research/linguistic_audit/: full reading ledgers, candidate decisions, integration
+and provenance reports. Automated regression
+logs are in environment/logs. Reports distinguish structural checks, linguistic
+adjudication, source equality and the limits of each.

@@ -1,0 +1,31 @@
+KanaMemory 0.26.8 — local feedback delivery
+=========================================
+
+User-visible changes
+--------------------
+Feedback list and single-record detail now offer ZIP export or copy to clipboard.
+Successful delivery archives the exported records by default, with an opt-out.
+Clipboard contains the entire saved textual page context, including captured
+question/draft/answer evidence; screenshots remain available through ZIP.
+Large batches use equivalent compact JSON to avoid wasting clipboard capacity
+on indentation. Oversized text still fails explicitly without omitting evidence.
+
+Delivery and preservation
+-------------------------
+The export takes one snapshot. Only exact, still-unchanged delivered versions
+are archived; cancellation, failure, concurrent edits and newly created feedback
+do not cause unintended status changes. Repeated completion is idempotent.
+Export completion cannot replace a newly opened page or its selection/draft.
+Feedback remains in its separate database; no learning record or queue migration
+is part of this feature.
+
+Scheduling repair
+---------------------------------------------
+An actual new add-and-start action made while a first-learning block had already
+been claimed could lose its pending start opportunity when that older block was
+rated. Preserve the current block and at most one deferred new start. Its first
+real rating allows the deferred request to become active. Multiple additions do
+not accumulate an unlimited priority queue. Existing review dates and drafts
+remain in their original stores. Version 1 settings stay valid; a strictly
+validated version 2 envelope is needed only while a deferred request exists.
+

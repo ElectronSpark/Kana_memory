@@ -1,0 +1,169 @@
+0.26.1 共用读音规则：内容与目录变更
+==================================
+
+状态
+----
+本记录说明本轮已经写入源码和独立内容包的内容、目录接口及验证。
+冻结源码的最终相关回归 418 项通过。本文件不把 synthetic fixture 或 Python 测试当作 Android 手动验收。
+
+一、四个稳定记忆项
+------------------
+小假名：pronunciation:small_kana（新增）
+促音：pronunciation:sokuon_stop（复用）
+长音：pronunciation:long_duration（复用）
+拨音：pronunciation:nasal_mora（复用）
+
+四项均是 domain=pronunciation、family=grammar，保留 understanding 与
+application 两种能力。每种规则只建一个学习项；平假名、片假名是同一规则
+中的对照字形和应用环境，不另建两套规则学习记录。
+
+新增小假名先于拗音。其前置仅为音拍 pronunciation:mora，不能反向依赖拗音。
+拗音 pronunciation:yoon 改为依赖 small_kana；外来小元音的深化项同时依赖
+small_kana 与 yoon。促音基础项依赖音拍和小假名；长音、拨音基础项依赖音拍。
+
+这些 ID 仍单独保留，标题明确为深化，旧记录与原前置链不被合并删除：
+  pronunciation:sokuon_fricative：促音深化，摩擦音前的持续摩擦。
+  pronunciation:long_ou：长音拼写深化，おう／おお的具体词写法。
+  pronunciation:long_ei：长音拼写深化，常见长 e 与规范拼写。
+  pronunciation:nasal_assimilation：拨音深化，随后音改变发音位置。
+  pronunciation:nasal_boundary：拨音深化，与后续元音／や行保持边界。
+
+二、解释、例子和矢量图
+----------------------
+小假名先对照大小，再判断拍位：
+  きゃ／キャ是一拍；きや／キヤ是两拍。
+  常见外来语组合ティ、ファ中，小元音与前字构成一拍。
+  小っ／ッ是另一现象：它自己占一拍，不能从“字小”推导“不占时间”。
+
+促音基础项同时覆盖闭塞和摩擦，避免把所有っ讲成完全静音。长音基础项
+对照ビール、コーヒー、平假名长音；强调ー随前元音变化，不一律读同一音。
+拨音基础项共用ん／ン，保留一拍，不额外补元音；具体发音位置留给深化项。
+
+每项解释使用现有结构化视图（对照、拍位、短步骤）与矢量图规范。
+小假名新增 12 条整句扩展，其中 10 条复用已有 yoon／foreign_small 例句的
+同一 example_id，另有两条片假名例句。每条引用有自己的片段强调和说明，
+再加两个讲解词例。整句不是复制成独立的重复例句身份。
+
+课程序号和目录规模：原 524 个课程学习项变为 525；没有删除原课程 ID。
+所有课程仍具有结构化解释与明确的图解／文字保留判断。
+
+三、目录和既有身份
+------------------
+新纯策略模块 app/src/kanamemory/kana_reading_rules.py 提供：
+  rule_for_symbol(symbol)
+  rule_for_kana(row)
+  dependencies_for_kana(row)
+  explicit_reading_rules(reading)
+  reviewed_long_vowel_spans(reading)
+  word_reading_rules(reading)
+
+standalone 小假名、っ／ッ、ー、ん／ン的原 kana:<id>:<script> 身份保留在
+可选参考阶段，标注 kind=reference、practice_retired、reading_rule_id。
+它们不再是主线下一小节自动推荐的独立符号课，字形详情仍可查阅。这里仅
+改变目录资格；不删除旧 study_card、review_event、问题、草稿或评分。
+
+完整拗音／外来组合仍是原来的假名项，保留各自的同脚本字符前置，例如
+ぎゃ仍要求き、ぎ、や；现在另加共享小假名规则。不会用规则学习完成替代
+这些具体假名的正式成功记录。规则缺失的 demo／部分目录不凭空添加悬空依赖。
+
+目录中的现有字形身份总数仍为 326；其中可练假名 239、参考 87。
+原本已为参考的小符号仍是参考；新增退休的是ん／ン这两个身份。
+整个主目录含 525 个课程身份和 326 个字形身份，共 851 个。
+
+旧已加入课程的讲解覆盖层、实际练习资格和旧 entry 直接选择重定向由本轮
+其他模块衔接。内容包本身不迁移、重算或删除用户记录；课程规则 ID 的复用
+避免另造一套平／片评分记录。阅读新版目录的独立测试对旧课程快照、ん旧卡
+与保存草稿作全数据库 dump 精确比较，读取前后相同。
+
+四、已审平假名长音注释
+----------------------
+reading_annotations 是独立内容包中的可选 namespace，version=1。
+初始包含 9 个完整精确读法、10 个长音片段：おばあさん、おじいさん、
+おかあさん、くうき、こおり、がっこう、とけい、せんせい、こうこう。
+
+每个片段使用 Unicode 字符的半开区间：
+  start/end/quote：整个长音，如おばあさん中的ばあ（1:3）。
+  extension_start/extension_end/extension_quote：延长拍写字，如あ（2:3）。
+  vowel、source_ids、source_urls：元音与后台依据。
+
+word_reading_rules 将明确符号与这个精确白名单合并。它不凭任意おう／えい
+猜测长音，不匹配包含该词的任意长句，不通过音近自动扩写词表。公开 demo
+没有该 namespace 时返回空注释，普通显式符号识别仍正常。
+
+实际 3003 词库中：せんせい已允许练习；おかあさん、こうこう仍维持原来的
+未批准状态。おばあさん／おじいさん作为已审课程示范有注释，但目前词库
+没有对应独立词条。添加读音注释不会自动批准或制造词条。
+
+五、独立语料与源码边界
+----------------------
+教学文案、扩展例句、图解内容和读法白名单位于
+data/content_packs/full/teaching/*.json，重建为
+app/src/kanamemory/resources/teaching_content.sqlite3。
+新增或调整的 namespace：pronunciation_curriculum、structured_lessons_pronunciation、
+example_expansion_pronunciation、example_expansion_signatures、example_catalogue、
+lesson_diagrams_words_sounds、study_path_catalog、reading_annotations。
+
+当前内容包为 personal profile、29 namespaces，内部内容 digest：
+120ea2fff81d2e47c6b30442059c67818ed0c5722e5a596be5fd1868889dd0aa
+
+词典 content.sqlite3 未由本任务编辑。纯策略 Python 模块只包含稳定规则 ID
+和解析政策，不嵌入私用例句、课程文案或词典释义；公开源码构建仍依赖既有
+demo 内容流程。内容作者和目录验证未操作用户设备数据库。
+
+六、已完成的本层验证
+--------------------
+第一轮旧测试暴露了新增学习项后的硬编码数量与旧“所有依赖都是 kana”断言。
+没有把这轮失败记为通过。窄更新数量，并保留／增强旧 ID 集合、同脚本前置、
+规则前置顺序、可选参考路由及全量图解覆盖断言。
+
+组合内容／目录组：76 passed，20.01 秒。
+  .test_runs/shared-reading-rules/combined-tests.txt
+  包括全部课程结构化视图、读音扩展例句、目录依赖、新共享规则契约、所有
+  矢量场景在 320／420 宽、100%／200% 字号下的几何边界检查。
+
+之后的长音注释／内容包组：34 passed，1.93 秒。
+  .test_runs/shared-reading-rules/long-vowel-tests.txt
+  包括精确区间、调用者修改不污染内容包、未审 ou/ei 不误判、无词条晋升和
+  内容包／demo 兼容。与前一组有重叠，不相加为独立用例总数。
+
+小型原生起点已生成（生成时未触设备，并非原生测试结果）：
+  .test_runs/kana-rules-native-fixture/fixture_manifest.json
+  .test_runs/kana-rules-native-fixture/progress.sqlite3
+  364544 bytes；SHA256 c715108fcd4bd8899d744cfa176b34023072c01750d76be140d3c09997a79f20。
+  mora 两能力通过生产 API 生成合成正式成功；17 个基础假名合成独立成功；
+  四共用规则仍 intro，课程 current 为 small_kana；保留ぎゃ主队列草稿 g、
+  独立单词队列两题和首字符草稿。只读短词预览有 8 个候选，备份导出和
+  inspect 通过且 DB dump 不变。manifest 明确 synthetic／not_manual；其中
+  device_touched=false 只说明生成过程，后续原生使用结果须见独立测试报告。
+
+七、依据与适用边界
+------------------
+东京外国语大学：拗音与拍位，区分きゃ与きや。
+https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/01-11-01.php
+东京外国语大学：促音的拍位、闭塞音与摩擦音前实现。
+https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-01-01.php
+东京外国语大学：长音时长与平片写法。
+https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-02-01.php
+东京外国语大学：辅音前拨音及其发音位置。
+https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-03-01.php
+文化厅：现代假名遣正文，小ゃゅょ、っ和ん等表记。
+https://www.bunka.go.jp/kokugo_nihongo/sisaku/joho/joho/kijun/naikaku/gendaikana/honbun_dai1.html
+东京都教育委员会教材：拗音合拍及常见词的拍数。
+https://www.spt.metro.tokyo.lg.jp/kyoiku/static/dbook/japanese/pageindices/index183.html
+
+以上支持教学事实，不构成对用户实际发音的语音识别或评分。本轮没有新增
+跟读声学模型，也不把拼写题答对等同于已经验证发音正确。
+
+八、冻结源码的最终相关验证与发布产物
+------------------------------------
+最终相关回归：20 个测试文件，418 passed，66.42 秒；无失败、错误或跳过。
+涵盖共享规则内容与依赖、旧记录／队列保留、课程及假名界面、短词上下文、
+辅助规则证据与间隔边界、单词错误修复、备份／重置以及公开源码分发。
+这是本次变更的组合回归，不是对整个历史测试库重新跑完的声明；它与前面
+76 项、34 项及公开分发 7 项有重叠，不能相加为独立测试总量。
+
+原生手动验收覆盖草稿续练、四个共用规则讲解及200%字号操作；数据库变化经独立核对。
+
+适用边界：
+  矢量几何测试和宿主假界面测试不替代真实 Android 的绘制、点击和字号检查。
+  本次产物核验不是 Pixel 9 Pro 真机验证，也不是新发音识别模型的验证。

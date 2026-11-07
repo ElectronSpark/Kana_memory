@@ -681,6 +681,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
 
     @page_view()
     def show_settings_hub(self, widget=None, **kwargs):
+        from .build_info import VERSION, BUILD_NUMBER
         self.screen("settings_hub", "设置",
             u.button("练习方式", self.show_learning_settings), u.button("显示", self.show_prompt_settings),
             u.button("语音与手写", self.show_settings),
@@ -688,7 +689,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             u.button("反馈记录", self.show_feedback_manager),
             u.button("AI 服务", self.show_ai_service_settings),
             u.button("关于与资料", self.show_notices),
-            u.label("本地学习可离线使用。", size=12, color=u.MUTED))
+            u.label("本地学习可离线使用。", size=12, color=u.MUTED),
+            u.label(f"版本 {VERSION}（build {BUILD_NUMBER}）", size=12, color=u.MUTED))
 
     @page_view()
     def show_learning_data(self, widget=None, **kwargs):

@@ -1,0 +1,73 @@
+自然汉译显示层 v1
+================
+
+用途与边界
+默认汉译采用清楚、自然的现代简体汉语。原始日文、既有汉译和学习身份保持不动；新译文作为只读显示层提供。
+实验性的激进保序译文继续独立存在。不能因为默认显示换成新汉译，就把旧保序参考的双语锚点改绑到新译文。
+离线资源以 context_id(精确日文, 精确原有汉译) 查找。同一句在不同词义下的不同汉译是不同语境，不合并、不去空格、不改标点后匹配。
+新 AI 材料与历史材料不同：生成时先定稿自然 translation，再把这个最终译文精确复制到新 order_translation.source_translation。
+默认汉译不提供新的答案提示、朗读文本、题目身份、能力证据或排程输入。旧题快照、学习记录、待完成队列与复习间隔不作迁移。
+
+翻译规则
+共享规则：app/src/kanamemory/natural_translation_policy.py 的 NATURAL_TRANSLATION_RULES。
+按上下文理解句意，保留虚词范围、否定、时体、语气、角色和授受方向；原有译文是线索，不是不可纠正的依据。
+能用自然无主句表达时，不强加人称或括号。只有确有必要且语境可靠时才补省略成分；不能猜测性别、关系、时间或未出现的人物。
+译文正文只放译文，语法讲解、出处、审核说明另存。确有关键歧义或损坏时保留待核，不靠多个互斥词义拼接出一条貌似完整的译文。
+中日同形词要按实际场景取义，例如参观标牌的順路应译“参观路线”，不能照抄为汉语“顺路”。氏／さん／様和旧译“先生”都不能单独证明性别。
+旧译擅补的“我们”不能当成原文已有参与者；ということですね等表达需保留推论和确认语气，不只留下断言，也不机械套同一句汉语。
+原有汉译中的教学注、读音或调号不能清理后直接丢失；离线 teaching_note 单独保存从原汉译抽出的说明，不额外生成知识点。普通译文中正常的括号补语不等于教学注。
+
+生成和第二遍审校
+tools/natural_translation_batch.py 处理公开语料，生成与审校分别执行，当前离线模型为 gpt-6-luna、推理强度 medium。
+这不改变 App 中用户配置的 AI 模型。此构建器不读取密钥，也不调用 API。
+每个批次携带 format/version/stage/model/effort/policy_sha256/input_sha256/context_ids/records。
+records 每条严格为 id/text/teaching_note/pending_reason；可用 text 的 pending_reason 必须为空；text=null 必须有明确原因。
+teaching_note 为最多 2000 字符的字符串，无说明则为空，只能来自原 source_translation 中已有的非译文教学信息；第二遍审校同时核对译文与教学注。
+text=null 或 text 与原汉译完全相同时，teaching_note 必须为空，避免保留原显示时再重复一份说明。
+审校批次另外携带 audit_sha256、draft_batch、draft_sha256，绑定所审校草稿的原始文件字节。
+模型第二遍检查不等于专家认证或人类逐句审校；待核项与生成、审校来源必须如实保留。
+
+纯离线构建
+tools/build_natural_translations.py 的接口：
+build(corpus, drafts, audits, output, *, overrides=None,
+      policy_hash=POLICY_HASH, audit_hash=AUDIT_HASH, model=MODEL, effort=EFFORT)
+drafts 与 audits 均为 {文件名: (原始 bytes, 解析后的 dict)}；read_batches(folder) 可直接读取此格式。
+构建前核对原始字节与解析对象一致、原语料 ID 与双语原串一致、每个批次上下文顺序及唯一性、生成和审校政策/模型/推理强度一致。
+两遍 input_sha256 都从原语料重算；审校输入还包含实际草稿。每个生成批次必须恰好对应一份精确字节绑定的审校，不能拿别批或旧草稿的审校替代。
+整份原语料必须全部覆盖。旧策略、孤立审校、多份竞争审校、重叠批次、缺句、未知 ID、错序或语境错配均拒绝，不退回未经审校的首稿。
+所有输入校验完成后才建立临时 SQLite，经完整性检查后替换自然汉译显示层。既有临时构建文件不删除；指向学习数据库或其它格式文件的输出参数会被拒绝。
+不写原词库、课程文件、共享例句原稿、保序参考库或学习数据库。
+
+默认路径
+原语料：data/enrichment/order_translation_corpus_v1.json（本轮 12,926 个精确双语语境）
+生成稿：data/enrichment/natural_translations_v2/batches/
+审校稿：data/enrichment/natural_translations_v2/audited_batches/
+v1 目录仅保留失败试译的诊断证据，不能参与 v2 完整构建。
+运行资源：app/src/kanamemory/resources/natural_translations.sqlite3
+构建报告：environment/natural-translations-build.json
+所有生成和审校完成后才运行：
+  .venv/Scripts/python.exe tools/build_natural_translations.py
+如有经过复核的修订，显式添加 --overrides <修订文件>；提供了但不存在的文件会失败，不悄悄忽略。
+
+人工修订接口
+外层严格包含：format="kanamemory-natural-translation-editorial-corrections"、version=1、policy_sha256、audit_sha256、model、effort、records。
+政策、审校政策、模型与强度必须和本次完整构建相同。records 每条包含 id、previous_text、text、reason，可选一对 teaching_note 和 previous_teaching_note；不得只提供其中一个。
+previous_text 必须逐字等于已选中的第二遍审校文本（待核时为 null）；text 为修订文本或 null，reason 为非空说明。
+没有这对可选字段时保留二审核定的教学注；修改教学注时 previous_teaching_note 必须逐字匹配旧值，并保存修订前的注释。
+若修订回到原译或改为待核，原有独立教学注需用这一对字段显式清空，不能隐式丢弃或重复保留。生成与人工修订使用同一 2000 字符和重复防护规则。
+不接受缺失来源信息、未知/重复 ID 或过期 previous_text。null 表示保留待核，原因写入 pending，不生成替代译文。
+修订保留所覆盖的审校文本与全部原始生成/审校来源，不把人工修订伪装成模型原输出。
+
+运行库格式
+PRAGMA user_version=1。
+metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)：format="kanamemory-natural-translations"、version="1"，以及策略、审校、模型、数量与来源信息。
+translation(id TEXT PRIMARY KEY, source_text TEXT NOT NULL, source_translation TEXT NOT NULL,
+            text TEXT NOT NULL, metadata_json TEXT NOT NULL)。
+pending(id TEXT PRIMARY KEY, source_text TEXT NOT NULL, source_translation TEXT NOT NULL, reason TEXT NOT NULL)。
+source_translation 始终为原有汉译，text 才是自然化后的显示译文；id 仍由精确原始双语对计算。
+可用项 metadata_json 保留生成输入 hash、草稿文件 hash、审校输入/文件 hash、策略/model/effort、原有审核状态及人工修订信息。
+teaching_note 也保存在 metadata_json 中，译文 text 不混入教学说明；metadata 和构建报告另记录可用独立教学注的数量 teaching_note_count。
+待核项的同等来源信息保存在 metadata.pending_provenance_json，并随完整构建报告输出。
+报告另有完整批次选择清单及其 hash、可用/待核数、与原译相同数量、资源字节数和 SHA256。
+semantic_expert_certified 始终为 false；full_independent_model_audit 只表示每条均经过绑定原稿的第二遍模型检查。
+读取使用 mode=ro 与 immutable=1。缺失、待核、错配、损坏或不兼容资源保留既有译文；不产生网络请求或学习数据写入。

@@ -1,0 +1,55 @@
+Kana prerequisite audit and repair — 0.22.14 / 220014
+
+Problem and policy
+The content's components were correct, but every kana catalogue entry had an
+empty dependency list. Mixed adaptive dispatch could consequently offer a
+voiced contraction before its voiced constituent.
+
+The structural audit covers 165 content rows / 326 script identities. The
+playable graph contains 241 identities and 247 direct edges. Dependencies use
+actual glyphs, not equivalent pronunciations, and never cross writing systems.
+Examples: ぎゃ needs ぎ and や; ぎ needs き. ぴょ needs ぴ and よ;
+ぴ needs ひ, not び. ティ needs テ and イ. Small reference glyphs expand to
+their playable full-size ancestors; the contraction introduction teaches size
+and mora grouping. Reference and historical symbols do not become audio quizzes.
+The full graph and expanded reference paths are recorded in the graph JSON.
+
+A same-script, independent correct primary review with rating above Again
+unlocks a prerequisite. Introduction exposure, familiarity self-report, word
+evidence, revealed answers and accepted homophone substitutions do not.
+Later lapses do not revoke an established prerequisite. Previously assessed
+advanced targets keep their review route, as do real drafts and ungraded results.
+
+Admission, dispatch and preservation
+New selection includes its exact prerequisite closure while retaining catalogue
+and section IDs. Continuing an old queue appends missing predecessors once,
+using enabled and available directions. The unchanged original queue is retained.
+Dispatch gates all untouched targets, including the fast path and first-teaching
+path; blocked items never become consumed/skipped history. A failed predecessor
+retains its original card and due date. A paused predecessor remains paused.
+Home distinguishes ready, timed and prerequisite-blocked counts. A blocked-only
+queue has a saved waiting screen without a fabricated timer or completion claim.
+No content database or learner schema migration is involved.
+
+Evidence lookup uses indexed existence queries and the existing precise
+connection revision cache. Checkpoint/draft writes do not invalidate evidence.
+Tests cover event/card mutation, rollback, replacement and outside connections.
+In desktop SQLite with 300,000 events, typical cold lookup fell from 624 ms to
+0.59 ms; hot lookup was about 0.0045 ms. Worst synthetic never-passed histories
+still cost 132–201 ms cold. These are local measurements, not phone guarantees.
+
+Validation
+The comprehensive selection contains 918 tests. Its initial run passed 910;
+8 old assertions expected no added prerequisites. Those fixtures were updated
+to require exact prerequisite closure, retained original questions/feedback and
+no repeat insertion. The final affected selection passed all 167 tests. Together
+this verifies all 918 distinct tests; the overlapping counts are not summed.
+Separate full-graph checks verify every edge and every selectable identity.
+
+Native checks with a synthetic disposable learner confirmed draft preservation, one-time predecessor insertion and that only an unassisted correct answer releases blocked targets.
+
+Teaching reference
+Japan Foundation, kana teaching guide:
+https://www.jpf.go.jp/j/urawa/j_rsorcs/methods/dl/moji_U2P1_text.pdf
+The structural prerequisite graph is an application design decision, not a claim
+that the reference prescribes this exact complete learning sequence.

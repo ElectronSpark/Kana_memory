@@ -1,0 +1,77 @@
+音高序列 v2：0.27.0 数据及交互合同
+
+范围
+v1 仍用于一个词及可选助词，不增加人工分词。v2 使用已有 pitch_fill 输入
+类型，支持 pitch（给定词界）和 pitch_segmentation（学习者分词）。两者
+分别复用读音规则现有的 understanding/application 能力，不新增单词卡。
+题目是给定语境、起句及下降位置后，应用读音规则完成标注与分词。
+这些提示是作答条件；本轮不考背诵整句音高，也不评估自然发音质量。
+
+来源和信任
+pitch_sequences 是独立内容包中的数据命名空间。其 sources 解析来源身份，
+records 保留审核过的完整 spec 及历史版本。runtime 同时验证结构、完整
+语义摘要和与登记 spec 的完全一致；模型自报 approved、自算 SHA、复制
+stimulus_id 或提供一个来源 URL 都不能获得正式判题资格。源图和私用语料
+不进入 MIT 源码；没有私用语料的演示版仍可独立构建。
+
+句谱内容
+spec.version=2，以下字段严格验证：
+- stimulus_id、text、characters：稳定身份、原文、完整假名及标点码点数组。
+- mora_spans：假名数组中逐拍的半开区间，覆盖所有发音字符；标点不占拍。
+- tokens：词、助词、辅助词、标点各自的假名区间及 source_spans 原文区间。
+  原文的汉字偏移、假名偏移和拍序号不能混用。
+- accent_phrases：重音短语；独立于词界，不代表停顿。
+- wrap_units：公开固定排版块，覆盖整段；不能用隐藏的正确词界控制排版。
+- contexts：id、prompt_zh、source_refs，明确当前练习的具体语境。
+- segmentations：id、tokens、explanation_zh，登记允许的完整分词方式。
+- reviewed_patterns：id、context_id、逐拍 levels、segmentation_ids、source_refs。
+- selected_pattern_id、accepted_pattern_ids：标准展示模式及同语境许可模式。
+  答案必须匹配同一个许可模式及它允许的一套完整分词，不能混拼不同模式。
+- representation="mora_plateau_hl"；lexical_accents 仅为词典形参考，不能
+  用词典调号拼造句谱。未知调号省略，不以 0 冒充。
+- learner_morae、task_mode：是否自行合拍、是否进行分词。
+- review：review_id、content_sha256、source_refs、status。
+
+review.content_sha256 绑定整份 spec（仅排除它自身）。token 包含 id、role、
+start、end、source_spans；区间递增且完整覆盖，不允许重叠或静默截断。
+上限 256 字符、128 拍、64 tokens、16 重音短语、8 模式及 8 分词方案。
+每份审核登记保留历史内容，以便旧冻结题目和备份在课程更新后仍可读取。
+
+表示限制
+逐拍高/低是本题约定的简化音高位置。句中多级下降、拍内下降后上升等
+不能被两个档位充分表达的目标不进入本判题器。普通 TTS 或 OJAD 预测
+本身不构成审核凭据，不把一条句谱称作所有语境下唯一正确的自然发音。
+
+作答与草稿
+答案前缀 pp2:，JSON 包含 mode、spec_sha256、groups、levels、boundaries。
+groups 是学习者逐拍输入的字符区间，boundaries 是字符偏移。
+pitch_state 包含 version=2、stimulus_id、spec_sha256、context_id、actions。
+绑定题目身份和语境；外层 answer 必须与完整动作重放相符。辅助标记保留。
+
+▔ / ▁ 输入高/低并前进；‿ 将下一个小假名与前一拍合并；│ 在当前位置
+分词；⌫ 撤销一个真实动作，包括分词。标点与空白自动越过且不消耗动作。
+pitch 模式的词界已给定，隐藏 │；单词＋助词 v1 也始终不显示 │。
+只有完成整题才可提交；不完整或损坏草稿不能当作遗忘写入复习。
+判题首先诊断合拍，其次分词，再诊断音高，避免对错位重复计算音高错误。
+
+图形合同
+fixed_view 提供 characters、levels、groups、tokens、wrap_units、cursor、
+active_span、complete、label。字形始终同一基线；高低横线画在字上方，
+粗体及高亮表示进度。合拍和音高不改变文字坐标。分词只改变已输入的
+颜色和分界标记；与排版块独立。布局按固定块换行，超宽才固定字符回退，
+保留小假名和闭标点的行首禁则，不跨行画错误连接。Canvas 就地重绘。
+未答部分不自动填音高线；未提交的分词题不展示标准词界。不在题干已给
+读法条件之外，另以调号、ruby 或普通 TTS 提供答案。首次教学可显示
+完整参考图，额外示例折叠。
+
+学习和兼容
+编辑、撤销、教学及跟做不产生正式复习事件。独立题完成后只给目标规则
+的对应能力记一次事件；不能给整句中的每个词、每个按钮各自记一份。
+旧学习项身份、能力、依赖、到期时间不变；精确内容覆盖只改善教学视图
+和未来题目。旧 v1 队列、草稿、已评分结果保留原协议，绝不重新评分。
+普通及流式备份均验证绑定与草稿动作；重复提交和评分保持原有幂等性。
+
+验收范围
+本轮做领域、内容、存储、控制器、布局测试和隔离 Android 手动测试，
+覆盖错误归因、合法分词替代、退格、重启、大小字号及一次正式评分。
+不修改真实学习数据库，不恢复已暂停的四年模拟。

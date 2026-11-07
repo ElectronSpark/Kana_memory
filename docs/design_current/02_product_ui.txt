@@ -1,0 +1,477 @@
+现行产品、界面与学习流程
+2026-11-06 / 0.30.7：复习进度和管理记忆卡片按详情页显示，页头有返回键、用紧凑页头；页头标题固定左边距，没有返回键的页面不再贴边。
+2026-11-06 / 0.30.6：补全或修改答案后，“请补全罗马音”提示随即消失，只切换输入方式时保留；本组单词数框弹数字键盘。
+2026-11-06 / 0.30.5：系统键盘弹起时内容区缩到键盘上方，可滚动内容可拖到；罗马音和ABC模式移除空的按键区；提交被拒或切到假名按键时收起键盘。
+2026-11-06 / 0.30.4：vocab_recall（按意义提取单词）默认罗马音输入，仍可切换假名按键。あいう/アイウ切换决定
+预览和提交的文字；不依答案自动判断片假名，片假名词未切换时按写法错误计。
+2026-11-03 / 0.28.7：没有候选限制的vocab_reading空白题默认罗马音输入，仍可切换假名按键。
+已有假名草稿保留原文与假名键盘，已有罗马音草稿继续可编辑；只转换本次提交，不改旧判题。
+首次引导、课程、AI辅导及留存检查共用此规则；有限候选、给罗马音选假名及音拍/音高题不扩展。
+实现和验证范围见docs/romaji_default_0287_20261103.txt。学习记录、队列和调度不迁移。
+2026-11-03 / 0.28.4 返回修复：课程作答结果中的“详细”使用独立参考页。
+系统返回、标题返回和“返回结果”均恢复原评分页、原答案及滚动位置，不重新调度。
+详情→反馈或材料预览→返回也保留来源；真正的答题页/评分页退出仍需确认。
+首次学习接续说明、学习提示与独立路线参考项仍遵循原流程。本条替代旧版结果详情
+被当成退出学习的行为；验证及交付范围见docs/detail_return_20261103.txt。
+2026-11-02输入增量：假名答案表无罗马音轴；有限候选保序紧凑排列。
+无候选vocab_reading支持罗马音预览/直接提交；只转换当前输入，不重判旧答题记录。
+详见docs/kana_selection_input_20261102.txt。
+下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+
+========================
+
+基线：App 0.28.2；源码基线 8d11ee5，产品实现基线 8c3b9a9。
+整理日期：2026-11-01。本文件是只读核对代码后的现状说明，不是新增功能承诺。
+路径均相对 kana_memory 仓库。正文函数名用于定位行为，不依赖易变行号。
+
+状态标识
+I：当前代码存在这条生产路径。V：有明确版本、范围的既有验证记录。
+P：尚未实施的提案。U：证据不足，或尚未针对当前版本复验。
+I 不等于所有设备均验证通过；测试文件只说明有可执行契约，不等于本次运行通过。
+本次没有运行测试、模拟、API 或设备操作，没有读取用户私人学习备份。
+
+一、产品范围与信息层级 [I]
+-------------------------
+
+无日文输入法约束 [I，2026-11-01增量；自动验证已完成，原生覆盖见增量记录]
+默认不依赖日文输入法，适用于课程初学/复习、引导、AI针对性练习、主动验证及
+AI材料。默认使用App内选项、审校词块组句和假名键盘；罗马音/数字可用普通
+键盘，手写须启用且模型可用，日文系统键盘只作用户主动选择的附加输入方式。
+按具体题目检查控件是否能完成作答；缺输入工具不是知识错误。不同kind不能
+替代实际input_mode判断，同一grammar_cloze内可能同时有选择和文本变体。
+固定假名键盘须覆盖平片假名、小假名、浊音/半浊音、长音及撤回/清空；不能
+按正确答案挑选或补入字符。汉字和整句题须有审校词块或明确允许的假名答案，
+不得猜测汉字读法后放宽规范拼写判题。新题不可答时选同能力的可答模板。
+旧队列优先补可用控件而保持题目和草稿；若改为选词/组句，保留原件并建立新
+呈现合同，按识别/有提示应用记录，不能计成独立写出。不能清空队列、重建
+记忆项或修改已有到期时间，也不能让旧pending题永久阻塞同一能力。
+现行增量：learning_ui正式题/引导、tutor_ui、retention_check_ui复用固定假名
+键盘；课程、引导、辅导、验证按具体模板过滤不可输入的新题。旧冻结题可中性
+跳过，保留原快照、草稿与到期安排。设置可明确启用系统日文输入，不靠安装
+检测猜测。待完成：所有入口同版原生覆盖、旧不可答题首页数量语义、AI生成
+材料的完整输入约束验收。不能以自动检查代替这些待验项。
+实施见docs/romaji_input_0283.txt；
+本条不是旧发布包已有行为声明。
+
+罗马音输入与词语假名表 [I]
+练习页有独立“罗马音转假名”；单词拼写题可输入普通拉丁字母，预览并将假名
+追加到现有答案，仍可删除或用原表补字。选择“输入法拼写”或“本App罗马音”，
+避免ti/di/tu/wo等写法被暗中猜测；不猜助词、汉字、同音词规范字形。
+按a/i/u/e/o列、辅音行排布，浊音/半浊音紧邻对应清音；小假名单列，ん/っ/ー
+无虚构元音位置。部分表保留原候选集合与空格位置，不按位置重新抽选干扰项。
+转换草稿和辅助标记可恢复；转换后的拼写仍正常判对错，但不给独立回忆学分，
+不调整相关假名间隔，不生成误差补练，也不创建单词记忆项。独立工具实际显示
+转换结果时同样标记已呈现的未答词题（含停放草稿），不标记未呈现的新题。
+
+产品是中文界面的日语学习工具：假名、独立词义、语法用法、读音规则可以进入
+学习安排；词典、字源、方言/历史读音、共享例句提供查阅与教学支持。正式课程
+词汇学习与“用单词练假名”的辅助工具同时存在，不能因为题面出现一个单词
+就创建该单词的正式记忆记录。
+
+主流程希望用户只需继续学习即可推进。课程的阶段/单元/小节负责内容组织，
+到期复习和新内容的实际选择由本地调度负责；“加入”“初学完成”“掌握”
+不是同一状态。题目语境、选项、示范和例句也不是额外的独立记忆项。
+
+呈现分为三层：主要区是日语、必要任务提示和作答；讲解/帮助在需要时出现；
+资料出处、审核说明、实现信息尽量放“资料”或折叠区。这个原则已有相应组件，
+但并非所有旧页面已彻底去除重复说明，不能把它当成逐页完成的审美验收。
+
+完整内容版与干净 demo 使用相同 App 页面和流程，实际可查内容及课程覆盖依赖
+安装的内容包。本文件不把私用内容包数量当成 MIT 源码必有的内嵌课程数量。
+
+二、导航与页面入口 [I；设备覆盖见第九节]
+--------------------------------------
+
+四个顶层入口现在是“今日 / 练习 / 学习库 / 设置”。不是早期截图里的
+“今日 / 假名 / 词库 / 设置”。来源：app/src/kanamemory/app.py startup。
+
+1. 今日：show_home → StudyPathRuntimeMixin.refresh_study_home。
+   主要操作是“继续学习”，没有在途内容时可“开始下一小节”。主页分别显示
+   现在可答、待到期、可开始初学和待前置的数量；统计来自与续学相同的资格与
+   时间规则，不等于数据库行数或历史累计作答数。下方有下一小节、学习路线、
+   添加内容、开始/继续单词拼写、针对性练习·问 AI、学习记录。
+   “剩 N 词”来自独立单词练习队列的未完成尾部。首页到期刷新不写入新评分。
+   2026-11-07（未发版）：本轮主线题单冻结后首页有“重新计算今日队列”，只走practice_round.restart(lane=main)重建本进程顺序；单词拼写队列、题目、草稿、到期和FSRS不变（tests/test_study_queue_recompute.py）。设置页底部显示build_info的版本和build号。
+
+2. 练习：learning_ui.py show_practice_hub。
+   假名专项 → show_practice_setup；单词拼写 → show_word_drill_setup；
+   课程学习 → continue_learning；AI 练习与语料 → show_ai_center；
+   题型与学习安排 → show_learning_settings。主线续学通过 continue_study_path
+   合并路由已有假名和课程工作，不要求用户自己选择下一项。
+
+3. 学习库：learning_ui.py show_learning_library。
+   分类为假名、单词、语法、读音规则；有主题筛选、文本搜索、分页、加入状态。
+   “单词”列正式词义课程，可再进入“查找全部词库”。例句库和 AI 学习助手
+   也在此进入。资料库可查并不表示所有词条都有完整教案或已加入学习。
+
+4. 学习路线：study_path_ui.py show_study_path/show_study_stage/
+   show_study_unit/show_study_section。按阶段→单元→小节查阅，支持进入本节、
+   继续或选择该分支。show_study_reference 是仅查阅的参考字形/内容。
+   show_study_path_add 为统一添加页；show_study_path_notes 为单独课程说明。
+
+5. 假名/字音：app.py show_kana/show_kana_detail/show_kana_readings。
+   五十音表横轴元音、纵轴辅音行，基础清浊音合组，历史字形另列；全部展开，
+   没有“显示更多”。大字号时表格可横向滑动。字源、读音版本、例词、共享
+   例句位于详情。show_character_catalog/show_character_readings 提供历史字音
+   与异体参照。组合假名不强塞中文来源字音。
+
+6. 词条/课程详情：app.py show_words/show_word_detail/show_word_references；
+   learning_ui.py show_learning_detail/show_learning_dependencies/show_learning_sources。
+   词条包含写法、读法/罗马音、词义、音高与例句等已收录资料；课程详情展示
+   结构化讲解、图解、例句、必要读音示范、加入/继续入口。资料与前置可另查。
+
+7. 例句：example_ui.py show_example_library/show_item_examples/show_example_detail。
+   还有关联项选择、例句编辑预览、例句导入导出和资料页。详情能从片段反查
+   多个学习项，显示其加入状态；完整机制见第七节。
+
+8. 设置：learning_ui.py show_settings_hub。
+   练习方式、显示、语音与手写、学习数据、反馈记录、AI 服务、关于与资料。
+   显示页控制安全题干/例句的假名注音与数字调号；词条音高线/调号另有设置。
+   语音与手写页显示系统声音和模型状态，提供模型下载、声音安装/设置及试用。
+   自由试写是工具，不写正式学习评分。
+
+9. 学习记录与数据：show_progress/show_cards/show_card_detail、
+   learning_ui.py show_learning_records/show_learning_data。
+   可看记录、卡片/内容安排，导出备份、恢复、转换旧版记录、导出恢复前备份、
+   删除学习数据。0.28.2 的转换入口只是生成当前格式文件；不是立即覆盖当前库。
+   恢复另有预览/确认。格式及事务规则以 docs/learning_records_0282.txt 为准。
+
+10. AI：ai_ui.py show_ai_center 为按已学内容出题、生成例句、解析日文、候选箱、
+    保留/舍弃及继续 AI 练习的入口；材料保留和加入学习是两次不同动作。
+    tutor_ui.py show_tutor_center/show_tutor_chat/show_tutor_profile 为针对性练习、
+    提问、历史与画像管理。输入框先可用，建议问题后台生成，失败不阻止输入；
+    提示不会自动发送或覆盖已输入内容。AI 服务页由 ai_service_ui.py 提供。
+    这里仅列产品入口，信任边界、画像、证据与 API 另见对应现行专题。
+
+11. 反馈：全局标题栏“反馈”，部分原生对话框也接入；feedback_ui.py 提供编辑、
+    列表、单条详情、筛选、多选、状态管理、ZIP/剪贴板导出。不能保证系统文件
+    选择器、Android 设置等 App 外部界面也能被本机制完整捕获。
+
+三、添加、前置与连续学习 [I；既有 V 范围见第九节]
+------------------------------------------------
+
+统一添加采用“阶段→单元→小节→学习项”四级树。展开标题与勾选操作分开。
+空框=未选，横线=部分，勾=已选；已加入叶/整组是灰色禁用勾。分组计数是
+叶学习项“已加入 A/T”，不是把小节数混入分母。父级点击只改变可新增后代；
+清空选择不退学。默认预选下一主线小节，也可按正整数一次选多节，不设人为
+每日新增数量上限。数量快捷合并选择，不覆盖此前手选。
+
+自动前置与主动选择分开显示；提交前重新读取资格、解析依赖，在同一事务内
+追加尚未加入的内容。连点和旧页面按钮均重验；不能重复加入在途未评分项目。
+旧题、草稿、未评级结果和到期安排不因追加而替换。已加入旧课程不按后来改变
+的目录追溯批量新增前置。未提交的树形勾选只保留在页面返回栈中，不承诺杀进程
+后恢复；已经提交的队列和学习检查点持久化。
+
+来源：study_path_selection.py；study_path_ui.py show_study_path_add/
+_submit_study_selection；study_path.py StudyPathService.preview_entries/add_entries/
+add_sections；study_path_runtime.py continue_study_path。
+
+前置有两层：目录中的显式前置，以及题目背景内容是否已经可用。自动加入只
+发生在明确加入动作或既定前置教学路径，不应把例句里所有词偷偷注册为记忆项。
+独立题不能把未学背景当作需要猜的隐含目标；允许提供经检查的背景解释，或
+跳过不合格的题。当前教学块受保护，前置以顺序教学出现，不要求用户逐条打开
+一个前置列表才能继续。下一次继续动作负责在假名、课程、参考内容间路由。
+
+小假名 pronunciation:small_kana、促音 pronunciation:sokuon_stop、长音
+pronunciation:long_duration、拨音 pronunciation:nasal_mora 各是跨字种共享的
+规则项。音拍先于小假名，小假名先于拗音；具体浊音拗音仍有同字种的清音、
+浊音和组合组成前置，规则学习不能代替这些具体假名。小符号旧身份可作参考，
+不再各自创建平/片两套主线规则。深化规则仍是不同学习项。
+来源：kana_reading_rules.py、kana_dependencies.py、learning_dependencies.py、
+first_teaching_dispatch.py；docs/shared_reading_rules_0261.txt。
+
+一次拗音错误首先处理本项；对共享规则的推测通过少量异语境验证，不能直接
+降低全部拗音。促音/长音/拨音可在词拼写中提供证据。规则帮助在初学与相关
+错题中出现；词汇辅助题不因此变为独立词汇课程。
+来源：kana_rule_evidence.py、kana_rule_ui.py、kana_context_words.py。
+
+连续学习不是“每次点击都强行加入下一项”。有在途题时续答；有待到期则显示
+等待；完成/等待页提供下一小节和添加内容。跨单元由目录顺序继续。已有正式
+复习、初学教学块和新项推进由调度协调；本文件不另定义调度优先级。
+首页可答数与真正能进入的题应一致，待到期不算可答，已完成历史不累计在剩余数。
+来源：StudyPathRuntimeMixin.refresh_study_home/_study_path_unqueued_courses/
+_study_path_unqueued_reviews/continue_study_path，practice_availability.py。
+
+四、首次学习与练习单位 [I]
+-------------------------
+
+首次进入先选择“初学 / 有印象 / 已熟悉”。假名按内容与字种区分；正式词汇、
+语法、读音规则可按能力分别选择。自报熟悉度只改变教学路线，不产生成功评分。
+初学看必要介绍和示范，之后跟着做；有印象走精简回顾。满足未曝光条件的已熟悉
+能力可以先实际检验。诊断失败或看答案回到必要教学，不伪造一次成熟卡遗忘。
+
+介绍采用结构化短块、对照、步骤、例子、矢量图；长说明可展开。基础音拍主要
+通过拍格/节拍点/完整词表现，基础规则辨析改用一次一个目标词，避免让用户
+先读懂双词计拍问法；后续整句音高题另见第五节。向导用实际题型的控件做
+练习，不把文字解释当作已经完成技能练习。
+初学/引导曝光和引导正确都不直接算独立 FSRS 成功。
+
+路线保留 intro → guide → bridge/check → done 的教学状态。独立检查、正式评分
+和之后复习是另外的事件；重启保留检查点、引导快照和作答草稿。早期保存的旧题
+继续按原快照完成，不用新模板悄悄解释旧答案。
+来源：learning_ui.py show_kana_introduction/select_kana_familiarity/
+show_learning_familiarity/show_learning_instruction/_learning_guide_controls/
+finish_learning_guide；learning_store.py set_initial_familiarity/guided_sequence；
+structured_lesson_ui.py teaching_block，lesson_diagram_ui.py diagram_widget。
+
+当前记忆身份不能按旧总案推断：假名正式卡仍按内容×具体题型×字种；课程按
+内容×能力。多种题型可共用一个课程能力，但不代表看懂就等于会写/会听。教学
+语境、任务家族、例句引用和界面输入方式本身都不增加一张正式记忆卡。
+
+五、题型矩阵与简单一致的操作 [I，覆盖边界明确]
+---------------------------------------------
+
+假名专项（app.py PRACTICE_KINDS；domain.py SKILLS）：
+  kana_choice：看单一字种假名，选罗马音。
+  kana_romaji：看单一字种假名，用系统键盘写罗马音。
+  romaji_kana：看罗马音，选择假名。
+  romaji_kana_full：看罗马音，从完整表拼假名。
+  kana_handwriting：听音，手写假名。
+  romaji_handwriting：看罗马音，手写假名。
+  word_kana：听词，选假名拼词。
+  word_meaning_kana：给词义和罗马音，选假名拼词。
+  word_romaji：看单词假名，逐个假名选罗马音，合成整词。
+  mixed/adaptive 模式是选择策略，不是额外题型或记忆单位。
+
+专项可指定范围、数量、字种和启用题型；单假名的选项不混假名组合，组合题
+使用组合对应选项；同题冻结选项，后续题可以变化。平/片在独立题中分开，
+外来组合不强制用平假名回答；“を”的识别罗马音为 wo，与お的 o 区分。
+纯听音/孤立罗马音可接受合理同音假名；真实词拼写按标准与已允许变体判断。
+来源：domain.py、kana_orthography.py；对应契约测试见第十节。
+
+正式词汇课程（learning_questions.py WORD_KINDS/KIND_ABILITIES）：
+  理解：vocab_meaning 看词/语境辨义；vocab_zh_ja_contrast 中日词义辨析；
+        reading_comprehension 短文/信息理解。
+  听辨：vocab_audio_word 听词选词（听读音选日文单词）；vocab_audio_meaning 听词辨义；
+        listening_comprehension 短句听力。
+  读法：vocab_reading_choice 看词选读音；vocab_reading 写出读法。
+  使用：vocab_recall 按含义提取；vocab_orthography 选择写法；
+        vocab_usage 语境选择或补全。
+
+语法课程（GRAMMAR_KINDS）：
+  理解：grammar_meaning 判断含义/语境功能。
+  应用：grammar_cloze 填空、grammar_transform 变换、grammar_reorder 重排、
+        targeted_correction 改一处、controlled_sentence_production 有约束造句。
+  任务模板可以呈现语境、对话、信息提取、完成和变换等家族；不是每个语法项
+  都支持以上所有形式。开放答案的“未列入可接受集”不能自动当作已证实错误。
+
+读音规则（PRONUNCIATION_KINDS）：
+  pronunciation_rule 理解；pronunciation_application 应用。
+  可使用选择、文本或 pitch_fill/pitch_identify 控件。音高输入模式不是新的
+  独立学习项。整句/多词音高必须绑定经审核的特定语境与参考，不把词典单词
+  调号或普通 TTS 输出拼成唯一整句标准答案。
+
+课程一般共用 choice/text/reorder 与专门音高控件；题面、任务说明、提交、
+答案反馈的规则尽量一致。题型开关约束已开始的队列与未来选题，关闭不删除
+对应学习史或改成新项；再次开启沿原记录/到期恢复。这里有一个必须保留的
+当前实现差异：禁用普通假名当前题会移过该题并清除当前题的输入 state；不能
+承诺重新开启后仍恢复这份未提交草稿。辅助单词题另用 WORD_KIND_PAUSE 保存
+暂停 state，课程题也保留自己的 question draft。来源：domain.py
+reconcile_session_kinds。此差异是当前行为/待统一边界，不是新设计已修复的能力。
+默认正式课程题型不包含
+听词辨义、短句听力，需用户启用；听词选词默认开启，但设备没有日语语音时不出题。
+可见题还取决于模板、音频与前置是否可用。
+填空和按词造句题的中文译文默认折叠在“中文提示”按钮后，展开不算辅助、不影响评分；
+固定作答提示改为日文短标签（読み、意味、書き方等）。
+来源：learning_ui.py show_learning_settings/change_learning_kinds/show_learning_question；
+learning_questions.py DEFAULT_KINDS；app.py _reconcile_practice_kinds。
+
+选题并非随机重复同一个选择题：learning_practice_policy.select_practice_plan
+在同一内容/能力/修订内使用有界近期证据，结合支架程度、任务家族和语境覆盖
+选择未来题。困难时增加支持，成功后尝试提取，并避免近期相同语境饥饿其他
+模板；已冻结题不重抽。0.28.1 扩展的是现有教案的语境/形式，不是全词典教学。
+
+独立“单词拼写”入口另有双向/单向、词库、字种、部分或完整键盘和组内数量。
+反向题逐个假名选择罗马音；正向小假名独立按键，不把整个拗音藏进一个键。
+追加一组保留旧题/草稿并跳过待做拼写。看答案、无法归因、重复同次提交不
+应产生虚假的成功证据；同音写法差异与读音错误在反馈中区分。
+来源：app.py show_word_drill_setup/start_word_drill/resume_word_drill/
+show_reverse_word_question/show_word_question；word_spelling_practice.py、
+word_romaji_practice.py、word_keyboard.py。它低权重影响相关假名，不追踪词本身。
+
+主线假名阶段也可自动穿插短词：kana_context_words.context_candidates 只选已审、
+字形/组合/读音规则背景合格的词，通常 2—5 拍，使用少量字符候选。提供词义和
+罗马音条件，避免仅给未学词的中文要求凭空拼写；启用听词时还需音频可用。
+没有合格词或相关题型被关闭时不会为了“多样性”强行出题。
+
+音高图遵循词内文字和折线同色，文字同基线，用高亮/粗体表示当前进度。
+汉字数与音拍数分别建模；整词可扩宽、换行，折线不跨行画长斜线；超宽词
+可以横向查看。v3 按 ▔/▁ 加拍、│ 确认片段、⌫ 撤销；不会按正确拍数
+自动跳词，也不会用布局偷偷透露答案。旧 v1/v2 快照按旧协议完成。
+来源：learning_pitch_ui.py、pitch_practice_ui.py、pitch_alignment_canvas.py、
+pitch_sequence.py；docs/pitch_source_alignment_v3_contract.txt、
+docs/pitch_compact_rendering_0272.txt。
+
+六、答案、帮助、返回与媒体安全 [I]
+--------------------------------
+
+结果状态使用符号与颜色共同表达：✓、×、已用提示的 ↪、未评分的 …；无障碍
+名称仍用文字，不能只靠颜色。答对仅显示一份答案；答错才加较小的用户答案，
+拼写用局部差异强调。保留独有字源、补充读法、词义、音高、解释，去掉的是
+重复字段，不是所有非答案内容。当前题型字种的来源汉字保留，不混另一字种。
+
+有可朗读日语时提供一个紧凑喇叭，结果出现时默认朗读；有可查内容时提供一个
+“详细”，不要求先答对。课程还有“问 AI”。正常独立答对保留四级复习评分；
+提示/揭示/错题不伪装成正常四级成功，辅助单词是“保存并继续”。不确定或设备
+失败保留未评分状态。显示答案入口与提交区分，不放成最下方的主提交按钮。
+来源：answer_feedback.py、answer_autoplay.py、spelling_display.py、
+app.py answer_hint/check_answer/preview_practice_answer/save_rating；
+learning_ui.py show_learning_feedback/_learning_answer_audio_text。
+
+内容索引通常先简短预览，明确点“详细”才跳转；假名表是直接详情的例外。
+练习内答案速览是正确目标的内联区域，避免额外弹窗。预览内部不再套新索引，
+避免自引用；界面指示文字不因恰好是日语而变成内容链接。
+来源：app.py open_content_kana/open_table_kana/open_content_word、
+practice_previews.py，navigation.py page_view。
+
+普通页面 Back 回上一页并保留表单/滚动状态。答题/引导等专注页面隐藏底栏，
+左上返回与系统 Back 使用同一退出逻辑：保存后确认回今日，不回到上一题未答
+状态。等待/完成页已保存，回今日直接返回不再确认。首页 Back 留在 App；
+Android Home 仍可回桌面。题目推进使用 replace 页面，返回栈有界，异步回调
+校验页面/题目身份，避免旧请求覆盖已离开的页面。
+来源：navigation.py BackStack/page_view；app.py _update_chrome/go_back/
+request_practice_exit/_return_home_from_practice；learning_ui.py request_learning_exit。
+
+安全注音/朗读规则不是“日文就全部加”：
+  - 教学、词条例句、例句详情可显示已核实注音和调号，并提供 TTS。
+  - 未核实读法/调号保留未知，不把未知调号写成 0；读法须与实际词形绑定。
+  - 公开含义选择题可有经本地核验的题干音频、注音；题干喇叭只读公开题干。
+  - 听力刺激走独立通道，隐藏文本不能通过注音/帮助泄露；读法、拼写、手写、
+    音高题不因元数据声称 safe 就解禁答案相关注音。
+  - 填空/改错/变换等仅允许明确无关背景片段的安全注音，不补全目标、不把
+    错误修正成正确读法；可选题干 TTS 不朗读填空的补全答案。
+  - 答后可读完整日语答案/填好后的句子；音高判题图不附普通 TTS 作假参考。
+来源：question_support.py _reviewed/prompt_support/prompt_audio_text、
+sentence_annotation_ui.py build_sentence_block、learning_ui.py _learning_answer_audio_text。
+
+日本语音主要使用系统 TTS，所需声音包与手写模型是分开的资源。假名变体通过
+审定的朗读计划/语境处理，不能保证直接把任意孤立小字交给 TTS 都自然。
+方言/历史音按可用录音/示范/系统支持展示，不声称系统内建所有方言或中古音。
+详情用三列紧凑播放网格汇集可播放版本，点按同页更新简短说明，资料展开；
+窄屏大字号下优先把播放区放上面。无音频只有注音的样本在另外的折叠资料区。
+“所有版本首屏可触及”是此布局目标，不是对无限样本数/所有屏幕的保证。
+来源：app.py kana_audio_overview/show_kana_detail、kana_audio.py kana_audio_plan、
+audio_overview.py kana_audio_choices、platform_android.py。
+
+七、课程、例句与翻译 [I；语义穷尽性 U]
+-----------------------------------
+
+课程把场景相关词义穿插在语法附近，后续重复出现仍引用同一词义身份。阶段参考
+常见课程/考试能力组织，不能宣称已覆盖所有现代活跃语法、官方完整考试词表
+或全部词典。0.28.1 内容扩展记录为 353 个正式词义和 324 个非读音语法项各有
+至少三个任务家族、三个源语境；这不是承诺每个项都拥有所有操作类型。
+具体统计受内容包版本约束，依据 docs/varied_practice_0281.txt。
+
+共享例句以句子身份和引用身份分开保存。同一例句可关联多个学习项；每个引用
+各有目标片段、高亮、提示与解释。重叠片段关联多项时可选择，不强行唯一归因。
+反向索引显示已加入/初学/熟悉等当前状态；引用排序按用户熟悉背景加权，显示
+提示也按当前目标与用户背景筛选。浏览例句不是考试评分。
+
+课程详情通常先显示两条例句，全部列表分页；例句详情能切换关联用法、查看
+全部关联、添加其他引用。用户可编辑添加、预览导入；AI 候选保留后才成为用户
+材料，入学仍独立。稳定格式/引用校验在 example_store.validate_pack/parse_pack/
+ExampleStore.add_example/prepare_import；排序在 for_item，提示在 display_hints。
+出处、语料审核与不确定性位于资料页，不挤在主要日语内容旁。
+
+“每个学习项不少于十条例句”是内容建设与校验要求；不能从 UI 可显示十条推断
+已对所有词典条目、所有用户自建项完成审校。现有包、导入包和 AI 候选需分别
+检查覆盖与语义可信度，结构校验不等于语义完整准确。
+
+默认翻译走自然现代汉语，允许必要补足省略成分；实验性日语顺序译文单独折叠。
+它可以借用文言/灵活语序，但不是默认答案判定依据，也不能从答前折叠区泄露
+填空或隐藏听力答案。来源：example_ui.py natural_translation_text/
+natural_translation_review_rows/order_translation_rows；
+learning_questions.py learning_order_translation_source。
+
+八、字体、大字号、手写与维护反馈 [I]
+---------------------------------
+
+字体由语义角色决定：UI/中文说明默认 sans-serif，明确日语内容使用 serif 和
+Android 日文 Locale；不能根据一个共享汉字猜其语言。混合文本只标注已知日语
+片段。字号放大后允许标签/按钮增高、分栏减少、整词换行和必要表格横向查看。
+详情标题紧凑，不重复占据大副标题；主要答题区应保留可操作的评分/提交控件。
+来源：typography.py configure_text_role/configure_study_ranges；text_layout.py、
+selection_layout.py、sentence_annotation_ui.py；app.py label/button/_update_chrome。
+
+手写使用原生触摸历史采样和当前采样批量交付，浮点轨迹与相对时间保留；取消、
+越界、多指切换不误接笔画。绘图增量维护 Path，避免每帧重建所有旧点，写字
+过程中即时回显，识别不应成为唯一刷新机会。抬笔仍持久化草稿，重启可续写；
+撤销/清空/识别候选与原题身份绑定。模型未下载时给明确入口，不把模型缺失
+算用户答错。来源：platform_android.py bind_ink_touch、ink_renderer.py、
+app.py show_ink_page 及笔迹处理；practice_worker.py、ink_candidates.py。
+
+全局反馈先捕获原页面，再打开编辑器，原控件/草稿仍可恢复。上下文包含页面、
+片段来源及修订、题目/输入/反馈、字体布局/滚动及截图可用性；脱敏与完整性
+标记是导出解释的一部分，不把截断数据装成全量还原。反馈采集不生成题、
+揭示答案或评分，数据库独立于学习记录。保存/导出不会自动上传给 LLM。
+
+反馈可批量筛选、多选、归档/解决/删除；ZIP 包含图像，剪贴板包含完整已捕获
+文本上下文。默认成功交付后归档；取消/失败或并发编辑过的记录不误归档。
+导出是一次快照并有幂等回执，不让后台完成回调覆盖后来打开的页面。
+来源：feedback_lifecycle.py begin_page_feedback、feedback_context.py、
+feedback_ui.py export_feedback_records、feedback_store.py；
+docs/feedback_format.txt、docs/feedback_export_0268.txt。
+
+九、验证范围：历史验证记录不随公开源码发布；可执行契约见第十节。
+--------------------------------------
+
+十、可执行契约定位（文件存在不作为 V）
+---------------------------------------
+
+导航/安全返回：tests/test_navigation.py、test_focused_navigation.py、
+test_index_preview_navigation.py、test_content_link_navigation.py。
+首次学习/连续推进：test_initial_familiarity.py、test_initial_familiarity_ui.py、
+test_kana_initial_familiarity.py、test_study_path_continuation.py、
+test_study_path_wait_recovery.py、test_study_path_adaptive_advancement.py。
+树形/依赖：test_study_path_selection.py、test_study_path_entry_service.py、
+test_study_path_progression_audit.py、test_study_path_ui.py。
+多题型：test_varied_practice.py、test_varied_practice_ui.py、test_varied_practice_support.py、
+test_kana_context_words.py、test_word_romaji_practice.py、test_word_romaji_units_ui.py。
+判题反馈：test_homophone_feedback_ui.py、test_foreign_hiragana_answer_policy.py、
+test_retained_practice_context.py、test_retained_course_feedback.py、test_kana_answer_origin.py。
+安全媒体：test_sentence_annotations.py、test_sentence_annotation_integration.py、
+test_sentence_annotation_ui.py、test_learning_answer_audio.py、test_learning_answer_autoplay.py、
+test_practice_answer_autoplay.py、test_ai_answer_autoplay.py。
+图形/字号：test_typography.py、test_learning_typography.py、test_pitch_compact_words.py、
+test_pitch_alignment.py、test_learning_pitch_alignment_viewport.py。
+维护反馈：test_feedback_lifecycle.py、test_feedback_context.py、test_feedback_clipboard_ui.py、
+test_feedback_export_receipt.py。共享例句/手写的细项以各模块测试为准。
+
+十一、旧文档的替代范围与明确未实现部分
+-----------------------------------
+
+本文件在“当前产品入口、教学/答题交互、题型与显示边界”范围替代：
+  docs/ui_information_v2.txt 的 2026-10-25 UI 提案；
+  docs/learning_expansion_v2.txt 的功能总案中的界面/题型现状说明；
+  docs/runtime_learning_v3.txt 的早期运行时页面与题型数量说明。
+这些文件仍可作设计缘由，不能同时作为当前状态或当前备份规范。
+
+旧 docs/question_type_catalog_v2.json 的“题型目录”是规划清单。当前可选 kind 以
+app.py PRACTICE_KINDS 和 learning_questions.py 的生产常量及已加载模板为准；
+名称存在、目录有条目、界面能列出与全课程有合格题源是不同事实。
+docs/varied_practice_0280.txt 的未扩展词项范围由 0281 更新；0280 的冻结快照、
+共同能力与不确定答案边界仍有效。docs/retained_feedback_0228.txt 在结果信息
+保留范围取代 compact_feedback_0227.txt 的过度删减，不恢复重复答案块。
+
+P 试验题型 free_writing_translation、situational_dialogue、pitch_discrimination、
+  shadowing_read_aloud、spoken_recall 虽在 EXPERIMENTAL_KINDS 声明，未纳入生产
+  DEFAULT_KINDS。已有音高绘图练习不是用户语音音素级评分，也不是跟读识别。
+  受约束造句与已有对话情境题不等于开放式自由写作/自由会话已可可靠自动判分。
+
+P docs/knowledge_evidence_design_20261101.txt 的全知识点关联证据设计尚未成为现行
+  产品。假名能力合并/统一证据路由也不能因有接口或提案就写成已部署 UI。
+
+U “覆盖所有活跃现代日语语法”“全部字源中间形态有史料证据”“所有词/句
+  的读法与调号确定”“所有例句无错误关联”不由当前 UI 或结构校验保证。
+  内容校验结果需带具体包版本和未决集合，不能用空白或推测填满界面。
+
+U 个别手机/系统 TTS 音色与小假名读法、实机手写长尾、极小屏幕/更大字体
+  下所有播放版本首屏可达仍需实机/指定设备条件复验；不要把模拟器结果外推。
+
+P docs/ai_feedback_correction_design_20261101.txt新增反馈的AI检查、差异审阅与
+  采纳/待核/不采用交互。后台分析不自动展示未答题答案、不等于解决或归档反馈；
+  来源细节默认折叠，进度影响在确有变化时显示。当前App尚无这条完整流程。
+
+P docs/ai_material_verification_design_20261101.txt修订2定义文本供料→核查→安全
+  摘要→先测或先学→保留/舍弃/加入；材料收件箱支持续办，例句正文/引用分别采纳。
+  前置一次确认后连续呈现，先测不被候选预览泄题。这些不是当前ai_ui已有保证。

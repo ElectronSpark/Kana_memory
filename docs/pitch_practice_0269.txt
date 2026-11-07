@@ -1,0 +1,82 @@
+KanaMemory 0.26.9 — pronunciation feedback
+=========================================
+
+The seven submitted reports concern repeated conceptual questions, unclear
+accent terminology, and a lack of hands-on mora/pitch exercises. Raw reports,
+screenshots and learner context remain private and are not release artifacts.
+
+Interaction
+-----------
+New authored pronunciation templates retain the two existing ability IDs.
+pitch_fill asks the learner to apply a stated accent to one real word with an
+optional particle. High/Low consumes a supplied mora in elementary mode, or a
+kana character in learner-segmentation mode. Merge consumes the next small kana
+and joins it to the previous group; Backspace reverses one learner action.
+Single-word exercises give the word/particle boundary automatically, including
+editable old snapshots which originally requested Split. Their high/low and
+small-kana grouping inputs are preserved. Automatic boundaries do not require
+an extra Backspace. No arbitrary speech segmentation is inferred.
+The v1 contract deliberately covers one word plus an optional particle; a
+multiword sentence must use a future explicit format rather than guessing.
+
+pitch_identify presents the contour and asks separately for the word's mora
+count and accent number. Particles are visibly distinct and excluded from the
+word count. Flat/final-drop ambiguity without a following particle is rejected.
+An unknown word's dictionary accent is not inferred from its spelling.
+
+Kana stay on a common baseline; high/low horizontal marks appear above them.
+The current character/group is highlighted, and fixed token colors distinguish
+words and particles. Glyph positions never depend on pitch or entered groups.
+Wrapping prefers complete words, keeping short following particles with their
+word when possible. Overlong words use a deterministic character fallback,
+with continued token color and line connections. Merge and undo only update
+marks, group spans and progress, never lift or lower the kana themselves.
+The answer controls use upper/lower line symbols, a join symbol and Backspace;
+Android accessibility descriptions and long-press hints explain the symbols.
+Android draws the pitch diagram in one retained vector Canvas. Input updates
+its marks, emphasis and accessible description without rebuilding native
+layout containers. Text keeps the same point size as native lesson labels.
+Additional examples are available without repeating the primary diagram.
+Word ruby elsewhere retains the existing -/_ and accent-number preferences.
+
+Storage and assessment
+----------------------
+pitch_practice.version=1 specifies the exact kana, authored morae, accent,
+particle and editor options. Responses have a pp1: JSON envelope; controls and
+feedback show diagrams and readable labels, never that serialized value.
+Drafts contain reversible actions or two selections and a matching response.
+Draft operations, instruction and guided practice do not create review events.
+Only a completed independent submission is graded, with the existing one-event
+per-question finalization. Revealing the answer remains assisted.
+Inline guide feedback is brought into view after layout settles; delayed
+scrolling is ignored if the page, question, result or scroll container changed.
+Splitting errors are diagnosed before pitch differences caused by misalignment.
+
+Existing study IDs, unit identities, schedules, stored questions and drafts are
+retained. Exact audited lesson overlays improve presentation and future
+question generation without mutating enrolled content. Existing question
+snapshots and answered guides remain recoverable in their original form.
+New-format snapshots, drafts and guide checkpoints are validated on insertion
+and backup import. Imported/custom material cannot impersonate a reviewed
+built-in teaching record by reusing only its ID.
+
+Answer protection
+-----------------
+Identification diagrams expose no accent number or explicit word-count label.
+Fill diagrams do not complete missing levels. Generic ruby and TTS hints remain
+blocked for pronunciation questions. Ordinary TTS is not a verified reference
+for a specific accent, including on the result page. These are annotation and
+application exercises, not listening discrimination or speech assessment.
+
+Feedback capture
+----------------
+A report made from inside the feedback editor now retains one bounded original
+page context. The editor's actual screen is still captured; the underlying
+lesson is available to maintenance without recursive capture growth or exposing
+hidden solutions in the on-device capture preview.
+
+Validation scope
+----------------
+Use targeted domain/storage/controller/layout regressions, synthetic isolated
+Android QA and reproducible package checks. The paused four-year simulation is
+not restarted for this increment. No real learner database is edited for tests.

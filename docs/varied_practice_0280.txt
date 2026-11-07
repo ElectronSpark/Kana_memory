@@ -1,0 +1,84 @@
+0.28.0 — Varied Japanese practice with stable interaction
+
+Objective
+Help learners repeatedly understand and use the same word sense or grammar
+function in different contexts, without repeatedly learning how to operate the
+exercise. Preserve all enrolled identities, schedules and frozen pending work.
+
+Implementation contracts
+1. Reviewed practice material is a separately versioned private content-pack
+   namespace. It binds to an exact existing lesson identity/content fingerprint.
+   Existing template indices and stored question snapshots retain their meaning.
+   Clean MIT source builds without that private namespace.
+2. New templates reuse choice, text and reorder interaction modes and existing
+   ability identities. Task families describe language use (context, dialogue,
+   information, completion), not additional independent SRS cards.
+3. A template may carry practice schema version 1, task_family, context_id,
+   optional example_id, scaffold (recognition/cued/retrieval), target_spans,
+   background_ids and reviewed status. Spans refer to the public prompt.
+   Example association alone never licenses guessing distractors or judging an
+   arbitrary response as wrong. Reviewed answers and conservative unresolved
+   handling remain authoritative.
+4. Future-question selection uses bounded recent evidence, response support,
+   task/context coverage and enabled kinds. Already pending work is not replaced.
+   Prefer supported practice after difficulty, progressively test independent
+   retrieval, and retain diversity rather than chasing only old mistakes.
+5. Guided demonstration and practice do not produce formal FSRS grades. The
+   existing exactly-once contract for a frozen formal attempt (including reveal
+   or a hint) is preserved. A choice success cannot create a text-recall success.
+6. New guided exercises use their actual input operation, with an explicit short
+   demonstration/help. Familiarity selection, prerequisite introductions and
+   continuous progression remain available. Drafts must survive restart.
+7. Japanese stimulus precedes secondary controls. Short familiar instructions
+   remain where needed; avoid mysterious icons. Answer feedback, safe audio,
+   explanation and four formal review ratings remain available.
+8. Ruby, pitch, TTS and background help obey the tested ability's anti-leakage
+   rules. Unknown prerequisite content is supported or excluded; it is not
+   silently graded, enrolled or used to penalize unrelated memory units.
+
+Increments and checks
+A. Content/template extension and conservative grading: schema/coverage checks,
+   answer acceptance, invalid variants, private/demo separation.
+B. Selection and evidence: bounded history, deterministic recovery, diversity,
+   enabled-kind restrictions, retrieval coverage, old queue/due preservation.
+C. First learning and presentation: real guided controls, continuous flow,
+   snapshot/draft resume, no answer leakage, stable control placement.
+D. Integration: targeted regression suites and finite synthetic sessions;
+   isolated Android manual checks at normal/enlarged text, first learning,
+   correct/wrong/reveal, new contexts, interruption and resumption.
+E. Freeze tested sources; build personal, QA and clean demo distributions;
+   verify APK inventories and package identity, archive reviewed outputs and
+   commit code and artifacts separately.
+
+Scope boundaries
+Do not restart the paused four-year/full simulation, operate on a real learner
+database, call a paid model, or work on the deferred mobile download issue.
+Coverage reports must distinguish audited generated practice from manually
+authored scenarios, and actual content coverage from supported type names.
+No universal optimal practice count or FSRS weight is claimed.
+
+Evidence informing the design
+Frances et al. (2020), contextual diversity in vocabulary learning:
+https://pmc.ncbi.nlm.nih.gov/articles/PMC7435265/
+Suzuki & Sunada (2019), L2 practice type and practice schedule:
+https://yuichisuzuki.net/wp-content/uploads/2023/04/Suzuk-Sunada-2019-SSLA.pdf
+NSW CESE, Cognitive load theory in practice:
+https://education.nsw.gov.au/about-us/education-data-and-research/cese/publications/practical-guides-for-educators/cognitive-load-theory-in-practice.html
+Japan Foundation, Irodori:
+https://www.irodori.jpf.go.jp/en/about.html
+
+These sources support context diversity, actual practice of the desired skill,
+worked examples and gradual removal of assistance. Specific runtime selection
+weights and UI arrangements are product choices, requiring verification.
+
+Implemented coverage and limits
+- 4,911 appended templates across 343 existing word senses and 324 grammar
+  items, without changing their IDs. 96 manually authored tasks include deeper
+  situation/dialogue/transformation practice for 28 grammar items plus 12 word
+  information-extraction tasks. The remaining breadth reuses exact reviewed
+  sentence contexts; it does not claim all 324 grammar items have every mode.
+- 1,318 additional annotation sentences; 35 confirmed reading corrections and
+  explicit uncertainty for names or accents that could not be verified.
+- Ordinary selection uses at most 24 recent observations per ability. Desktop
+  measurements are not a claim about phone latency. Extreme reconstruction of
+  500 entirely missing queues remains a separate batch-performance opportunity.

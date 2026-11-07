@@ -1,0 +1,103 @@
+[现行规范指引 2026-11-01]
+角色：早期课程覆盖记录。现行入口：docs/design_current/02_product_ui.txt、03_learning_scheduler.txt。
+四共享读音规则和后续音高题型按新规范；原数量不是现行穷尽覆盖。
+旧正文按原样保留；完整替代登记见docs/design_current/06_document_history.txt。
+
+读音规则学习项：本地课程范围（2026-10-25）
+========================================
+
+本轮新增34个可加入学习的内容项，每项有首次讲解、至少两种例子、规则理解与应用各两题，共136个题模板。
+学习库单列“读音规则”；底层沿用grammar储存家族以兼容已有数据库和备份，domain=pronunciation区分展示与题型。
+每项跟踪understanding与application两种能力；本轮的文字题不声称测得听辨或口语发音能力。
+前置关系只引用本轮读音课程，避免为了读音学习强行加入整条语法学习链。真实新课先讲解、跟做，再进入独立练习。
+
+音拍与长短（6项）
+- mora：音拍计数，普通拍、促音、拨音、长音后半。
+- yoon：小ゃゅょ与大假名，びょういん／びよういん。
+- foreign_small：ティ、ファ等常用组合，不按字形数量机械计拍。
+- long_duration：长短对立、ー与前一元音。
+- long_ou：常见长o，おう／おお拼写以及词汇、词界限制。
+- long_ei：えい的常见长e实现，不据此改写规范假名。
+
+促音与拨音（5项）
+- sokuon_stop：k／t／p前的闭塞时长。
+- sokuon_fricative：さ行前的摩擦延长，促音不等于一律无声停顿。
+- nasal_mora：ん保留拍位、不补元音。
+- nasal_assimilation：p／b／m与k／g前的常见发音同化。
+- nasal_boundary：ん＋元音或や行，避免并成な行音节。
+
+音高与语调（7项）
+- accent_basics：东京式基准、相对高低、下降核与调号定义。
+- accent_flat：0型的基本模型及后接助词。
+- accent_head：①型下降位置。
+- accent_middle：按拍定位中高核。
+- accent_tail：平板与尾高，加が观察区别。
+- intonation：词重音与句末语调、语境的分层。
+- compound_accent：复合词／活用整体核对，不拼接或相加调号。
+
+特殊拼写与读法（4项）
+- particle_wa：助词は读wa，词内は读ha；こんにちは／こんばんは。
+- particle_he：助词へ读e，词内へ读he。
+- particle_wo：共通语助词を常读o；字形教学wo与真实发音区别。
+- yotsugana：じ／ぢ、ず／づ常见合流及现代假名遣。
+
+语流与音变（2项）
+- devoicing：i／u无声化的常见条件、变异，不删写法和拍位。
+- connected_phrasing：词＋助词、意义短语的连贯组织，不把所有连读当任意删音或英语式重新划音节。
+
+会话缩约（4项）
+- contraction_teru：ている→てる、でいる→でる、ています→てます。
+- contraction_toku：ておく→とく、でおく→どく。
+- contraction_chau：てしまう→ちゃう、でしまう→じゃう及过去式。
+- contraction_dewa：では→じゃ、ては→ちゃ，避免混同しまう。
+
+连浊与词汇读法（6项）
+- rendaku：常见后项清浊交替，手紙、雨傘。
+- rendaku_limits：莱曼法则、浊阻碍音与响音区别，不据此作充分条件。
+- counter_alternation：本的hon／bon／pon与数量组合，避免推广到全部助数词。
+- sino_gemination：学校、一回等词的促音化，与连浊区别。
+- on_kun：音读、训读按具体词确定，字数不是绝对判据。
+- whole_word_reading：熟字训、今日的语境读法及专名查证。
+
+题目与防泄题
+全部题模板safe=False。读音规则题及应用题不提供题干TTS或自动假名注音，防止从朗读、注音或调号直接获得正在测试的答案。
+规则说明和纯中文选项用界面字体；日语词形、句子和假名选项显式使用学习字体，数字、符号模型使用界面字体。
+首次学习／详情的音高图用-（高）、_（低）放在逐拍假名上方，并保留调号独立开关。图是指定东京式基本模型，不是实测声学曲线。
+箸＋が／橋＋が、鼻＋が／花＋が与あなた的示范据东京外大模块核对；不使用未经核定的TTS作为音高标准答案。
+部分非音高课提供完整词或短句的系统TTS示范，只用于初讲和详情；不朗读裸っ、ん、箭头或音高符号，也不产生口语评分。
+
+资料与原创性
+中文讲解、短例、选择项和反馈为本应用原创。来源主要用于核对现象和边界，不复制原教材正文或分发原站录音。
+每项source_ids与source_urls在“资料”中可追溯；首讲正文不堆放来源细节。
+
+主要来源
+东京外国语大学日语发音模块：
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/01-10-01.php （音拍）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/01-11-01.php （拗音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-01-01.php （促音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-02-01.php （长音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-03-01.php （拨音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-04-01.php （元音前拨音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/01-08-01.php （重音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/01-09-01.php （语调）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-07-01.php （复合重音）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/02-10-01.php （连浊）
+ https://www.coelang.tufs.ac.jp/mt/ja/pmod/practical/03-03-01.php （无声化）
+国立国语研究所：
+ https://www.ninjal.ac.jp/research/cr-project/project/a/sequentialvoicing/
+ https://www2.ninjal.ac.jp/past-projects/rendaku/workshop/2012/3rd_meeting_2012/
+ https://kotoba.ninjal.ac.jp/qa/yokuaru/qa-18/
+文化厅：
+ https://www.bunka.go.jp/kokugo_nihongo/sisaku/joho/joho/kijun/naikaku/gendaikana/kaisetu.html
+ https://www.bunka.go.jp/seisaku/kokugo_nihongo/kyoiku/china_kikokusha/pdf/seikatsu_02/division_03.pdf
+国际交流基金：
+ https://www.irodori.jpf.go.jp/assets/data/elementary01/pdf/Y_all.pdf
+出版社及教学机构：
+ https://ask-books.com/wp-content/uploads/files/catalogue/J_catalogue2024.pdf
+ https://cotoacademy.com/japanese-item-counters-counting-nouns-time-frequence-occurrence/
+ https://www.kanken.or.jp/kanken/guideline/data/guideline_guide02.pdf
+
+范围边界
+本轮不是所有方言或专业语音学现象的穷尽目录；不把重音、连浊、汉字读法或助数词音变包装为无例外算法。
+尚未做录音逐条人工听审、声学音高识别、最小对立听辨实验、跟读评分或专名读音库。
+未来可独立扩充浊阻碍音变体、鼻浊音、外来语扩展组合、韵律焦点、活用重音与助数词完整小表，先补可核对的例词和可靠音频再加入听力判分。

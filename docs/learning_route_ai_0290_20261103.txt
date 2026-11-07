@@ -1,0 +1,93 @@
+学习路线与AI题型覆盖复核（0.29.0；2026-11-03）
+
+范围与状态
+这是对当前实现的增量修复，不恢复长期模拟或旧目标，不扩充语料或更改FSRS参数。
+本文件补充现行design_current及0.28.9题面规范；不替代其首学、防泄题、评分归属规则。
+代码已实现；定向验证与最终包身份在本文件末尾追加。真实供应商语义质量未验证。
+
+一、与历次要求核对的学习路线
+现有内容包：712课程项（353词汇、324语法、35读音规则），239个可练假名字形方向，
+356小节。所有声明的item/section前置均位于同节或之前，缺失或逆序为0。
+阶段词汇/语法数：生活151/14，日常161/137，连贯17/78，阅读12/74，正式12/21。
+78条词汇穿插规则已接入；这不等于覆盖全部现代日语或考试要求词量，后期词量尤其偏薄。
+声明图正确也不等于每道自然语料都没有隐含词汇难度；本轮不是重新逐句审校全部语料。
+
+实际控制器已连接：
+- 小假名/促音/长音/拨音共享规则、单独字形方向、拗音前置及共享规则验证；
+  未归因的拗音错误最多另选2项验证，不直接连坐其他拗音。
+- 首学讲解与熟悉度选择、自动逐项教学块、前置保护、后续小节/跨单元连续推进。
+- 正式词汇与语法穿插；假名阶段单词辅助练习仍仅影响相关假名/规则，不自动建词卡。
+- 当前设置重新过滤队列、追加批次去重、已展示草稿保护和未来到期等待。
+- 同一知识点识别/提取/应用切换，错误上下文限定，独立覆盖槽避免无限重练旧错。
+- 读音题默认罗马音输入；给罗马音选假名时不提供抄写式转换；不要求日文输入法。
+- 标记词高亮、必要短提示、读音/填空/听力的注音朗读防泄题；回答后的图形结果及评分。
+边界：现有普通假名当前题在被关闭时会清除未评分字迹/草稿；工具词使用停车保留机制。
+其他队列与到期不变。本轮未扩改这项既有行为，不能将其描述为所有禁用题均保留原草稿。
+
+二、本轮发现并修复的漏接
+1. Tutor只按旧question_templates计数，12858个扩展变体中10393个索引永远不被枚举；
+   retention固定前三个变体也漏掉后加语境。现共用practice_candidates，检查背景已独立
+   学会后才入池；Tutor按完成数轮转有界窗口，不用墙钟跳题；诊断按已发生观察轮转。
+   Tutor最多8候选，优先保留4个知识点及同目标另一题型；独立检查仍锁定1道本地题。
+2. 音高kind在名单里但Tutor只接choice/text/reorder。现增加pitch_fill/pitch_identify，
+   v1单词/v2整句/v3汉字分词复用同一快照、可逆草稿、控件、判题及图形反馈。
+   未完成/无效输入不记结果；不把内部音高答案JSON显示给用户。
+3. API遗漏practice中的目标span。现传校验过的公开presentation：target_spans、
+   task_family/scaffold、输入单位及听音/读音/音高/填空限制。模型知道标记哪个词；
+   不把答案猜出的文字当公开锚点，不通过普通TTS认证声调。
+4. 原生9题型不在课程Store范围。现采用独立native引用：每lane最多当前一个合法头题；
+   不复制原题、不建新课程卡、不发送整队列、字迹或草稿。网络回来按题目/会话/设置/
+   草稿指纹复查，过期候选拒绝；随后走本地主线首学和到期保护，或原单词工具续练。
+   只读准备不提前协调开关、不跨lane改共享Store、不越过头题去挑后面的题。
+   无当前合法头题时，该类型只报告为本轮无候选；这不是未掌握，也不会因此记错。
+5. 追加边界复核发现：原生候选的next若接受explain，可能讲出答案却没有原生assisted记录。
+   已同时收窄schema、提示词和响应校验：含原生候选的next整次只允许retrieve，仍可在
+   所供课程/原生候选中选择；text为空、question为null。旧缓存回复在显示和写帮助记录
+   前也拦截并转本地。纯课程next及主动ask/explain原合同不变；原生接入是选题/续练，
+   不是新建一个原生题内讲解通道。修复前5项红灯及修复后42项通过证据均保留，
+   未调用真实API、未影响个人学习数据。
+   包括旧缓存UI在内的146项复核通过（18.37秒）：
+   .test_runs/route290-final/native-exposure-fix/。
+
+三、模型能力目录与执行权限
+26种真实类型均进入辅导/生成/留存建议的能力上下文；每种报告enabled与本轮候选可用性。
+目录不表示每次都必须考26种，也不授权模型调用录音/识别或修改调度。
+- 课程17种：vocab_meaning / vocab_audio_meaning / vocab_reading / vocab_recall /
+  vocab_orthography / vocab_usage / vocab_zh_ja_contrast / reading_comprehension /
+  listening_comprehension / grammar_meaning / grammar_cloze / grammar_transform /
+  grammar_reorder / targeted_correction / controlled_sentence_production /
+  pronunciation_rule / pronunciation_application。
+- 原生9种：kana_choice / kana_romaji / romaji_kana / romaji_kana_full /
+  romaji_handwriting / kana_handwriting / word_kana / word_meaning_kana / word_romaji。
+  word_romaji仍以单个假名为单位逐步组成整词；拼写仍用既有规范/同音判题策略。
+- 自由生成仍限6类：vocab_meaning/vocab_usage/vocab_zh_ja_contrast/
+  reading_comprehension/grammar_meaning/grammar_cloze；未经语义认证的生成题仍是辅助材料。
+  其他类型通过现有本地候选调取。手写模型/TTS不可用或题型已关闭时，不给对应可执行引用。
+- 留存检查仍只结算原课程能力；原生假名通道通过Tutor续练，不冒充课程诊断或跨写复习事件。
+- free_writing_translation/situational_dialogue/pitch_discrimination/shadowing_read_aloud/
+  spoken_recall仍为实验命名，未计入已支持类型，不能让模型虚构这些控件。
+
+四、数据与协议边界
+未新增记忆单位、迁移学习记录、删除队列或改到期时间。原生选择不写Tutor题条；正式
+评分仍由原通道完成，辅助单词仍按原低权重且幂等。Tutor音高沿用原辅助证据政策。
+新增question_capabilities和presentation为允许的可选网络字段，旧请求仍可校验。
+最多8候选、8近期结果、6聊天轮；保留64KiB请求上限，不上传完整长期画像/原始历史。
+候选身份及内容/开关/背景资格在采纳和提交边界复核。用户提问/帮助曝光规则保持原样。
+参考官方Structured Outputs说明：https://developers.openai.com/api/docs/guides/structured-outputs
+结构符合schema仅解决输出形状；本地仍执行候选身份、范围、资格、版本和答案验证。
+
+五、验证记录
+路线只读目录及12项连续教学/依赖/规则证据契约：.test_runs/route290/audit/。
+152项核心契约通过：.test_runs/route290/core-contracts/（42.28秒）。
+28项新增题型/音高合同已独立通过，包含在上述核心契约中，不重复相加。
+最终271项契约通过（117.02秒）：.test_runs/route290/final-contracts/，包括87项合成UI
+及32项原生路线协议测试。末端原生控制器在合同测试中为记录回调，不冒充真机屏幕。
+随后修复内容整理请求scope=None兼容及区分“练习生成”和“内容草稿模板”的提示规则；
+其128项API/题型/路线复核通过（7.35秒）：.test_runs/route290/api-final/。
+最终产品源码54c6a09424695e5a94d083aee1cde518ffacdc13的120项工程检查通过
+（13.34秒；.test_runs/q-fhjxgcai）。独立MIT导出副本以自身cwd、未设置PYTHONPATH
+及原创demo运行120项工程检查通过（10.38秒；route290-release-demo/.test_runs/
+q-a62rrhq5）。146项末端回归的生产文件hash与最终构建输入一致；此前各轮有重叠，
+不可将271/128/112/146项或120项简单相加作为独立用例总数。
+
+原生合成路径验证了 pitch_fill/pitch_identify 恢复与本地续接；发现并修复 Tutor 画布重复题面。

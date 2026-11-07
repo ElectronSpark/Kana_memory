@@ -1,0 +1,50 @@
+停学恢复策略独立复核与性能合入记录（2026-10-27）
+
+范围与结论
+只读检查 review_dispatch 与四处调用：StudyStore.prepare_next_question、
+LearningStore.current、StudyPathRuntimeMixin.continue_study_path、模拟器 KanaLane。
+本次恢复优先权的严格保证范围是统一每日学习路线（fair_new=True）和课程默认
+dispatcher；没有发现这几处接线遗漏每日真实评分次数、恢复后重复计数或绕过已有
+未来题目/曝光冷却过滤的问题。此结论不代替长期行为测试或设备验证。
+
+同一方向的次数由已持久化事件按学习者本地日界派生：假名按 card_id，课程按
+unit_id 与 primary 事件。独立首答后尚未评分的反馈、未解决结果、辅助词拼写不会
+被当作新评分。备份、重启、重复回调不会创建新的优先权计数；实际提交时刻保持。
+课程排队仍检查 effective_question_due、bridge 和前置；假名仍保留题目自己的
+not_before、初次曝光/反馈冷却、暂停以及真实草稿/未评分反馈保护。
+新排序只改变已有可答候选的服务次序，不改 FSRS 输入、原 due 或题目快照内容。
+
+主动选择的独立旧版练习：明确保留的例外
+prepare_next_question 的 not fair_new + adaptive 分支会将已学 content/script
+的多个提问方向共同放在 (3,0)。这有意保留用户要求的多题型交错：既有回归要求
+十个到期选择题中前三题就出现另一题型，而不是重新形成纯选择题块。
+因此，当日已评分两次的短步虽然被 review_priority 降为普通到期，它仍可能在
+旧版排序分支中保持原先位置；已学内容的新方向也可以混在普通复习中。
+旧版 heap 的防相邻同内容规则还可以用全新内容隔开同内容的连续问题。
+不能宣称任意 standalone 定向/混合模式都严格遵守所有 due 优先。
+
+私有合成夹具验证了四组队列（分别启用/关闭 fair_new，合计八次）：
+- 热点短步在前、旧到期在后：旧版保留热点在前；统一路线选择旧到期。
+- 已学内容的新方向在前：旧版保留交错；统一路线选择旧到期。
+- 真正全新内容在前且无需同内容间隔：两种模式都选择旧到期。
+- 上一题与旧到期同内容：旧版以全新内容隔开；统一路线仍选择旧到期。
+八次均保持所有记忆状态/事件业务行以及题目多重集合不变。
+
+本轮决定是不改用户主动选择的旧版练习语义。若未来让该模式也严格 due-first，
+必须同时重新设计上述交错合同，不能只删 rank 覆盖或一个条件便宣称两者都保留。
+
+current() 批量元数据读取：已由 root 合入
+只把当前调用内的逐内容全行 SELECT 改为一次读取 content_id、stage、
+checkpoint_json、retrieval_at_utc、guided_at_utc；没有跨调用缓存，也没有改变
+排序函数、事件计数或检索桥接条件。guided_at_utc 保留了真实交错事件提前解锁
+bridge 的原逻辑。完整内容仍由 get_item 读取。
+
+88 组状态/题型开关/fair_new 组合的返回值完全等价，
+所有业务行/事件/due 不变，源合成库 SHA-256 不变。3365 项、6114 题的末期
+合成库交替各计时十次：fair_new=True 的 SQL 3384→20，中位131.0→89.3ms；
+False 的 SQL 3398→34，中位131.6→90.3ms。这是微基准，不能当作四年总耗时。
+
+原始候选测试 32 项通过；root 合入并与当前 daily-count 实现一起再测，
+tests/test_learning_current_prefetch.py、test_learning_store.py、
+test_review_recovery.py 共 68 项通过（4.74s）。测试使用工作区专属临时目录。
+

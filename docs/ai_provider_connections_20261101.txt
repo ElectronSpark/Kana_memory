@@ -1,0 +1,113 @@
+多服务模型接入：2026-11-01 开发增量
+==================================
+
+范围与状态
+----------
+本增量替代“只能直连 OpenAI、只能手填模型”的连接层设计。
+加入服务预设、可编辑 API 基础地址、模型列表获取、分别选择语料模型和辅导模型。
+这不改变学习项身份、记忆算法、材料采纳权限、已有队列或学习记录格式。
+源码入口 ai_connection.py、ai_service_ui.py；运行协议测试使用假响应和假凭据。
+协议适配按官方文档实现，未对第三方服务做真实调用验证。
+实际供应商账户可用性、模型效果、服务端 schema 子集兼容性仍待后续验证。
+
+设置流程
+--------
+设置 → AI 服务：选预设 → 核对基础地址/接口/认证 → 填此服务密钥（本地可无密钥）
+→ 获取此服务的模型 → 分别选择语料生成模型、实时辅导模型 → 保存本机配置。
+模型 ID 始终可手填；获取失败、服务无列表或模型尚未加载时仍能保存有效配置。
+刷新列表不会自动选择第一项，不覆盖已手填模型，也不保存连接配置。
+列表只有服务返回的可用标识，不等于已确认该模型具有出题能力或支持结构化输出。
+模型 ID 允许命名空间、冒号及量化标签，例如 org/model:Q4_K_M。
+调用只发生在用户按获取/生成按钮时；保存只验证配置及本机密钥读回，不探测远端。
+切换服务清空尚未保存的密钥输入和旧列表。返回页或更改地址后，旧异步结果不写入新表单。
+同一 App 同时最多一项模型列表请求；网络在工作线程执行，不阻塞手写/原生 UI 线程。
+
+协议矩阵（实现；第三方真实服务 U）
+---------------------------------
+Responses：基础地址 + /responses；模型列表 + /models。
+  OpenAI 默认 https://api.openai.com/v1，保留 store=false。
+  普通模型不发送专用于推理模型的 reasoning；第三方 Responses 也不默认发送此参数。
+OpenAI 兼容 Chat Completions：基础地址 + /chat/completions；列表 + /models。
+  预设 DeepSeek https://api.deepseek.com，JSON 对象输出。
+  预设 Gemini https://generativelanguage.googleapis.com/v1beta/openai，JSON Schema。
+  预设 LM Studio http://localhost:1234/v1，JSON Schema，可编辑为电脑局域网 IP。
+  其他兼容服务/网关使用自定义地址；本地 vLLM 等亦走同一协议。
+Claude Messages：基础地址 + /messages；列表 + /models，最多 5 页 × 200 项。
+  预设 https://api.anthropic.com/v1，固定文档版本 2026-10-21，Bearer 认证。
+  JSON Schema 使用 output_config.format；也可选提示词约束 JSON。
+Ollama 原生：基础地址 + /api/chat；列表 + /api/tags。
+  预设 http://localhost:11434，默认无需密钥；关闭流式输出，format 接受 schema/json。
+  不拉取模型、不执行服务管理命令，也不上传本地文件或学习数据库。
+
+手机上的 localhost 是手机自己。连接电脑时用同网络可达的电脑局域网 IP，
+并由用户配置服务监听地址和防火墙；模拟器访问宿主可用 10.0.2.2。
+不自动修改电脑防火墙、不暴露服务到公网、不安装本地模型。
+HTTP 只接受明确的回环/RFC1918/IPv6 ULA 地址，云端必须 HTTPS。
+无密钥模式限以上本地地址；不允许对任意公网地址匿名发送学习内容。
+不支持 AWS 签名、Azure 专用认证、浏览器登录/OAuth、任意自定义请求头等接口；
+这类服务可通过用户自行部署的兼容网关使用，不能据此声称支持所有供应商。
+
+输出与错误边界
+--------------
+JSON Schema：发送协议的结构化输出参数；模型和服务须支持本应用 schema。
+JSON 对象：仅 Responses / Chat / Ollama 支持；完整 schema 同时放入指令。
+提示词约束 JSON：仅依靠指令生成 JSON，兼容性较宽但容易格式不合格。
+三者均经过相同的本地解析、请求范围、数量、目标、关联片段及材料审核校验。
+不会以“模型声称审核通过”获得评分资格，不自动放宽校验，不自动换模型或重试收费请求。
+截断、拒答、请求工具调用、空输出、非 JSON、超范围输出均不成为学习材料。
+所有协议都不声明可调用工具；回复里的 tool_calls/tool_use 不执行。
+不向模型发送密钥、整个学习库或未发送的草稿；保留既有检索与有限上下文策略。
+协议适配只变换请求/返回外壳，材料生成、辅导问答与建议问题共用同一连接入口。
+响应读取上限 2 MiB、请求上限 192 KiB；列表最多 1000 个有效 ID，分页不跟随远端 URL。
+GET/POST 均不跟随 HTTP 重定向；错误只显示本地分类，不显示服务可能回显的输入/密钥。
+列表请求每页超时 12 秒，最多 5 页；生成沿用 100 秒，辅导 45 秒，无无限重试。
+接口返回的 token 用量标准化为有限数值；不凭空推断第三方价格或宣称费用相同。
+本地小模型能否可靠完成日语出题和语料审核，需要后续专门评测；获取列表不是能力验证。
+
+配置与密钥隔离
+--------------
+继续使用 app_setting 的 ai_connection_v1 键，值 version=2：
+  preset, protocol, base_url, auth, output_mode, model, tutor_model。
+只存允许的非秘密字段；旧 version=1 配置按原 OpenAI 地址读取，保留原两种模型。
+无需迁移任何学习表、队列或进度。备份对此设置的既有排除规则不变。
+OpenAI 官方地址沿用 openai_api_key 凭据槽；其他服务使用
+endpoint_<sha256(protocol + newline + canonical_base_url)>。
+更换地址/协议不能取出其他服务密钥。规范化包括主机大小写、默认端口、尾斜杠；
+拒绝用户名、密码、查询参数、片段、控制字符、路径穿越、具体请求路径。
+Android 继续用 Keystore AES/GCM + 每个槽名作为 AAD，多个密钥分槽封装。
+Windows 继续用 DPAPI，分槽密文文件；没有明文后备存储。
+删除按钮只删除表单中该地址的密钥。旧服务密钥可在切回相同地址后继续使用或删除。
+OpenAI 保留粘贴 OPENAI_API_KEY 配置行；其他服务只接受单个原始密钥，不猜测环境赋值。
+调试安全导入助手仍仅针对 OpenAI，其他服务通过本机受保护的密码输入框配置。
+密钥与可能误含密钥的原始 URL 输入被排除于界面反馈采集；密钥不随页面返回缓存。
+
+验证边界
+--------
+test_ai_connection.py：四协议的材料/辅导、输出模式、列表边界/分页、无重试、
+  异常返回、模型名、私网/公网地址、旧配置、凭据分槽、禁止重定向。
+test_ai_connection_ui.py：切换供应商、两种模型选择、本地免密钥、失败后手填、
+  异步失效/双击、重开页面、反馈脱敏、学习/队列不变。
+既有 ai_service、tutor_service、ai_request_boundary、ai_key_save、ai_key_transfer、
+ai_ui 测试回归。
+QA 安装包单独命名，使用 prepare_provider_qa.py 注入假列表和内存凭据，禁止真实 AI HTTP。
+该桩只进入隔离 QA，不进入正常源码入口或公开源码白名单；不把桩成功标成供应商通过。
+
+官方依据（访问 2026-11-01）
+-------------------------
+OpenAI 模型发现：
+https://developers.openai.com/api/reference/resources/models/methods/list
+Gemini 兼容接口及模型列表：
+https://ai.google.dev/gemini-api/docs/openai
+DeepSeek 模型列表/JSON 对象：
+https://api-docs.deepseek.com/api/list-models
+https://api-docs.deepseek.com/guides/json_mode/
+Claude Messages 的 system、max_tokens、output_config、版本/认证，以及模型分页：
+https://platform.claude.com/docs/en/api/messages/create
+https://platform.claude.com/docs/en/api/models/list
+Ollama 原生列表/chat、兼容接口范围：
+https://docs.ollama.com/api/tags
+https://docs.ollama.com/api/chat
+https://docs.ollama.com/api/openai-compatibility
+LM Studio 模型列表及 JSON Schema：
+https://lmstudio.ai/docs/developer/openai-compat/models
+https://lmstudio.ai/docs/developer/openai-compat/structured-output

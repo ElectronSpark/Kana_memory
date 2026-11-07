@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kana-memory:ink-result:v1",
+  "title": "InkRecognizer result — design contract",
+  "type": "object", "additionalProperties": false,
+  "required": ["request_id", "status", "model_id", "candidates", "elapsed_ms"],
+  "properties": {
+    "request_id": {"type": "string"},
+    "status": {"enum": ["ok", "empty", "model_not_ready", "cancelled", "error"]},
+    "model_id": {"type": "string"},
+    "elapsed_ms": {"type": "integer", "minimum": 0},
+    "candidates": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["rank", "text"],
+        "properties": {
+          "rank": {"type": "integer", "minimum": 1},
+          "text": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "diagnostic_code": {"type": ["string", "null"]}
+  },
+  "$comment": "Candidate rank is not confidence or handwriting quality. A separate answer-checker receives user-confirmed text. Recognizer/model errors must never schedule FSRS Again."
+}

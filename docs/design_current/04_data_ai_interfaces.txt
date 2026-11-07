@@ -1,0 +1,404 @@
+04 数据、内容包、AI 接口与开放源码边界
+0.30.0本地轮次归档：practice_archive_v1回执绑定原checkpoint/冻结题/已提交观察。
+已确认event及SRS不重写；未评级观察可在学习记录查看和备份，不自动计分。
+原生题目行保留供既有历史和能力路由引用；课程旧pending置为completed仅表示结束排队，
+必须有精确归档回执才能豁免learning_event，get_question公开status为archived并阻止再提交。
+新一轮使用新的题实例ID，内容ID/能力ID/attempt_count不因归档而变更。
+备份导出换连接保留本进程计划；成功导入按新启动归档导入队列。独立AI/诊断事务不被抢占。
+完整合同与验证见docs/practice_round_0300.txt，覆盖下文旧活动队列跨进程续接描述。
+2026-11-03增量：0.29.0学习路线/全题型接口见docs/learning_route_ai_0290_20261103.txt。
+新增26类型能力目录、公开目标语义、原生队列引用和Tutor音高输入；自由生成仍限6类。
+下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+
+======================================
+
+文档日期：2026-11-01。
+现行产品基线：App 0.28.2 / build 280200。本文只说明现状与边界。
+路径均相对 kana_memory 仓库。主入口由 README 统一索引本目录。
+
+状态：I=代码已实现；V=存在既往执行验证记录，必须同时看版本与范围；
+P=尚待实现；U=待复验或证据不足。I 不自动等于 V；测试文件存在不是通过证据。
+本文没有重新运行测试、构建、API 或模拟，没有打开用户备份、学习库或凭据文件。
+
+一、所有权、稳定身份与权威入口 [I]
+--------------------------------
+应用程序、只读发布语料、可变个人学习状态、反馈、系统凭据各有独立边界。
+“内容隔离”不是“个人 APK 不含内容”：个人完整 APK 仍装入独立构建的资源；
+它不能作为纯 MIT 语料发布。代码读取内容包，不执行包中的 Python/JS/SQL。
+
+1. 发布词典与假名：resources/content.sqlite3，只读。
+   权威访问入口为 app/src/kanamemory/content.py::ContentRepository；连接使用
+   mode=ro 和 PRAGMA query_only。实际 DDL 在 tools/build_app_content.py，
+   当前词库 SCHEMA_VERSION="3"，另有独立 content_version；
+   原创 demo 的兼容 DDL 在 tools/build_demo_content.py。
+   实际表：metadata、kana、origin、locality、dialect、historical、
+   character_synthesis、orthographic_relation、source、word、word_collection、
+   word_search、example、word_example、kana_word。主体记录使用稳定 id，关联表
+   使用明确外键与复合键，不用显示标题或排序下标作为身份；payload 保存补充字段。
+   docs/content_schema.sql 的 lexeme/sense/graphic_origin 等为早期概念模型，
+   不能拿它当当前安装包的实际建表脚本。
+
+2. 发布教学内容：resources/teaching_content.sqlite3，只读。
+   权威入口 content_pack.py::validate_installed_pack / load_namespace；构建入口
+   tools/build_teaching_content.py，表为 metadata 与 namespace。
+   format=kanamemory-teaching-content，version=1；namespace 包另有
+   kanamemory-teaching-namespace 标识。加载前检查格式、版本、profile、必需命名
+   空间、校验信息与负载边界；单命名空间最大 32 MiB。CURRENT 必需命名空间集合以
+   content_pack.py::PERSONAL_REQUIRED_NAMESPACES 为准，不能沿用 0.24.0 文档的
+   命名空间数量作现行常量。
+   learning_content.py、learning_questions.py、example_catalogue.py 等为消费
+   接口；教学正文、首次学习、题模板、前置、路径、图解和例句属于独立内容数据。
+   加载内容包不迁移、不重写个人记录。新内容版本不能靠改标题把旧学习身份替换掉。
+
+3. 个人学习：应用私有目录 progress.sqlite3，可变，独立于资源目录。
+   顶层版本门是 record_schema.py::ensure_current，
+   learner_record_meta.schema_version=1。下列模块的 TABLES / ensure_schema
+   和 docs/progress_schema.sql 是现行表结构入口；文档 SQL 是空库结构，不能替代
+   运行时校验与迁移逻辑。
+   a) record_schema.py：learner_record_meta、app_setting、study_session、
+      session_question、study_card、review_event、practice_attempt、
+      session_checkpoint、session_answer、word_spelling_attempt。
+      假名记忆卡唯一键为 (content_id,skill,script)，同时持有 card_id 与内容版本。
+      session_question 唯一键为 (session_id,question_index)，保存逐题快照。
+      session_answer 对同一题至多一个正式 event_id；word_spelling_attempt 同一
+      session/question 至多一个尝试记录。顺序、草稿与已评分事实不是可重算题库。
+   b) learning_store.py：learning_meta、learning_content、learning_unit、
+      learning_question、learning_event。课程内容与能力单位分开；unit_id 对应
+      (content_id,ability)，题目有 question_id、snapshot、draft、result、状态及
+      not_before_utc。learning_event.question_id 唯一；每单位至多一个 pending
+      题的部分唯一索引防止重复待答。内容首次讲解与正式提取记录分开保存。
+   c) learning_evidence.py：evidence_meta、learning_evidence、
+      learning_evidence_pattern、learning_aux_adjustment。证据事件、条件性模式与
+      实际低权重到期调整分开；不得把一个派生错误摘要当作原始答题记录。
+   d) tutor_memory.py：tutor_memory_meta、tutor_user_message、
+      tutor_memory_claim、tutor_memory_application。记录有引用依据、请求身份、
+      状态和过期/撤回信息；它不是另一个 FSRS 数据库。
+   e) app_setting 中另有带版本的 JSON 状态：shared_examples_v1、
+      ai_materials_v1、ai_practice_v1、ai_tutor_v1，以及普通设置。
+      ai_connection_v1 只保存非秘密模型配置，不保存 API 密钥。
+   正式已加入的单词学习项可有自己的能力记录；为假名/规则服务的单词拼写、共享
+   例句和 AI 原始生成文本不能因此自动变成新的独立记忆项。
+
+4. 本机反馈：独立 feedback.sqlite3，FeedbackStore 持有独立连接；不共享
+   progress.sqlite3。学习备份/恢复/重置不等同于反馈备份/恢复/删除。
+5. 凭据：Android Keystore + 私有加密 Preferences；Windows DPAPI 加密文件。
+   与学习库、反馈库、内容包都分离。手写模型、缓存、音频资源各有平台生命周期，
+   不能混进学习记录导出作为“恢复学习”必需数据。
+
+二、现行学习记录格式与旧格式退场 [I,V:0.28.2]
+--------------------------------------------
+唯一现行导出为 kanamemory-learning-records / version=1。
+实现：record_transport.py::encode / decode、progress_backup.py::export_backup /
+inspect_backup / import_backup；行语义为 record_validation.py::validate_row 与各
+领域 validate_backup_rows；完整表清单为 record_transport.py::names。
+
+传输是 UTF-8 JSON 行，头部列出应用自有表、列和行数；后续为有界压缩分块，结尾
+校验计数和 SHA-256。不是旧版顶层 tables 对象，也不是可直接执行的 SQL 导出。
+当前约束：外部文件 64 MiB；解压暂存磁盘总预算 1 GiB；分块 64 KiB；单行上限
+129 MiB；每表最多 1,000,000 行。限制分别保护传输、解压、行与计数，不能把“1 GiB”
+解释成一次性内存分配。导出返回的压缩文件仍在有界内存中，不应宣称全程零内存。
+哈希用于完整性校验，不是加密或签名；学习备份含个人答题、草稿及 AI 对话等资料。
+
+旧版只经显式转换入口：legacy_record_conversion.py::convert_legacy_backup；
+旧普通 JSON、旧 envelope、旧 stream 的读取器限定在 legacy_record_conversion.py、
+legacy_backup_envelope.py、legacy_backup_stream.py。正常运行不双写旧记录、不保留
+兼容视图、不再按大小分支导出旧格式。
+“转换旧备份”后台生成新格式文件，原文件和当前学习状态不被替换。
+“恢复旧备份”先转换再走相同预览、确认、校验与事务恢复；未知版本拒绝，不能猜测。
+转换保存原身份、版本、题序、已作答记录、到期时间及草稿；旧答案不重新判分。
+旧列中原有 JSON 文本可原样保留；旧外层已解析数组保持对象语义，不承诺原排版字节。
+
+已有本机旧数据库由 record_schema.py::ensure_current 单次转换：
+先检查结构与 quick_check，创建私有恢复副本；在事务内把旧
+study_session.question_snapshot_json 数组拆为 session_question；验证顺序/引用后
+物理移除旧聚合列并提交。未知、不完整或标记不一致的结构停止；失败回滚旧库。
+恢复副本是救援文件，不是继续双写的第二套记录。
+
+恢复原子性：progress_backup.py::_validated_payload 在临时库进行完整格式、表列、
+类型、引用、队列与证据一致性校验；_import_validated 在 BEGIN IMMEDIATE 内先导出
+替换前状态，_write_recovery_file 用临时文件、fsync、os.replace 生成可恢复文件，
+随后按依赖顺序删除/插入应用自有表。禁止执行输入提供的 DDL。恢复副本失败则不
+替换；插入/取消失败则事务回滚；提交后重新加载 scheduler、设置和派生缓存。
+恢复是经确认后的“替换学习记录”，不是合并两个不同设备历史的同步协议。
+
+后台边界：BackupJob 使用自己的连接与 asyncio.to_thread；取消 await 不会强杀
+Python 线程，因此 UI 写屏障持续到线程结束/提交/回滚。提交后的结果不可误报为取消。
+backup_ui.py 管理独占阶段、预览确认与页面令牌；backup_stage.py 以身份标记、目录
+约束、锁判断和保守回收处理临时暂存，不能递归清掉不属于本任务的目录。
+撤销恢复可使用 learning-before-restore-* 生成的当前格式快照；它是另一次受控恢复，
+不是跨设备同步，也不是不受后续写入影响的任意时间旅行。
+
+相关合同测试入口：tests/test_record_schema.py、test_record_conversion.py、
+test_record_conversion_ui.py、test_learning_records.py、test_backup_atomic_schema.py。
+
+三、共享例句与引用格式 [I；本轮语义准确性 U]
+------------------------------------------
+权威接口：example_store.py::validate_pack / parse_pack / ExampleStore；
+结构供编辑器/生成器使用 docs/example_pack_v1.schema.json；规则说明
+docs/example_format.txt。JSON format=kanamemory-example-pack，version=1，
+status 为 draft 或 reviewed。
+
+例句主体：id、revision、text、translation、reading、source_ids 及可选元数据。
+引用：id、example_id、example_revision、target_id、spans、hint、explanation、
+weight。hint 可分别给 meaning/reading/rule；reading_scope 可区分 lemma/span。
+同一句能服务多个学习项；同一片段可有多条不同规则引用，不能根据点击猜唯一规则。
+每个引用保存自己的强调与解释，例句主体不跟着当前页面改写。
+
+身份契约：id 不由显示位置决定；同一例句 ID 的 text/revision 不允许覆盖修改。
+变更正文应新建 ID 和引用；同一 reference ID 对应内容不可变。完全相同的再次导入
+幂等，有冲突整批拒绝。跨资源同 ID+revision+text 的辅助显示元数据可有差异时遵循
+明确合并优先级；这不是允许覆盖正文。新导入 target 必须存在；加载/恢复旧记录时
+暂不可用 target 保留身份并提示不可用，不通过标题重连。
+
+span 为原文零起始、end 不含的 Unicode code-point 区间，quote 必须精确等于切片。
+不先归一化/NFKC，不将字节或 Android UTF-16 下标混用；渲染边界负责转换。
+允许一引用多片段与引用重叠。仅靠子串出现不能证明应关联某词义或语法。
+validate_pack 检查结构/引用，不认证日语、翻译、读音、调号或语义关联的正确性。
+
+当前可执行限额：16 MiB 规范化保存、32 MiB 导入文本、20,000 例句、50,000 引用。
+旧 docs/example_format.txt 的 5,000 / 30,000 数字已落后；当前以 example_store.py
+常量为准。未知辅助 JSON 字段在限额内保留但不能赋予执行或调度权限。
+ExampleStore.prepare_import 先检查全体冲突；主动导入要求 reviewed。默认导出自定义
+包，include_bundled=True 才组合发布/审校资源；共享例句只是资源，导入和浏览不计
+成功复习、不新增卡片、不改变到期。界面排序可读取熟悉度，但不是写调度证据。
+
+实验语序译文 order_translation 是可选 version=1/status=experimental 数据，绑定
+source_text/source_translation 与 text；默认折叠。它不代替默认自然汉语译文，不
+参与朗读、判题或调度，加入它不应更换已有课程/题目的语义版本身份。
+默认译文规则入口 natural_translation_policy.py；AI 输出也应用同一边界。
+当前注音/音高/高亮的显示与防泄题由题型层决策；例句提供 reading 不代表任何题干
+都可展示。相关合同测试：test_example_store.py、test_example_exchange_size.py、
+test_example_pack_copying.py、test_example_highlight.py。没有在本轮重审全部语料。
+
+四、AI 连接、请求、内容采纳与权限 [I；远端现行可用性 U]
+------------------------------------------------------
+1. 手机直连和秘密保存。
+   2026-11-01开发增量已扩展连接层：ai_connection.py::ConfiguredProvider支持
+   Responses、OpenAI兼容Chat、Claude Messages、Ollama，增加模型列表与选择。
+   旧OpenAI设置/密钥不迁移；其他地址的密钥分槽隔离。下述OpenAI细节仅对应
+   原默认服务，不再代表所有服务。完整替代合同与第三方未实测边界见
+docs/ai_provider_connections_20261101.txt。
+   ai_service.py::OpenAIProvider 直连 https://api.openai.com/v1/responses，
+   请求 store=False，严格 JSON schema；不开放工具执行、自动重试或重定向。
+   store=False 是请求参数，不是对服务端所有日志/保留政策的保证。
+   API 输入/输出分别受 192 KiB / 2 MiB 边界约束；超时/状态码分类为简短本地错误，
+   不直接显示可能回显输入的供应商错误 body。
+   ai_credentials.py::DeviceSecrets 是秘密唯一平台接口；
+   app/native/java/org/example/kanamemory/KanaAISecrets.java 以 AndroidKeyStore
+   AES/GCM、随机 IV 和凭据名 AAD 封装密钥，密文位于 MODE_PRIVATE Preferences。
+   明文只在应用使用时取出；Keystore 不等于远端代理，也不保证被攻陷设备上不可见。
+   Windows 使用 CryptProtectData/CryptUnprotectData（DPAPI）；其他未支持平台拒绝
+   安全持久保存，不回退明文。学习库/反馈/备份/源码/APK 不携带个人 API 密钥。
+   删除应用数据/卸载后需要重新配置；学习备份恢复不恢复密钥。
+   粘贴接受单个密钥或 OPENAI_API_KEY 赋值形式而不执行文本；保存后读回检查，
+   成功清空输入。保存成功只证明本机配置可用，不证明远端账户/额度/模型授权有效。
+   可选 Android 调试导入为 10 分钟、nonce 绑定、设备公钥加密的导入协议；不是
+   把明文密钥塞进 adb 参数或内容包。入口 prepareImport/completeImport。
+   AI 连接 UI：ai_service_ui.py。material model 与 tutor_model 分开，当前默认
+   分别 gpt-6.1-sol / gpt-6-luna；仅作为代码默认值，不是本轮核实的价格/供应承诺。
+   旧有用户选择保留。相关合同测试 test_ai_key_save.py、test_ai_key_transfer.py。
+
+2. 请求和输出校验。
+   通用材料请求 ai_service.py::validate_request / generation_spec /
+   validate_response_request，模式 questions、examples、analyze。请求给当前选定
+   target、允许 scope/catalog、数量及必要原文，不发送整个学习库或密钥到提示词。
+   validate_response_request 约束响应属于本次模式与范围：单项例句不能偷加学习项，
+   文本分析的例句须来源于所给片段，数量不能超出请求。随后各 store 继续校验
+   ID/revision、精确片段、已知目标、依赖、选项、判题及防泄题规则。
+   严格 schema 通过不代表事实正确；AI 声称“safe/reviewed”不自动取得可信资格。
+   题干音频、假名、调号是否泄题由本地题型规则控制，不由 AI 布尔标记放行。
+
+3. 用户采纳。
+   AIMaterialStore 保存 proposal 与每项 pending/kept/discarded 决定；keep/discard
+   可单项/批量，反向覆盖既有决定拒绝，重复相同决定无操作。
+   临时生成 ID 由 learning_item_id_for 等规范化为稳定身份；现有项不被覆盖。
+   保留前 validate_catalog 和依赖校验要求所需新前置也可用、无循环；新课程还需
+   完整介绍/题模板及至少 10 条不同正文的可关联例句才可成为可加入的学习内容。
+   _decide/_write 在同一 BEGIN IMMEDIATE 事务保存材料决定与例句；失败不留下
+   半份内容。保留材料不自动加入学习计划，也不替换未完成题单。
+   保留/舍弃不是无限撤销编辑器：已经相反决定不能原地改写；内容撤回/学习重置
+   不能假装可逆地删除历史答题。更完整的版本化编辑撤销流程属于 P。
+   用户明确采纳也不等于日语专家的语言学认证。
+   当前_normalize_item将保留项标为ai_user_retained，并使用ai-user-reviewed来源标签；
+   这些标签只记录采纳流程，不是独立语义审校证据。ready_for_learning中的例句数量、
+   结构及依赖检查也不证明词义、读法或调号正确。现有流程缺少逐能力的内容可信度
+   准入关卡；这项缺口列为P，不能把“用户保留”写成“内容已经验证”。
+
+4. AI 出题的评分权限。
+   AIPracticeStore(ai_practice_v1) 保存独立补练队列、草稿、结果；原始生成题不进入
+   正式 FSRS 评分。AITutorStore(ai_tutor_v1) 保存可续练辅导与会话；同一 row 首次
+   submit 结果固定、complete 重复幂等，当前题型/范围失效时不偷偷提交旧题。
+   当前存在一个有边界的例外：AITutorStore.submit 只有 source=local、
+   reviewed_question(q) 成立、独立有效回答、正式评分锚点仍相同等条件全部满足时，
+   才将本地已审题作为 auxiliary evidence 交给 LearningEvidenceStore，按共享低
+   权重预算调整相关已学习项到期；不生成正式 FSRS review，不替模型改 S/D。
+   原始生成题、查看答案、帮助曝光、无可信归因结果不能借“AI 判对”修改正式间隔。
+   具体当前调度公式以本目录调度章节及 learning_evidence.py 为准；不能继续照搬
+   docs/adaptive_ai_tutor_validation_0250.txt 的“所有补练均不改到期”历史表述。
+   另一条路径必须单独说明：保留的新课程经用户加入学习后，可进入LearningStore
+   的普通正式评分。独立AIPracticeStore不评分的限制不自动覆盖这些自建课程。
+   因此现行系统并未保证“所有AI生成材料只能辅助且永不正式改期”；拟议的新内容
+   验证与评测权限关卡需明确覆盖这条路径，见05的待实现边界。
+
+5. 画像、检索与后台。
+   TutorMemoryStore 是带证据的说明性摘要：模型新 claim 为 tentative，引用只可取
+   本次实际提供给模型的证据/目标；模型 claim 30 天过期，依据失效也不再作为当前
+   画像。用户 correct/撤回优先，request_id/application 防重复应用。
+   它不允许模型直接改 card 的数值；错误事件撤回由 learning_evidence.py::retract
+   及当前锚点回放处理，不对已经产生后续正式评分的历史盲目做减法。
+   tutor_context.py::validate_learner_context 限定最多 4 个目标，每目标最多 2 类
+   条件模式、每模式最多 3 个例子、最多 8 条短画像；最终 32 KiB。保留近期错误和
+   相反的成功证据，优先移除可选说明/背景，不把用户全部历史灌入提示词。
+   tutor_retrieval.py::retrieve_question_material 已实现受限字面检索：最多 2 个
+   结果，从已保存且有学习证据的内容标题/读音/ID 中选事实；短助词需明确引用，
+   不把刚加入或只看介绍等同掌握。这不是向量检索、语义 RAG、网络搜索或全库代理。
+   语义向量库、跨知识图谱推断、完整长期画像与效果校准为 P/U，不能写作已上线。
+   没有手机端维护 KV cache 的接口；稳定提示词前缀可供服务端缓存，但无命中保证。
+   tutor_ui.py 通过 asyncio.to_thread 发请求，用 page_token/request_id/上下文
+   fingerprint 丢弃过期返回；取消后不覆盖新页面/草稿。后台提示问题不阻挡用户
+   立即输入，建议到达时检查当前页面。取消 UI 请求不保证供应商停止已经发出的
+   计算或不计费。不能承诺所有 API 失败都有自动安全重试。
+
+验证：现行静态契约见 tests/test_ai_request_boundary.py、test_ai_materials.py、test_tutor_memory.py、test_tutor_retrieval.py 等。
+
+五、反馈的可重建上下文与导出 [I,V:0.26.8；0.28.2 全流程复验 U]
+--------------------------------------------------------------
+权威入口 feedback_store.py::FeedbackStore，feedback_context.py、
+feedback_lifecycle.py、feedback_ui.py；合同 docs/feedback_format.txt 与
+docs/feedback_export_0268.txt。
+反馈 format=kanamemory-feedback-export / version=1；上下文另有
+kanamemory-feedback-context / version=1。记录 UUID、created_at、严格递增的
+updated_at、note、category、open/resolved/archived、页面摘要、不可变 context、
+context_sha256、截图元数据及 capture/record hash。编辑意见不覆盖捕获时证据。
+
+点击反馈时先捕获原页面，再进入表单：页面/对话框、当前题目和草稿、内容 ID 与
+revision、组合片段、渲染树和设置白名单、必要的相关学习证据、完整性警告。控件
+树路径只在该次快照内有效。截图是独立 PNG，缺失必须标记；不能据最新语料“补造”
+旧画面。维护者可用隐藏答案证据，不把它展示为学习者题干提示。
+上下文不是完整学习数据库；只取当前相关对象，缺失不等于从未学习。捕获有总字节、
+深度、控件数、字符串与容器限额；达到边界须警告不完整。密码/API key/token 遮蔽，
+不遍历系统环境。反馈仍含用户输入与答题情境，导出是用户主动分享行为。
+
+ZIP 带 JSON/说明及截图；剪贴板为完整保存的文字上下文与截图元数据，不含图像字节。
+当前 MAX_EXPORT_BYTES=64 MiB、展开上限 128 MiB、文字剪贴板 256 KiB，超过文字
+上限拒绝而不是静默省略证据。prepare_export 后持有交付回执；成功写到目标后才按
+回执归档当时导出的且未被编辑的确切版本，默认开启但可取消。
+取消/失败不归档，新反馈及导出后编辑版本不被误归档，重复确认幂等；旧回调不能
+取代新页面或草稿。归档是状态变化，不是删除；哈希验证完整性，不证明用户事实。
+导出本身无网络/自动上传 LLM；外部反馈文本始终为不可信资料，不能当维护指令执行。
+
+现行合同测试如 test_feedback_export_receipt.py 仍需按改动复验。
+
+六、MIT 干净源码、独立构建与版本治理 [I,V:0.28.2]
+------------------------------------------------
+许可证权威为 LICENSE 与 LICENSE-SCOPE.txt：MIT 只覆盖当前项目原创应用代码、
+构建工具/文档及 demo/content.json 原创示例。第三方依赖、字体、模型、字典、
+语料、导入媒体及派生材料按各自许可/NOTICE；当前 MIT 不追溯清洗旧 Git 历史。
+个人学习记录、草稿、凭据均不属于源码或 demo。
+
+公开出口：tools/export_clean_source.py::export_source，显式文件白名单
+tools/public_source_files.txt；拒绝越界/链接、私有路径和明显凭据模式，验证后复制
+到新/空目录；不复制 .git、私用 data/resources/research、用户状态或历史。
+它把 app/pyproject.toml 改为 demo bundle，输出 clean-source-manifest.json 和
+独立 ZIP；README.txt 内容来自 docs/public-build.txt，而不是发布内部维护 README。
+新增模块只有纳入并审查白名单才随干净源码导出；目录存在不代表自动发布。
+
+独立构建入口 docs/public-build.txt、environment/build_public_app.ps1：
+tools/build_demo_content.py 仅用 demo/content.json 生成原创最小内容，
+tools/check_public_content.py 严格检查，再用 tests/test_public_distribution.py
+检验独立读取/出题边界。demo 包名 org.example.demo.kanamemory，与个人包
+org.example.kanamemory 分开，不覆盖个人学习数据。此 demo 不是完整课程。
+
+私用内容出口 tools/package_content_bundle.py::package，
+format=kanamemory-content-bundle/version=1：要求 content.sqlite3、
+teaching_content.sqlite3、NOTICE.txt；逐文件大小/hash、profile、内容版本及
+音频公开权限提示；拒绝可执行后缀/隐藏路径/链接/学习表。manifest 声明不含应用
+代码和学习状态不是许可证证明；不能仅凭工具打包成功推断可公开传播。
+当前是独立构建/装入资源的隔离机制；没有证据证明手机已经有任意第三方完整内容
+ZIP 的热安装、自动升级、签名信任或云同步 UI，属于 P/U，不应宣传为已实现。
+
+公开导出以 tools/export_clean_source.py 与 tools/public_source_files.txt 为准。
+
+版本策略 [I/约束]：App 版本、学习记录 schema/transport、内容包、例句包、反馈
+context/export、AI request/output 都各自版本化，不能借同一个“v1”互相解释。
+必需字段语义变动须显式新版本与转换器；未知版本拒绝并保留原数据。仅可选、不
+改变旧语义的元数据可兼容增加。内容稳定 ID、revision、问题快照与历史结果不能
+跟随新判题器自动重写。每次发布应绑定源码提交、内容 manifest、包哈希和有范围
+的验证报告；目前不存在自动证明整个外部语料语义正确或长期学习效果的版本门。
+
+七、旧文档与本规范的关系
+----------------------
+继续作为现行细节合同（冲突以本基线源码和本规范标出的差异为准）：
+- docs/learning_records_0282.txt：当前记录迁移/备份合同。
+- docs/progress_schema.sql：当前空学习库结构；运行时门与校验仍在模块。
+- docs/example_format.txt、example_pack_v1.schema.json：共享例句语义；旧数量
+  限额已被当前常量替代，不能据旧数字回退用户数据。
+- docs/feedback_format.txt、feedback_export_0268.txt：反馈结构及交付归档合同；
+  其中运行结果只属于所述版本，不是全量长期测试结论。
+- docs/public-build.txt、LICENSE-SCOPE.txt、content-maintenance.txt：公开构建、
+  许可与内容维护入口；当前文件清单/数量以本次源码与 manifest 为准。
+- docs/ai_learning.txt、ai_followups.txt、adaptive_ai_tutor_0250.txt：AI 原始
+  设计及后续边界参考；版本标题不代表所有后来章节都只适用旧版。现行可信本地
+  补练的低权重调整、画像/检索边界以 tutor_store/learning_evidence/tutor_* 为准。
+
+仅作为历史方案/验证来源，不再覆盖现行运行合同：
+- docs/content-separation-0240.txt：隔离迁移的历史数量与验证，当前包清单不能照抄。
+- docs/content_schema.sql：概念性规范化表，当前词库实际 DDL 已不同。
+- docs/backup_consumer_compatibility.txt、large_learning_backup_plan.txt、
+  large_backup_candidate.txt：旧 envelope/stream 候选、历史兼容路径；现行统一
+  transport 与 legacy-only 转换由 0.28.2 文档替代。
+- docs/adaptive_ai_tutor_validation_0250.txt、adaptive_ai_tutor_research.txt：
+  历史实测/研究，不能证明当前模型供给、全部语料、全部 AI 场景或长期有效性。
+
+明确未验收或待补：完整语义 RAG/跨知识图谱信用分配；任意内容包热更新与签名；
+跨设备冲突合并同步；所有页面反馈捕获的穷举覆盖；当前实体 Pixel 性能和真实 API
+的完整回归。本文不会自动授权实施这些 P/U 项或恢复暂停的长期模拟。
+
+追加P层：AI处理内容反馈
+docs/ai_feedback_correction_design_20261101.txt定义独立修正合同（F0—F5）。
+现有追加导入器、精确指纹题目/判题视图修订和证据retract不能替代通用内容纠错事务。
+新设计明确个人内容覆盖层、图谱/题目失效范围、裁定有效性视图、当前锚辅助
+重算及成套备份；正式FSRS历史默认不倒算，缺可靠依据时提供可选主动验证。
+这是未实施设计，不改变本文件五节的现行反馈格式、无自动上传和导出归档行为。
+后续实现更新（2026-11-02）：反馈报告工作流已接通，见../feedback_analysis_0283.txt。
+14项轻量验证只覆盖该增量，独立核据/影响闭包/采纳撤销/裁定保护仍待完成；
+完整原设计范围未缩减。用户明确选择后才外发，导出归档规则不变。
+后续I层更新（2026-11-02）：版本绑定的领域修改计划与待核个人注释采纳/撤下
+已生产接通，见../content_correction_plan_0283.txt、../personal_content_notes_0283.txt。
+个人注释为单独版本和活动头，不替换规范内容，不继承教案/评分资格；源和缓存
+重验、曝光、补偿回执及独立反馈库outbox已实现。备份含成套历史，导出归档CAS
+含新回执集合。此状态替代上述“完全无采纳/撤销”的笼统描述；正式内容/图谱
+资格激活与历史裁定仍为P，不能以个人注释闭环代替F3/F4。测试范围以增量文档为准。
+逐字段人工语义核据已实现（../feedback_field_support_0283.txt）。它以独立实际
+摘录、具体适用结论和分歧说明支持当前字段，不要求新译文逐字复制本地旧文，
+也不称为自动/专家认证；完整教案、整题资格及正式版本激活继续独立处理。
+后续I层更新：lesson 同身份 C1 译文与说明已接入正式个人教学投影，详见
+../personal_content_versions_0283.txt。原课程 revision 与 personal_revision 分离，
+入学保存基线，活动头与核据链成套备份；新工厂题标明个人版本。
+派题/计数/提交/结算对相关旧题核对精确工厂合同，未知旧题保留待核。
+此更新替代“正式版本激活完全待实现”的状态；补偿撤下、历史裁定/辅助重算、
+反馈同步仍待接通，不能以课程短测代表整个F3/F4。
+后续I层更新：共享/词库例句译文和引用 explanation/hint.meaning/hint.rule
+可采用同一核据流程。个人版本行新增可省略kind，旧lesson行及事件链保持原格式。
+get/课程卡片/例句列表/反向引用使用教学投影；get_raw/export_pack保留原件。
+display_pack仅供当前影响检查，evidence_pack排除已被个人版本替代的旧事实，
+个人修订不能经随包生成或新关联保存而变成独立核据。缓存只读页按代次刷新，
+答题/草稿/冻结结果不重建。详见../personal_example_versions_0283.txt及其短测证据。
+同身份正式修订的补偿撤下/回执同步现已接通，见../personal_content_compensation_0283.txt。
+新采纳事件值为v2并含随机nonce，原v1事件不改写；存储键命名空间不变。
+撤下是独立事件，恢复前一整组显示头；待核字段与联动组沿补偿链累计，不随
+显示回退消失。新的完整核据才能清除待核状态。版本/hold/outbox同库原子提交，
+正式回执在独立反馈库幂等接收；导出前后同步，分支摘要与写锁保护归档CAS。
+本实现不重写旧成绩或due，也不代替F4全部消费者、辅助重算或整题C2资格。
+受阻旧课程题/引导的显式替代已生产接入，见../learning_replacement_0283.txt。
+learning_replacement_v1保存旧行/完整checkpoint；普通题原子移交pending所有权，
+读取旧行投影superseded，不能再提交或结算。新题维持原能力与时间下限，旧草稿
+归档、辅助事实沿用；独立教学范围及全部practice来源冻结，旧按钮校验实际题对象。
+仅精确替代回执允许completed无复习事件；备份和删除学习数据已接通。此状态不
+覆盖已提交历史裁定或其他F4消费者；短检查不代表原生/长期模拟/最终发布验收。
+
+追加P层：用户语料工作流修订2
+docs/ai_material_verification_design_20261101.txt区分candidate观察与正式单位，
+材料可靠性/呈现用途/结算通道独立；保留、入学、来源撤回和退学分别保存意图。
+拟新增版本化任务checkpoint、阶段预算、身份匹配、采纳/入学回执，不因离页
+丢弃已返回候选；这些能力尚未实现，不能由现行表单恢复或stage存在推断上线。

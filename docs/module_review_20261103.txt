@@ -1,0 +1,116 @@
+KanaMemory 0.28.4 模块划分、复用与接口审查
+日期：2026-11-03；源码基线bd795b7（运行代码fd986f7）。
+性质：审查与建议，不是新的实现目标；没有恢复旧目标/长期模拟。
+
+结论
+此前工程清理改善了查询、控件、页面恢复和测试支撑边界，但不能据此说所有职责都已理想。
+当前主要问题不是__init__.py，而是部分业务政策仍附着在App/UI上，重复的编辑/请求流程
+已有保护差异，跨模块协议多依赖调用者自行理解字典、回调和实例属性。
+以下9项独立记录，不回写已完成工程目标，也不将静态发现冒充已修复。
+
+范围与证据等级
+- 扫描260个Git跟踪生产Python模块，排除资源、构建复制、第三方库和历史环境目录。
+- AST盘点导入、函数和较长的完全相同函数体，随后重点核对实际消费者和行为差异。
+  不是逐行完成全部260模块的语义验证；函数内延迟导入图不等同于启动时循环导入错误。
+- app.py 4220行、domain.py 3569行、learning_ui.py 1849行、learning_store.py 1669行。
+  行数只用于选取热点；下面每项均有具体职责、调用点或行为证据。
+- tools.check_architecture通过：它验证已声明规则及显式例外，不覆盖所有模块的设计质量。
+- .test_runs/module-audit/inventory.json保存结构盘点；test_probe.py和probe2.xml记录
+  4个合成探针。探针断言的是现存不良行为，4 passed表示复现成功，不是产品验收通过。
+- 没有访问真实学习记录、密钥或API，没有启动模拟器、构建APK或修改生产代码。
+
+R1 优先修复：课程词块编辑缺少与诊断一致的状态保护 [合成行为已复现]
+位置：learning_ui.py:1443、1501、1510；对照retention_session_ui.py:393。
+共同职责是按候选位置添加/撤回、存草稿并更新组合文字。
+课程回调只捕获index，不核验题目身份或页面；添加/撤回先修改共享列表再写数据库。
+诊断回调捕获context，验证当前页面与身份，保存proposed草稿成功后再应用内存/按钮。
+探针A：捕获课程旧词块按钮，页面变为home后调用原handler，仍写原题草稿并调用续学。
+探针B：令save_draft抛OSError，内存parts/used已改变而数据库未变；再选相同位置直接被
+used阻止，不能直接重试保存。这是故障注入和过期回调复现，不宣称已测出手机竞态频率。
+建议：先补课程页面/题目身份保护、保存成功后应用、失败可重试；再提取无Store所有权
+的词块编辑组件，显式接收choices、active、save、submit。课程推进仍归课程协调器。
+验收：旧回调无写入；保存失败前后草稿和内存一致；成功一次编辑只保存一次；撤回同样覆盖。
+
+R2 优先修复：材料异步流程重复维护失败结算，二次落盘失败会逃出 [模拟故障已复现]
+位置：ai_ui.py:201–250、293–336；对照request_outcome.py:8；material_workflow.py:290。
+核验和修订都手写授权、请求、计量结算、保存、刷新、fail和finally清理。except中的
+workflow.fail未保护二次异常，而公共finish_request已保护相同的失败记录步骤。
+两条探针：令客户端准备失败，再令fail抛OSError，二次异常均直接逃出协程，
+show_material_task没有被调用；finally仍清理运行指针，不应声称整个finally没执行。
+当前未验证真实网络/存储故障，也不能由此声称新请求会被覆盖：fail另有token所有权校验。
+建议：材料专用生命周期统一安全失败记录；保留预算、usage、complete、token/page检查。
+不要直接套用不含材料计量的通用finish_request，更不能靠重发API解决保存失败。
+验收：原请求失败+失败记录失败、取消+失败记录失败均可恢复界面且不重复发送/收费；
+已保存结果而刷新失败仍明确区分，不把已成功操作改成失败。
+
+R3 模块边界：课程候选规划位于UI [已确认调用关系；不是新功能故障]
+位置：learning_ui.py:673 _learning_question_plans、728 _queue_learning_questions；
+admission_workload.py:112、study_path_runtime.py:45为真实消费者。
+规划做题型过滤、能力状态/历史读取、输入能力和模板选择，没有控件职责，却要求调用者
+具备App/Mixin上的store、learning_store、learning_preferences等隐式成员。
+建议独立课程候选规划服务，明确只读查询和偏好输入、具名候选输出；保留按需物化，
+预览不能为计数生成整套题目或写队列。写入仍归LearningStore。
+验收：工作量预览/续学共用同一候选合同；预览不改DB/快照/题序；提交重查最新状态。
+
+R4 模块边界：纯练习偏好政策仍从App反向导入 [既有已登记的保留边界]
+位置：app.py:1424 _clean_preferences、1467 _enabled_preference_kinds；
+admission_workload.py:24、study_path_runtime.py:88和252。
+简单政策计算仍需导入应用模块及UI依赖。engineering_e2_dispositions.json明确将其
+登记为practice policy adapter；架构检查通过是因为它是有依据的保留边，不代表已消失。
+建议把归一化、旧偏好迁移和必要常量移入纯政策模块；App短期兼容转发。
+不要把lane切换、计时和导航政策一起移走。以旧配置及题型开关差分验证保持行为。
+
+R5 复用：结果中的错误输入和解释过滤已分叉 [代码确认；未做原生排版复验]
+位置：learning_ui.py:1668–1684；ai_ui.py:1328–1332；retention_check_ui.py:156；
+retention_session_ui.py:467；课程侧已有tests/test_learning_typography.py:62合同。
+课程将“我的回答”前缀和日文正文分开、预留前缀宽度并指定study字体；另三路仍拼成
+默认ui字体的一个标签。课程按行去掉与答案完全重复的解释，其他路径处理不同。
+建议共享错误输入行和精确重复行过滤。评分、曝光、自动朗读、防泄题及队列政策各自保留。
+不能凭源码推断它们当前已发生截断；需未来用同版大字号与日文混排原生验证。
+
+R6 接口：LearningStore.current的模式和结果协议不够显式 [维护风险]
+位置：learning_store.py:1000；learning_ui.py:867；first_teaching_dispatch.py:249、256。
+签名含teaching_only/include_unassessed/prefer_unassessed等组合，其中有非法组合；
+返回instruction/question/content_blocked/prerequisite/waiting/diagnostic/disabled字典或None，
+附加字段如new_dispatch_continue由消费者约定。普通UI的兜底分支继续按题目处理。
+建议先声明以type区分的TypedDict联合及合法探测模式；消费者显式处理结果种类。
+保持现有序列化字典、持久化格式、调度顺序不变，不为类型清楚而重写调度算法。
+
+R7 接口：AI授权和usage通过可变实例属性传递 [维护风险，未发现并发串账]
+位置：material_budget.py:176/190；ai_service.py:355–374；ai_service_ui.py:29。
+authorize动态写material_request_sha256，structured消费后设为spent，再由last_usage
+传回计量。当前ai_client每次创建新provider，构成有效但分散的“一请求一实例”约定。
+建议显式初始化授权状态、提供具名绑定方法并记录生命周期；逐步引入携带内容、usage、
+校验信息和请求身份的结果对象，保持旧生成接口兼容。不要未经验证改成共享provider。
+
+R8 接口：通用请求完成回调的重要合同没有体现在签名中 [维护风险]
+位置：request_outcome.py:8；消费者feedback_analysis_ui.py:168、retention_ai_ui.py:58。
+finish既接收成功response，也接收error关键字；保存异常后可能再次调用。
+现用存储实现具备token/owner/status和幂等检查，但Callable签名未表达这些前提。
+建议小型Protocol及文档声明成功/失败调用、允许重入、事务归属和None含义，
+补不合规回调/二次落盘故障契约；不把业务结算政策吸入公共函数。
+
+R9 模块边界：自适应证据折叠仍与SQL/cache混合 [已知保留边界]
+位置：domain.py:2957、3005、3082、3106。
+完整回放、连接TEMP触发器、revision/cache与阶段规则相邻，规则维护仍牵涉存储机制。
+当前没有发现完整回放与增量结果不一致，07结构规范也已明确domain不是纯领域模块。
+建议先明确“有序事件→证据→阶段”的纯输入输出，把SQL/触发器/缓存留在持久化所有者。
+若完整回放是独立oracle，保留其差分测试价值，不能为了去重消除验证独立性。
+
+应保留的合理边界
+1. ui_components/ui_theme已被真实页面复用；answer_controls/prepare_submission提供统一输入。
+2. page_restore仅复用bindings、控件挂载和token保护滚动；普通/反馈返回的曝光、计时、
+   checkpoint与队列政策应继续分开。这次详情返回修复也说明导航身份须明确。
+3. StudyQueries/TeachingQueries明确连接所有权、同事务可见性及投影语义；read_operation
+   是动作内读取上下文而非数据库快照。不要另造通用DAO或跨线程共享连接。
+4. LearningStore的enroll/submit/finalize拥有事务和幂等；课程加入的hook不自行提交。
+   不要因模块偏大拆散原子事务，也不要合并正式学习与辅助/诊断的证据权重。
+5. Android播放完成/桌面降级、专有触摸能力判断已有具体合同；缺Protocol本身不等于缺陷。
+
+建议实施顺序（待用户后续工作安排，不创建/恢复目标）
+第一批：R1、R2可靠性修复，各自转换成正式回归测试。
+第二批：R3、R4纯政策和规划边界，守住预览无副作用/按需物化。
+第三批：R5结果展示与词块编辑的机械复用，分支政策仍独立。
+第四批：R6、R8明确接口协议，再处理R7单请求所有权。
+第五批：R9作为独立、可差分验证的证据规则拆分，避免与前述工作混成大迁移。
+不建议本轮重排全部260个模块目录、整拆App、增加通用Manager层或修改学习记录格式。

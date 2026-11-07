@@ -78,6 +78,10 @@ tools/public_source_files.txt. It does not clone or copy any Git directory.
 The archive has stable ordering/timestamps, and clean-source-manifest.json lists
 the SHA-256 of every exported source file. Review the explicit allowlist when
 adding engine files. No private corpus restoration command is part of this build.
+Allowlisted .txt/.md documents may wrap development-only passages between lines
+that contain only [private] and [/private]; the export drops them, and lines that
+start with "[public-only] " appear only in the export. Unbalanced markers or a
+personal delivery location left in a public document stop the export.
 
 This Windows recipe is the verified target. Other Briefcase platforms may be
 usable but are not asserted to have been validated by this distribution.

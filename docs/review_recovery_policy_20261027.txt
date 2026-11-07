@@ -1,0 +1,149 @@
+[现行规范指引 2026-11-01]
+角色：停学恢复历史候选。现行入口：docs/design_current/03_learning_scheduler.txt、05_verification_backlog.txt。
+旧实验不能证明当前版四年通过；目标仍暂停。
+旧正文按原样保留；完整替代登记见docs/design_current/06_document_history.txt。
+
+停学后复习恢复策略：研究、代码审查与候选边界（2026-10-27）
+
+历史设计快照：以下状态是候选实施前的记录。最终 V2 实现与完整四年结果见 recovery_release_0223.txt 和 long_term_recovery_result_20261027.txt；保留本文作为策略演变依据。
+
+状态
+本说明来自只读审查、既有180天运行的事件复盘以及原始论文/官方资料。
+尚未运行本轮候选对照或新策略四年模拟，不能把以下设计称作已验证改善。
+不重置任何卡片、学习记录、题目快照、草稿或到期时间；不合并已有记忆方向。
+
+实际问题
+0.22.2的review_dispatch.review_priority将state=Learning/Relearning且
+scheduled due - last_review不足1天的项目列为短步优先级2。它未检查该次
+last_review距当前时间是否已跨学习日；数周前的10分钟步骤仍优先于普通到期。
+此外，只要失败继续产生新短步，这个方向即可再次抢到其他旧到期项之前。
+new_dispatch只在双方都是新任务时轮转，因而不能消除这种复习内部的不均衡。
+
+已执行的只读定量复盘
+输入是既有0.22.2公平策略180天合成库和旧策略完整库，以每条review_event /
+learning_event保存的state_before_json、state_after_json重建，不修改输入库。
+复盘窗口为day175至179（2027-06-25至06-29），此前day154至174停学21天。
+开日统计以UTC零点为界，与该模拟UTC设置一致；不是跨时区实测。
+
+新策略day175开日：49个普通到期方向、4个旧短步、3个尚未到期方向。
+五天共105次真实评分；按评分前状态，71次最近短步、4次旧短步、30次普通到期。
+每天同一方向最多分别评分4、4、6、4、6次。
+五天触达34个原到期方向，53个初始到期方向中19个从未被答到。
+热点1：え（kana-3048）的平假名听音手写，24次，其中14 Again、6 Hard、4 Good。
+热点2：か（kana-304b）的平假名完整表选择，15次，其中7 Again、7 Hard、1 Good。
+这两个方向合计39/105=37.1%的评分；有40个以上普通到期方向持续等待。
+旧策略同期：开始77个到期方向，五天129次评分覆盖全部77个。
+两策略题型、接触和随机流不同，以上是机制诊断，不能称为学习效果随机对照。
+
+本轮首先验证的候选
+1. 继续保留最高优先级的已提交反馈和真实输入草稿。
+2. 当日有效短步才获得短步优先：state为1或3、due-last_review在0至1天内、
+   last_review处于当前本地日界内，且不在未来，并且实际年龄严格小于24小时。
+   应复用StudyStore._day_bounds，不能一处用UTC日期、另一处用手机本地日。
+   现有应用日界为本地午夜；不要未经设计偷偷改成Anki的学习日边界。
+3. 同一记忆方向当日已有至少2次真实评分后，其未完成短步进入普通到期序列。
+   第一候选的普通到期仍只按原due排序，不新增当日服务次数排序。
+   两次后的新短步通常已有较晚due，降入普通到期便能让尚未碰过的旧到期项先被覆盖。
+   相同due继续使用调用方现有稳定顺序；不改变普通到期内部原有行为。
+   两次是可调产品启发式，不是文献证明的最优值。它限制优先权，不限制答题总数。
+   当其他到期内容均已服务或不存在时，原方向仍可继续，不隐藏、不伪装为待到期。
+4. 所有真正到期项仍排在新任务之前；课程/假名的新任务轮转继续保留。
+   不因阅读排序函数而写入游标、修改SRS或延长任何due。
+5. 先用同一180天外部模型对照。若上述调整已改善覆盖与新内容机会，不急于
+   同时修改FSRS目标保持率、学习步骤、熟悉度映射或首次激活速度。
+
+计数与时间的实现注意
+- 计数来自已提交的真实事件，跨短会话、重启和备份恢复仍一致，不用进程内计数器。
+- 假名按现存card_id（content × skill × script）计数；课程按unit_id（content × ability）
+  计数，同一课程能力的多个提问方式共享服务次数，不按question_id分别重置。
+- 学习事件只纳入primary、真正scheduled且有rating的评分；排除设备失败、
+  无效输入、仅教学曝光、辅助单词拼写和重复回调。显示答案形成真实Again时仍计入。
+- 以实际观察/提交时刻occurred_at_utc计入；不能把稍后恢复反馈当作第二次记忆事件。
+  回看历史now时，不应把未来事件计入今日次数。
+  now先转换为UTC再与库内UTC时间比较，但日界仍由学习者时区决定；无时区时间须拒绝。
+- 只对due<=now的候选排序；未来卡不能因当天次数少而成为可答题。
+- 课程的free-retrieval probe、曝光冷却和现存not_before仍有效；先尊重可答性，
+  不能仅按FSRS due绕过这些防抄答案延迟。
+- 每次分发至多批量读取两张事件表的一段日界；避免每个候选执行一次全历史COUNT。
+  本轮长模拟仍须观察性能，不能只证明排序逻辑正确。
+
+研究与现成实践
+Anki官方手册：
+https://docs.ankiweb.net/manual/deck-options#review-sort-order
+https://docs.ankiweb.net/manual/deck-options#day-boundaries
+https://docs.ankiweb.net/manual/deck-options#new-cards-ignore-review-limit
+本次读取的官方手册区分当日短步与跨日学习，提供多种复习排序，并提醒积压时
+继续大量引入新卡会加重负担。它也允许把新卡混入、放在复习之前或之后。
+这些是成熟软件策略，并不直接证明“每日2次优先”的阈值。
+
+Reddy等，Unbounded Human Learning: Optimal Scheduling for Spaced Repetition，
+KDD 2016，论文：https://arxiv.org/abs/1602.07032 ，DOI 10.1145/2939672.2939850。
+该研究以排队网络建模复习，并通过实验观察新增速率提高时学习结果出现明显转变。
+它支持区分加入内容的意愿与有限时间下实际首次学习速度，但没有为本App提供
+通用每日新项上限，也不能把其Leitner模型参数直接套到FSRS。
+
+FSRS维护者教程：
+https://github.com/open-spaced-repetition/fsrs4anki/blob/main/docs/tutorial.md
+官方教程说明延迟会通过实际回忆情况影响后续间隔；FSRS需要真实间隔和评分。
+故本候选保留实际时刻与原卡，不用自动标记记住、改due或删除历史来清空积压。
+本地实际依赖为py-fsrs 6.3.2，默认desired_retention=0.9，learning steps 1m/10m，
+relearning step 10m；本候选暂不改变这些值。
+
+关于相对逾期和可提取性排序
+相对逾期（逾期与既定间隔的比较）或FSRS预测可提取性比绝对日期包含更多信息；
+但不同目标可能需要不同顺序。优先最易回忆的项目可以更快处理一部分任务，
+同时可能把已遗忘项目长期放到后面；只优先最难项目则可能集中触发重学。
+本次第一候选只限制短步优先权，普通到期保持原due，隔离短步垄断的影响。
+若180天对照显示这一最小改动仍不足，可另行比较普通到期按“当日服务次数、原due”
+排序。这是尚未启用的第二候选，不是当前实现；不能混在一次实验里归因。
+若继续比较retrievability，使用已安装Scheduler.get_card_retrievability，
+不另写未经校验的公式，不更改卡片；保留服务次数和年龄公平护栏，并做独立对照。
+不能将“某个方向更好的排序”表述为普遍确定的研究结论。
+
+首次激活与添加数量：备选第二阶段
+admission_workload当前仅展示方向数与已有负担，不是未来复习量/分钟预测。
+StudyPathService.ensure_kana_queue会给已添加内容和已解锁方向生成候选题；
+每个首次评分方向会新建自己的FSRS状态。给已熟悉假名一次解锁多种题型，
+可能形成多个新的独立复习方向，实际学习成本远大于“新增1个假名”。
+若首轮候选仍不足，应优先把待学保存与首次激活分开：用户仍可任意追加内容；
+只在开始首次教学/首次方向检验时考虑已有短步和可用学习时间，提供可继续的节奏。
+现有已评分方向一律保留；不能自动合并旧卡、停用用户已开启题型或伪造已完成。
+任何每日目标或学习速度必须可调整、可主动继续；不能重新加入用户已拒绝的硬新增上限。
+
+最小测试矩阵
+A. 排序纯函数：新卡；未来due；正常短步；跨日/数周旧短步；超长Learning状态；
+   当日0/1/2/3次服务；同due稳定平局；非法或未来last_review；闰日与23/25小时DST日。
+B. 公平性：同一难项连续Again，另有多个旧到期项；至少验证到期覆盖增加、
+   热点仍可继续、无题被删除或伪装未来、反馈/草稿优先保持。
+C. 各路径一致：kana.prepare_next_question、LearningStore.current、统一入口、
+   模拟actor/KanaLane使用同一排序上下文；单独传统练习是否启用必须明确。
+D. 持久性：同日多次短会话、午夜、重启、备份恢复、重复finalize、延迟评分、
+   关闭后重开题型、辅助词拼写均不能重置或重复增加当日真实服务次数。
+E. 全表保护：只读选题前后SRS/due/事件/队列快照不变；允许现有checkpoint保存
+   元数据变化时必须显式列出，不能用宽松比较忽略真正的队列或评分差异。
+F. 180天同模型对照：day175开日前到期集合的1/3/5个活跃日覆盖率、最大等待、
+   同方向每日重复分布、普通复习/短步份额、实际分钟、课程与假名分别的首次教学。
+G. 完整1461天：保留既有所有空档、低量/激增日、设置变化、重启和外部学习模型；
+   每个长空档后的1/3/7/14个活跃日均报告恢复情况。原始due统计不能只看筛后队列。
+   除次数外也看逾期年龄分布及面积、新教学最长停滞、完成课程/方向数量和每日耗时。
+   学习库有限或前置未满足造成的新增不足应单列，不能归为节奏策略成功。
+H. Android手测：三次短访问中的热点重试/旧卡切换、退出与重启、午夜或跨日
+   合成夹具，以及新教学与到期并存。不可改真实手机时钟或清空真实学习数据。
+
+实现落点（审查时版本0.22.2）
+app/src/kanamemory/review_dispatch.py: review_priority、reviews_today、stored_review_priority
+app/src/kanamemory/domain.py: StudyStore.prepare_next_question、_day_bounds
+app/src/kanamemory/learning_store.py: LearningStore.current、effective_question_due
+app/src/kanamemory/study_path_runtime.py: continue_study_path
+app/src/kanamemory/new_dispatch.py: choose_lane（保留新任务公平轮转）
+app/src/kanamemory/study_path.py: ensure_kana_queue（首次激活备选；首轮不必修改）
+app/src/kanamemory/admission_workload.py: admission_snapshot/admission_text（计数解释）
+environment/long_term_kana_lane.py、simulate_long_term_learning.py：必须与真实入口一致，
+只加候选接线/诊断，不改变外部学习者参数来得到更漂亮结果。
+
+独立边界验证
+tests/test_review_recovery.py覆盖优先权阈值、原due排序不变、旧短步、未来到期、
+25小时以前的短步、真实事件跨短访问/重启/备份、重复回调、UTC等价时区输入、
+无时区拒绝、23/25小时夏令时日界、课程多题型共享能力计数、未评分/设备失败/
+辅助词拼写排除、未来事件排除以及读取前后每张业务表所有行不变。
+这些只证明边界与持久性，不代替180天对照、四年行为模拟和Android实测。

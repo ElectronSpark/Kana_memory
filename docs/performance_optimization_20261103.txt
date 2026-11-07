@@ -1,0 +1,82 @@
+KanaMemory 已知性能热点后续优化 — 2026-11-03
+
+范围
+基线0d1ca07；承接performance_review_20261103.txt的五个已测量热点。实现保持学习ID、
+题目快照、未完成队列、草稿、评分幂等、正式记录和到期时间，不改FSRS或辅助证据权重。
+原长期模拟保持暂停。本轮没有API调用、模拟器、APK构建或公开推送；不读写个人数据库。
+所有耗时都是电脑端合成数据/控件替身的测量；UI自动回归不等于原生手测。
+
+实现与接口
+1. 词块拼答：先save_draft，成功后从返回draft同步当前组成文字、字体、选项与撤回按钮；
+   正常编辑不再continue_learning重读前置/候选/当前题和重建页面。原题目对象身份保护保留，
+   保存失败不改变本地草稿，仍可重试；保存返回已作答/非pending时才重新派发。
+   新控件上下文加入PAGE_BINDINGS，详情/反馈返回不能错用另一页面的按钮。位置索引保留
+   重复词块语义；提交/评分流程不变。
+2. 例句：for_item_page(target_id, offset=0, limit=8)返回total/examples；完整候选仍按
+   同一熟悉度、首次学习例句、未知负担和稳定ID排序，只为可见项复制/合并展示资料。
+   for_item为limit=None的兼容入口；来源合并、个人替换和多关联说明继续由_get等原接口负责。
+3. 路由：current_identities(store, keys)批量解析活动/计划能力身份，不为新能力制造未来
+   合并ID。添加页、首页查询在同步动作内复用结果，active_units的版本/回滚保护保持。
+   真正新方向计数仍用prospective_identities；入队不使用长期缓存的展示结果。
+4. 首页课程：单次读取system_japanese_input与content_exposure_times，前置按内容+教学
+   scope复用，默认scope直接使用刚读取item，附加scope仍走原有专用检查。规划器显式可选
+   unit_states来自本次get_item；其他调用缺省保持实时查询。due显式传同一个now/exposures。
+5. AI输入：按当前StudyStore对象复用AITutorStore，消除逐键建表声明。仅save_chat_draft
+   采用受限增量写入：BEGIN IMMEDIATE后读取实际JSON，逐字匹配已验证私有缓存才复用历史；
+   任何不同JSON（即使revision相同）重新完整校验。仅更新草稿、上下文、revision；字段、
+   总8MiB及密钥检查保留，同输入不写/不增revision，每次变化仍落盘。commit成功后发布
+   单份缓存，错误清空；snapshot及其他通用写入仍完整验证，不改变历史判题或进度。
+   Store自有写事务增加一条精确架构许可，理由与测试记录于architecture_policy，非UI豁免。
+
+对照结果
+                                 基线                 改后
+添加内容页274张合成卡 SQL           802                  16
+其中data_version查询               788                   2
+首页同一合成场景 SQL               310                  43
+是否可继续 SQL                     301                  34
+50课程/100可安排方向 SQL           3504                1560
+词块选择/撤回 SQL                   76                  12
+词块每编辑整页渲染                   1                   0
+单项预览2条/列表8条复制例句数       100/100               2/8
+200条AI历史后续每键 SQL              33                   4
+200条AI历史后续每键旧结果校验        400                   0
+
+课程预览仍返回100 ready，添加页完整overview/plan/workload及数据库不变。路由完整页面
+基线来自上一轮fe1ce09，0d1ca07仅改例句；本轮同时运行原探针，未把隔离hoist原型当结果。
+添加页三次中位约43.3→32.2ms，50课程单次73.3→49.3ms，有并行负载噪声，查询次数更可靠。
+词块选择约12.5→4.65ms，撤回12.2→4.42ms；仍完整执行保存事务，未用不保存对照冒充收益。
+例句20,000条历史仍只汇总一次；预览中位6.659ms、8条列表7.271ms，全部零写入。
+AI使用真实save_tutor_chat_input链路分别加载0d1ca07和当前实现。0/50/200条历史的后续
+每键中位分别4.141/17.512/70.118→2.372/2.835/4.947ms；200条历史首键64.791→33.782ms，
+仍完整验证200条记录。所有历史及正式学习表不变，不将首键成本隐藏在后续均值里。
+
+验证与证据
+本轮输出位于.test_runs/perf-opt-1103；UI新增首次小回归沿用上一轮runner，其证据在
+.test_runs/perf-1103/main/continuation-ui-pages-r2（13通过，含新增8项及词块/字体旧回归）。
+首轮三个失败来自fake label没有真实控件的可变style；已在app_fixtures.label补齐替身
+合同，保留失败记录，不在生产代码吞异常。
+- routes：新增8项通过，含共享/planned/不同脚本、同/外连接、事务提交/回滚与scope隔离。
+- main/route-regression：32项通过；main/progression-regression：22项通过。
+- readpaths、readpaths-final：合成对照3项通过，最终页面探针在最后首页批量改动后执行。
+- tutor/tests-r2：新增11项通过，包含UPDATE失败、真正COMMIT失败、重试、篡改、总大小、
+  密钥、备份恢复、清除/重启及Store切换。正式Store/boundary/UI旧回归28+11+52=91项通过。
+- main/word-ui-regression：55项通过（含1项改后性能探针），字体、失败重试、旧回调保留。
+- main/examples-ui-r2、main/examples-store-r2：20+38项通过，覆盖排序、缓存、引用和页面。
+- main/personal-examples：18项通过，覆盖个人例句译文/引用修订及图谱替换。
+- main/tts-only、main/natural-only、main/order-only：19+6+5项通过，朗读、防泄题、
+  默认译文和折叠实验译文保持；仅运行本轮受影响的译文入口，不声称覆盖所有译文测试。
+- content/run.json与results.json：例句复制数量及零写入探针。
+main/example-regression、example-tts-r2、example-display-final三次合并批次触及120秒限制，
+未观察到断言失败；最终分别按文件/受影响入口完成。原中断回执保留，不冒称这些批次通过。
+validation-summary.json按classname+name合并所列最终XML，排除中断批次及单独性能探针，
+共332项不同的相关回归通过，无失败/跳过。此前3项替身失败均有明确修复及通过结果。
+tools/check_python.py的Ruff、架构、构建环境声明及120项工程门禁通过，证据
+.test_runs/q-vnhb1_lx/run.json、results.xml；不与332项重复相加声称全App全量测试。
+完成独立只读diff复核，未发现需要阻断本增量的功能回归。
+
+边界及遗留
+本轮五处热点已实现，不表示所有性能问题消除。目录重复deepcopy、手机同步落盘长尾、
+反馈PNG捕获仍是待独立测量候选；当前未据此改动。上一轮基线发现的同ID不同译文重复
+导入/来源哈希冲突属独立功能问题，保留原报告，未混入本性能增量。
+无新增生产模块，公开源码清单保持不变；现行结构规范v17与README记录本轮接口。
+已发布APK仍为0.28.5；本轮只提交代码/测试/文档，手机效果待后续打包及原生验证。

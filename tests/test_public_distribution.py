@@ -17,7 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 from build_demo_content import build_demo, digest
 from check_public_content import MANIFEST, validate_apk, validate_resources
-from export_clean_source import export_source, selected_files, validate_engine_sources
+from export_clean_source import _public_file, export_source, selected_files, validate_engine_sources
 
 
 def test_demo_content_is_reproducible_and_usable_without_private_tree(tmp_path):
@@ -110,6 +110,21 @@ def test_source_allowlist_cannot_escape_or_silently_include_keys(tmp_path):
     allow.write_text("engine.py\n", "utf-8")
     with pytest.raises(ValueError, match="Credential"):
         selected_files(tmp_path, allow)
+
+
+def test_documents_drop_marked_private_blocks_and_refuse_delivery_paths():
+    text = "design\n[private]\nround log\n[/private]\n[public-only] summary\nend\n"
+    assert _public_file("docs/a.txt", text.encode("utf-8")) == b"design\nsummary\nend\n"
+    for broken in ("[private]\nopen\n", "x\n[/private]\n", "[private]\n[private]\n[/private]\n",
+                   "[private]\n[public-only] y\n[/private]\n"):
+        with pytest.raises(ValueError, match="private block|Public-only"):
+            _public_file("docs/a.txt", broken.encode("utf-8"))
+    leak = "see ../g" + "drive/app.apk\n"
+    with pytest.raises(ValueError, match="Personal delivery"):
+        _public_file("docs/a.md", leak.encode("utf-8"))
+    assert _public_file("docs/a.txt", ("[private]\n" + leak + "[/private]\n").encode("utf-8")) == b""
+    # Code is exported byte for byte; markers only apply to documents.
+    assert _public_file("tools/a.py", b"x = '[private]'\n") == b"x = '[private]'\n"
 
 
 def test_public_engine_cannot_silently_omit_a_new_module(tmp_path):

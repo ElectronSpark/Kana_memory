@@ -1,0 +1,54 @@
+0.28.1 — Extend context variety across the existing authored course
+
+Scope
+All 353 authored word senses and 324 non-pronunciation grammar items receive
+at least three task families in at least three distinct source sentences.
+This is course coverage, not coverage of every entry in the dictionary.
+The 0.28.0 interaction, memory identity and preservation contracts still apply.
+
+Vocabulary
+- Interpret the highlighted word in a sentence.
+- Supply the word in a different sentence, with a short meaning cue.
+- Recall the highlighted reading when it is not already printed.
+- Select the conventional written form from its reading in context.
+- Recall the base form of an inflected word when the answer is hidden.
+- For words written in kana, select the sentence meaning using reviewed
+  minimal contrasts rather than copying a visible reading.
+Only applicable operations are used. Surface readings must be supported for
+the actual inflection; a lemma reading cannot be attached to a different form.
+
+Grammar
+- Retain existing meaning/function questions and specialist authored scenarios.
+- Complete four additional reviewed sentences with the target construction.
+- Reconstruct those sentences using two to six word groups.
+Chinese cues identify the intended meaning; Japanese groups keep whole words
+and the relevant construction intact. Valid but unlisted alternatives remain
+unresolved, not automatically wrong. These tasks do not claim exhaustive
+semantic equivalence or independently authored novel Japanese sentences.
+
+Selection and progress
+New tasks reuse existing ability units. A task family or context is not a new
+card, and merely showing an example is not a review grade. Enabled question
+kinds and prerequisite support continue to constrain selection. A bounded
+deterministic rotating tie-breaker prevents low-index variants from starving
+other contexts after repeated short sessions. It stores no extra history and
+does not alter due times. Frozen questions, drafts and completed grades remain
+authoritative across upgrades; old template arrays remain exact prefixes.
+
+Presentation and content separation
+No new answer controls or extra question-selection menus. Japanese uses the
+study font; instructions and Chinese reconstruction cues use the UI font.
+Ruby/TTS obey the tested ability's existing answer-leakage rules. New gap
+annotations retain unchanged segments from their complete original sentence;
+segments crossing the gap, disputed readings and unknown accents stay pending.
+Private JSON authoring, reviewed source hashes and compiled material stay in
+the content/artifact repository. The MIT app builds without them. Local tools
+used to prepare the pack do not add tokenizers or neural models to the phone.
+
+Verification
+Coverage/source-anchor validation, conservative grading, stable prefix and
+legacy fallback checks; finite mixed-mode/short-session selection tests;
+isolated emulator checks for new controls, correct/wrong/reveal, first learning,
+interruption/restart, original queue/draft preservation and enlarged text.
+The paused multi-year simulation, paid API and mobile download work are outside
+this increment. Release evidence records actual tested cases and limitations.

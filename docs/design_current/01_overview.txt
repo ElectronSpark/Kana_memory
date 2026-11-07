@@ -1,0 +1,157 @@
+KanaMemory 现行设计规范
+工程结构更新（2026-11-02）：07_engineering_structure.txt细化并接管工程分层/维护约束，
+区分已实现与目标结构。
+下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+
+基线版本 0.28.2，整理日期 2026-11-01
+
+
+01 规范范围与状态
+
+本套文件描述当前可观察实现、已有验证的准确范围以及尚未实现的设计。
+适用于 Python Android 个人学习 App、配套内容接口、离线学习、可选 AI、
+学习数据管理和构建交付。它不是一次功能发布，也不授权执行暂停的测试目标。
+
+产品源基线：8c3b9a9ec95bf10ebbd040e443d87e1454cfeaff。
+App 版本由 app/pyproject.toml 和 app/src/kanamemory/build_info.py 共同给出：0.28.2 / build 280200。
+这些是冻结参考，不会因以后提交本套文档而改成新的运行时基线。
+
+所有章节采用两个独立维度，不能把实现与验证混为一谈：
+- I：已在生产代码接入；有实现入口。存在孤立函数或测试桩不算接入。
+- V：有明确版本、场景和结果的已有验证记录；必须连同证据范围阅读。
+- U：该断言的当前验证不足、仅有历史记录或需要复验，不等于已知必然故障。
+- P：提案、未接入、未实现或待决；不是当前产品承诺。
+I+V 表示列明场景有记录通过，不表示整套 App、全部题目、全部设备已通过。
+I+U 表示代码可查，但当前场景的充分验证尚不能宣称完成。
+测试源码的存在只证明有测试定义；截图的存在不等于已人工审图；
+论文支持某个方向，不等于本 App 的算法参数或教学效果已经验证。
+
+02 阅读顺序与规范权威
+
+README.txt：统一入口、当前身份、使用与开发入口。
+docs/design_current/01_overview.txt：产品原则、架构与跨模块边界。
+docs/design_current/02_product_ui.txt：全部主要流程、页面和题型行为。
+docs/design_current/03_learning_scheduler.txt：现行记忆单位、证据、队列与调度。
+docs/design_current/04_data_ai_interfaces.txt：持久化、内容包、AI、反馈与安全边界。
+
+待实现设计作为本套规范的独立P层，不混入当前实现：
+docs/knowledge_evidence_design_20261101.txt：知识点关系、观察归因与统一能力。
+docs/ai_retention_verification_design_20261101.txt：主动/复学诊断与进度许可。
+docs/ai_material_verification_design_20261101.txt：修订2，供料/核据/先测或先学/采纳入学闭环。
+docs/ai_feedback_correction_design_20261101.txt：AI内容纠错、关联影响及成绩裁定。
+
+冲突处理：先区分“当前事实”与“应该怎样做”。当前事实由冻结源码及精确版本
+证据支持；文档不能覆盖实际代码。预期与代码不符时登记偏差，不静默升级为 I。
+新研究提案不自动覆盖现行规则，旧发布记录也不能覆盖新实现。
+低层格式合同在06登记为保留时继续有效；本套规范负责说明它适用哪一版本、
+哪一流程，不能凭文件名 v2/v3 认定它比 App 0.28.2 更新。
+
+03 产品范围
+
+[I] 面向中文使用者，离线优先学习日语假名、单词词义和读音、语法与阅读规则。
+支持先学后练、同一内容多题型、多语境、间隔复习、连续小节推进和中断恢复。
+词库浏览与正式词汇学习是不同动作。单词可以只作为假名拼写材料，不自动成为
+词汇记忆项。AI 和用户新增材料需显式采纳；采纳也不等于加入学习计划。
+
+[I] 资料层包含假名字源、现代日语读音、历史/方言参照、词典释义和例句。
+来源、许可、待核信息有独立承载位置；不得把中文同字音、词源关系、现代翻译
+和历史拟音混为一类事实。未知读法/调号不填成确定值。内容覆盖取决于所装内容包。
+
+[I+U] 已有课程覆盖与语言审校的阶段记录，但没有“全部现代日语语法均已穷尽”
+的完成证明。支持的题型不等于每个学习项都有全部题型；具有十例也不自动证明
+这些例子均准确、互相独立且适用于每一种考法。课程覆盖详见02与05。
+
+[P] 云同步、公开商店发布、完整句子跟读诊断与发音评分不属于当前已交付能力。
+TTS 播放和 ML Kit 笔迹识别不能被称作语音识别或口语评分。
+新的通用知识点图谱、可跨例句归因的错误合同、统一假名能力路由见05的待实现项。
+
+04 用户体验的跨模块约束
+
+[I] 用户首先看到日语内容、必要提示和当前操作。技术参数、数据来源长说明、
+算法解释进入详情/资料层；有助于避免误学的用法限制不能为了简洁被隐藏。
+日语与操作说明分字体；结果使用图形/颜色和可访问文字表达状态，不只靠红绿。
+
+[I] 首次教学、跟做、正式答题、提示后作答和反馈曝光具有不同证据含义。
+规范答案、允许变体、同音容错和未决答案按题型合同处理，不由 UI 自行猜判。
+读音/拼写/音高等被测答案不能通过自动题干注音、调号或朗读提前泄露。
+用户主动打开索引/求助可能看到目标答案，此时记录assisted，不能算独立成功。
+
+[I] 已评分历史、未完成目标、题面、草稿、反馈和原到期时间属于用户数据。
+追加内容不能重建覆盖旧队列；重新显示或评分不能重复结算。
+题型开关对未完成练习生效；不能为了恢复冻结题面而继续呈现已关闭的题型。
+练习期间隐藏底部导航；答题退出需要确认，已保存的等待页回今日直接返回。
+首页返回不退出 App。不同页面的精确返回规则见02。
+
+[I+U] 支持大字号、长文本、按词换行的音高图及低开销画迹。具体布局/流畅性
+依据历史设备和场景分别验收，不承诺所有手机和字体倍率都无问题。
+
+05 运行架构与职责
+
+启动入口：app/src/kanamemory/__main__.py、__init__.py、app.py。
+产品界面和原生桥接以 Python 为主；Android 服务使用 Java 桥。
+桌面预览不是 Android 行为的替代证明。
+
+分层职责（路径前缀 app/src/kanamemory/）：
+- app.py、learning_ui.py、study_path_ui.py、example_ui.py、feedback_ui.py、
+  ai_ui.py、tutor_ui.py：用户路由、页面与交互；按事件调用领域服务。
+- domain.py、learning_store.py、card_management.py、first_teaching_dispatch.py、
+  explicit_learning_start.py：已保存队列、评分、教学推进和正式学习记录。
+- learning_questions.py、question_support.py、kana_question_policy.py、
+  pitch_sequence.py、word_spelling.py：生成/选择/判定题目及其支持条件。
+- learning_evidence.py、learning_conditions.py、learning_harness.py、
+  tutor_store.py、word_interval.py、kana_rule_evidence.py：有限证据与针对性安排。
+- content.py、content_pack.py、learning_content.py、example_store.py：
+  内容读取、版本/身份、共享例句和个人新增内容接口。
+- learning_records.py、record_schema.py、record_transport.py、record_validation.py、
+  legacy_record_conversion.py、session_questions.py：唯一当前记录格式与转换。
+- platform_android.py / platform_desktop.py：平台差异、文件选择、声音、笔迹等。
+
+原生桥位于 app/native/java/org/example/kanamemory/：
+KanaBackHandler、KanaLinkSpan、KanaInkTouchListener、KanaTtsListener、
+KanaTreeCheckBox、KanaSelectionAdapter、KanaBackupDocuments、KanaAISecrets、KanaKeyboardInsets。
+桥负责系统生命周期、渲染/输入和平台服务，不拥有第二套学习进度。
+
+当前锁定依赖取自 app/pyproject.toml：fsrs 6.3.2，toga-android 0.5.7，
+ML Kit digital-ink-recognition 19.0.0，Material 1.13.0；Android min 26、target 36，
+arm64-v8a 和 x86_64。开发环境使用 Python 3.13、Briefcase 0.4.5。
+它们是本项目固定依赖，不代表这些库的最新版本。
+
+06 数据与执行边界
+
+[I] 内容：版本化只读内容包，含词典/课程/例句/注音/图解/音频及许可。
+[I] 学习：Android 私有目录的可写 SQLite，当前导出仅有一套格式。
+[I] 反馈：独立记录、页面快照与管理导出，不冒充学习成绩。
+[I] AI 密钥：设备 Keystore 保护，与内容、学习备份、反馈、源码隔离。
+[I] 模型/系统声音：由 ML Kit/系统引擎下载管理，不把它们当 App 内嵌语料。
+
+内容包或生成题中的说明不是可执行命令；外部内容不获得改调度、文件操作、
+读取凭据或自行加入学习计划的权限。AI 请求只使用业务批准的有限上下文。
+代码与私用语料分开保存；
+只有干净清单导出及原创 demo 位于 MIT 分发边界内，见04及 LICENSE-SCOPE.txt。
+
+[I] 评分、保存、追加和恢复通过已有服务及事务完成，界面刷新不写新成绩。
+作答时间采用实际提交时间；恢复反馈以后才点击评级，不伪装成后来才记起。
+[I+U] 已采用后台、增量和原生批量画迹处理；抬笔仍可能同步保存草稿，存在
+设备存储长尾。避免后台任务阻塞画迹是性能目标，不是所有设备已达成的保证。
+设备失败、低可信识别、无可用音频不能伪造成记忆失败。
+
+07 开发、发布与验证入口
+
+干净源码：tools/export_clean_source.py 和 tools/public_source_files.txt。
+公开 demo 的独立构建：docs/public-build.txt、environment/build_public_app.ps1。
+常规测试定义：tests/。
+公开 demo 与个人包采用不同包名；QA 包还具有专用测试时钟/记录接口。
+测试接口规范：docs/test_control_interface.txt；不能用测试接口修改真实用户状态。
+
+安装、测试、构建命令见对应维护文档，不把某次模拟器 serial 或临时目录当固定配置。
+
+08 持续维护方式
+
+今后每个功能改动同时更新相应章节、实现路径、测试定义、精确版本证据以及
+待实现清单。只有证据覆盖到的断言可升级为 V；不以测试数量推导覆盖百分比。
+新提案先列 P；落地以后记录原提案哪些条款被采纳、替换或仍未实施。
+旧文档保留其原版结果；在入口/06登记取代范围，不把失败报告删除或改写成成功。
+如果外部证据文件未随干净源码导出，保留索引和边界，不要求公开用户私有材料。
+
+本套规范将设计决策、当前事实和验证范围分开记录。发现不一致时先修文档中的
+事实标签或登记产品偏差；本次授权不包含按设计修改代码。

@@ -1,0 +1,82 @@
+0.29.2 读音规则与语流练习（2026-11-04）
+
+范围：10个新学习项，11个既有项扩充。保留原学习ID、记录、题序、快照、草稿、
+队列、到期及评分权重；不启动长期模拟。四步：清单→实现及内容→独立审校→有限验证/交付。
+
+新增：vowel_quality五元音；consonant_voicing清浊；r_tap；h_allophones；
+coronal_contrasts；verb_accent；adjective_accent；loan_accent；number_alternation；g_nasal。
+中文清单：
+  1 五元音的舌位/开口/唇形（含日语う，避免套用汉语u）。
+  2 清音与浊音：声带振动、送气的区别。
+  3 ら行的闪音，及与な/だ的区别。
+  4 は・ひ・ふ随元音变化的发音部位。
+  5 し・ち・つ・じ等易混辅音的区别。
+  6 动词不同活用形式的重音，分别示范平板型/有下降型。
+  7 形容词及形容动词的活用重音，承认词典允许的变体。
+  8 外来词常见重音倾向与例外，不从规则猜成唯一读音。
+  9 数词读法及组合变化，衔接已有助数词变音。
+ 10 が行鼻浊音作为识别知识；普通[g]不判错，不额外插入ん。
+扩充：connected_phrasing、nasal_assimilation、nasal_boundary、devoicing、
+contraction_teru/toku/chau/dewa、intonation、compound_accent、counter_alternation。
+对应为：语流分组；ん随后音同化；ん与后续元音/や行的边界；元音无声化；
+ている→てる、ておく→とく、てしまう→ちゃう（含で→じゃう）、では→じゃ；
+整句语调与句末同拍降升；复合词重音；助数词音变。
+每项至少10个带独立翻译、明确焦点和解释的实例；辨析和应用各至少4个不同语境。
+原始题目/例句不删除。只给新的题增加操作元数据，旧快照不被重写。
+
+联系：音拍→元音→清浊/ら/はひふ/易混音；重音基础及所用活用语法→活用重音；
+音拍/特殊拍/重音→外来词；数字→量词；ん基础→同化/边界；同化+清浊→鼻浊音。
+连贯短语→各缩约，配合各自语法前置；整句语调区分词汇下降、焦点、句末变化。
+现有项目不因补知识就增加新的硬前置，避免让原队列重新等待新课。
+
+表达与题型：日文是主体，精确片段高亮；操作提示尽量缩为读音/还原/会话形/
+下降处等，必要语境与变体限定保留。复用选择、词块、音高操作；新增语流轮廓观察
+任务族，使用可换行的矢量折线表达多级下降和同一拍内升降，不上下移动文字。
+整词保持同色，不把汉字数当拍数。轮廓是题目的已给刺激，不从答案生成；用于读图
+辨识，不能冒充真实听辨或跟读测评。TTS不充当无声化、鼻浊音或音高金标准。
+有合法变体时收录或避开唯一答案；不把鼻浊音、任意停顿、无声化当强制规则。
+接口保持两个记忆能力；task_family描述不同操作，模型可调已审核本地候选。
+
+出处（事实依据，教学顺序为本App设计）：
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/01-07-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/01-02-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/03-06-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-03-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-04-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/03-03-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-06-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-07-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-08-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-09-01.php
+https://www.coelang.tufs.ac.jp/modules/ja/pmod/practical/02-12-01.php
+https://www.jpf.go.jp/j/project/japanese/teach/tsushin/research/202503.html
+https://tsunagarujp.mext.go.jp/assets/download/numbers_ver202404.pdf
+https://www.kyozai.jpf.go.jp/kyozai/material/BTS00010/ja/render.do
+https://gavo.t.u-tokyo.ac.jp/ojad/pages/usage_search
+
+状态：功能、审校、构建和本轮交付完成；有限原生验证有下列未覆盖分支，不宣称全通过。
+精确逐题审批保存在独立内容产物。没有活动目标或长期模拟被创建/恢复。
+已完成：21项讲解与420题、210完整例句逐条审校；新课另有40基础引导模板。
+722课程项、45读音项；5974共享例句、27365引用、1079前置边。
+原712项、旧题前缀及5755共享例句哈希保持。仅追加新项，现有学习快照不迁移。
+新增前置影响新项的加入/开放，现有项不因补课重新锁定。课程导航合并单节单元。
+
+集中验证记录：
+- .test_runs/pronunciation292/checks-r3、checks-r4：修复失配后按测试身份合并，
+  303个不同契约全部通过（原失败保留原始日志，最后结果覆盖在contract-summary中）。
+  包括API公开刺激/调取、画布几何、真实Store多空评分、保存/重开、引导和防泄题。
+  主项正确背景错只增加attempt，不改主项/背景项的due和FSRS；主项错按Again，幂等结算。
+- .test_runs/q-ih4vvvkm：120工程检查通过；独立MIT源码q-zeuqjuwh另120通过。
+- staged-r2构题563次，全部标准答案通过；原712项/旧题前缀/5755例逐哈希保持。
+- review-registry-preservation.json：以前版0.29.1冻结QA资源为基准，524项登记及
+  其他review字段不变，仅新增10个精确指纹；不拿落后的产物工作镜像当最新基线。
+- production6c8c360；三包验签、完整模块/字节码/资源、静态16-KiB对齐通过。
+  私用完整内容包和MIT源码分别输出；不把静态对齐当16-KiB设备运行验证。
+
+原生验证覆盖代表性长句画布与旧快照重启保留；续答UI及两种错误结算原生分支仍待验证。
+原有全部课程并未重新语义审校，本轮逐条审校范围仅上述21项。
+
+更正（2026-11-05）：发布时11个扩充项的讲解计划被整份覆盖，原对照、拍位、流程和音高图丢失；
+文档与审校记录均无删除依据。现按0.29.1内容包放回原块，0.29.2讲解放在其后，要点合并。
+每课上限三块、每块三条要点，放不下的读法折叠为要点，与焦点相同的要点不重复；语调课的「食べる？」示意块和读法行放不下而未保留，
+相关曲线仍在题目中出现。合并结果未另行逐条审校，各片段沿用原审校。发布工具已改为合并。

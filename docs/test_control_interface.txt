@@ -1,0 +1,129 @@
+可控时间与进度测试接口 v1
+========================
+
+目的与边界
+----------
+在下一次全量验证前，统一时间输入并建立可重复的短场景。普通 App 默认仍取
+真实时间，不读取 QA 配置、环境变量开关，也没有 HTTP 或任意 SQL 控制入口。
+
+业务时钟 app/src/kanamemory/app_clock.py
+--------------------------------------
+utc_now()、local_now(tz=None)、localize(value, tz=None) 统一用于学习到期、
+等待、今日统计、证据冷却、画像衰减及对应 UI。SystemClock 是默认 provider。
+FrozenClock(aware_time, time_zone) 可 set/advance，默认拒绝倒退；using_clock
+作用域结束恢复之前 provider。进程内工作线程和延迟导入使用同一个 provider。
+宿主两个并行场景应各自独立进程，不能在同一进程并发安装不同全局 provider。
+
+time.monotonic/perf_counter、笔迹事件、答题真实耗时、网络超时、安全凭据
+有效期和真实诊断时间不随虚拟日期变化。QA 显式传入 IANA 时区，覆盖跨日与
+DST；普通 App 的设备本地时区探测保持原语义。UTC 不依赖额外 IANA 数据。
+
+现有长期 actor 的 VirtualClock 已改为使用这个 provider，不再扫描和替换
+sys.modules 中的函数别名。因此晚导入、后台线程、等待页不会漏用真时间。
+这不是从零设计另一套调度算法，也不把跳过评分当作模拟加速。
+
+主机接口 environment/qa_control_lab.py
+----------------------------------------
+仅操作本工作区 .test_runs 内带专属 marker 的新目录，拒绝真实用户目录、
+外部数据库、软/硬链接、junction 和任意 SQL。创建示例（在 kana_memory 内）：
+
+  .venv/Scripts/python.exe environment/qa_control_lab.py \
+    --root .test_runs/clock-demo --create \
+    --now 2026-03-08T06:59:59+00:00 --time-zone America/Toronto --seed 261
+
+只读查看：相同 --root、不传 --create 或 --request。
+执行命令：--root ... --request path/to/request.json。
+Python：TestLab.create(...)、TestLab(root).inspect()、lab.command(request)。
+
+请求格式（UTF-8 JSON，version 固定为 1）：
+  {"version":1,"request_id":"advance-001","expected_revision":0,
+   "op":"advance","args":{"seconds":60}}
+
+同一 request_id 与相同请求重试返回原响应，不重复评分或推进时间；同 ID
+换载荷拒绝。expected_revision 可选，提供时拒绝过时命令。命令串行加锁。
+
+操作：
+  advance        args.seconds：非负有限秒数，不等待、不改任何学习行。
+  set_time       args.now：带时区 ISO 时间，只向前。
+  review_kana    content_id/kind/script/rating；可附 answered_text、assisted、
+                 duration_ms。校验可练身份并调用真实 record_review，生成
+                 正式账本和 FSRS 状态；标记为合成场景，不冒充真人成绩。
+  enroll         entry_ids 或 section_ids，走真实添加接口与前置补入。
+  queue_kana     kind/script/count，使用持久化 RNG 生成题目并追加原队列。
+  save_draft     session_id/question_index/state，调用现有草稿保存接口。
+  prepare_learning_question
+                 content_id/kind，variant（默认0）、draft 可选。仅允许本地
+                 课程目录中尚未加入的项；用正式 API 明确自报了解前置，
+                 选择初学、完成讲解/引导并加入一个独立待答题。该步骤是
+                 合成界面场景，不生成成功复习或 FSRS 记忆状态；不会改动
+                 已加入项、旧题或其他队列。返回 question_id、retrieval_at_utc。
+                 时间不自动推进；可随后用 advance 61 秒进入首次检验。
+                 例如 content_id=pronunciation:nasal_assimilation，
+                 kind=pronunciation_application，variant=0。
+  batch          args.commands 中最多 100 个进度/向前时间动作，整批发布。
+  checkpoint     args.name：命名检查点，复用已经封存的不可变数据库。
+  restore        args.name：完整恢复数据库、时间、时区、种子与 RNG；操作
+                 幂等账本单独保留。源码/语料指纹变化或文件损坏均拒绝恢复。
+  next_due       仅报告存储中的未来到期边界，明确 advisory，不自动快进。
+                 原始 due 不等于当前设置和前置条件下真的能派发的问题。
+
+进度写入先以 SQLite backup 创建独立 generation，在其中运行真实业务 API，
+封存 WAL 后原子替换 current.json。任何失败都不发布半份状态。时间操作
+只发布小型元数据，不复制历史数据库。无自动清除残留锁，须先确认原进程已
+退出再人工恢复，避免抢占另一个控制器。
+
+独立 Android QA 包
+------------------
+environment/prepare_qa_app.py 将当前源复制到新的 .test_runs 项目，只在复制品
+注入 qa_clock_bootstrap.py；包名 org.example.qa.kanamemory，名称 KanaMemoryQA，
+构建目录 app-qa，既不覆盖个人包也不覆盖公开 demo。控制器不在公开源清单。
+QA 另打包 tzdata==2026.5，供 Android 上测试指定 IANA 时区。正常源不增此依赖。
+
+私有 qa-clock.json 契约：
+  {"format":"kanamemory-qa-clock-v1","synthetic":true,
+   "request_id":"clock-001","virtual_utc":"2026-03-08T07:00:59+00:00",
+   "time_zone":"America/Toronto"}
+request_id 仅 ASCII 字母/数字/下划线/连字符，1..100 字符。
+QA 启动时先应用时钟再打开学习库；主页完成后写 qa-ready.json，包含同一
+request_id、UTC 时间、时区、实际包身份和 PID。接口不改变 Android date 或
+settings；更换时钟会重启 QA App。待答题和草稿依靠正常持久化续用。
+
+environment/qa_control_android.py：
+  AndroidTestControl(adb, 'emulator-5580', disposable_user_id)
+  .status()
+  .configure_clock(config)        应用时钟并等待匹配的存活进程回执
+  .import_lab(test_lab_directory) 导入经过 marker/hash 校验的合成进度
+  .checkpoint(new_directory)      停止 QA 后保存一致数据库和时钟
+  .restore(checkpoint_directory)  验证完整状态、恢复、重启
+对应 CLI：--adb PATH --serial emulator-5580 --user ID，然后
+status / clock CONFIG / import-lab LAB / checkpoint DIR / restore DIR。
+
+每次操作核对模拟器、当前非 Owner 用户、固定包及 run-as 实际路径。检查点
+绑定当前 APK SHA256；包改变就拒绝还原。分文件还原有 rollback 副本与待处理
+标记；QA 启动遇到标记会拒绝打开 Store，下一次有效控制操作先恢复旧状态。
+不允许在个人包上启用接口，也不自动选择手机或切换现有用户。
+Windows 下上传使用分块 Base64 和落盘哈希校验，避免 ADB 标准输入在 0x1A
+截断二进制；控制命令使用 shell v2 取得真实退出码，不把远端报错当成成功。
+下载数据库与 WAL 也逐一比对远端 SHA256，再交由 SQLite 合并为一致快照；
+避免把截断的 WAL 当成有效旧库，遗漏最后提交的记录。
+
+后续全量测试使用方式
+--------------------
+1. 先用短场景验证 59/60/61 秒、跨日/DST、草稿、未评分反馈、关闭/重开题型。
+2. 保存代表性检查点，分别覆盖新手、积压、长期停学、批次追加，不每次重造。
+3. 四年 actor 在一个独立工作副本内逐次执行真实业务；只在关键节点备份。
+   不要逐题调用 copy-on-write 控制命令，它面向夹具和短场景，会额外复制库。
+4. 预期下一事件来自真实派发结果；不能只取最小 due 跳过介绍/前置或题型规则。
+5. 保存行为证据和随机种子，轻量检查与深度审计分层；失败只重跑受影响场景。
+   缩减重复准备和真实等待，不缩减必须模拟的评分、队列和休学期。
+
+当前验证记录
+------------
+最终时钟近邻组 155 项通过（app-clock-neighbors-host.txt）；接口组合首次
+94 通过、2 跳过，跳过为沙箱不允许实际创建软/硬链接，另有必跑属性检查。
+原生模拟器传输随后暴露两处 ADB 问题，独审补上 DB/WAL 下载完整性检查；
+接口组合最终 101 通过、2 跳过，见 test-control-final-r4-20261031.txt/xml。
+以上分组有重叠，不相加当作独立总数。
+QA 包实测确认导入、时钟推进、幂等重试与检查点恢复后全部表哈希一致。
+合成 SQLite 和检查点留在
+.test_runs，不作为安装内容或普通交付产物复制。

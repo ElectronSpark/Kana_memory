@@ -1,0 +1,242 @@
+[现行规范指引 2026-11-01]
+角色：保留字段合同，限额说明部分过时。现行入口：docs/design_current/04_data_ai_interfaces.txt。
+当前代码例句/关联上限为20000/50000；原5000/30000仅保留为历史。
+旧正文按原样保留；完整替代登记见docs/design_current/06_document_history.txt。
+
+Shared examples contract v1 (2026-10-25)
+=======================================
+
+Purpose
+An example is a reusable Japanese text resource. A reference connects an exact
+version of that text to one learning item, with its own emphasis, explanation,
+short hints and optional ranking weight. Multiple references can use the same
+example or even the exact same span. Examples are not memory units: opening,
+adding, importing or ranking them never changes a card, question, due date or
+learning event. Browsing does not count as an independent successful review.
+
+Envelope and records
+UTF-8 JSON object:
+{
+  "format": "kanamemory-example-pack",
+  "version": 1,
+  "status": "reviewed",
+  "examples": [{
+    "id": "example:stable-identifier",
+    "revision": "1",
+    "text": "私は学生です。",
+    "translation": "我是学生。",
+    "reading": "わたしはがくせいです。",
+    "source_ids": ["author-or-attribution-id"]
+  }],
+  "references": [{
+    "id": "reference:stable-identifier",
+    "example_id": "example:stable-identifier",
+    "example_revision": "1",
+    "target_id": "grammar:topic:wa",
+    "spans": [{"start": 1, "end": 2, "quote": "は"}],
+    "hint": {"meaning": "引出话题", "reading": "", "rule": "は标记本句话题“我”。"},
+    "explanation": "这里先说明谈论的是谁，再用学生です作出说明。",
+    "weight": 1.0
+  }]
+}
+The target above is a bundled course ID; import validates against actual stable
+course IDs. The code module example_store.py is the executable validator/API.
+example_pack_v1.schema.json provides the structural authoring/generation contract;
+cross-record identities, exact quotes, finite values, size and known-course checks
+must still pass validate_pack. The schema is not a linguistic correctness check.
+
+Identity and anchor rules
+- IDs are opaque stable strings, not list positions, titles or translated names.
+  New helper IDs hash exact text/reference payload. Existing arbitrary IDs stay
+  valid; future ID-generator changes cannot rewrite prior identifiers.
+- Text and revision are immutable for an example ID. Editing text needs a new ID
+  and explicit new references; never silently shift old offsets or select the
+  first substring match. Revision must equal each reference's example_revision.
+- Spans are zero-based Unicode code-point offsets, end exclusive. They refer to
+  the exact displayed text, including punctuation and whitespace. quote must
+  equal text[start:end]. Android converts to UTF-16 units only for rendering.
+  No NFKC normalization, automatic correction or byte offsets are permitted.
+- Multiple spans per reference and overlapping references are valid. A tap on
+  an overlap must offer all matching references, not guess a grammar target.
+- Optional reference.reading_scope is "lemma" (dictionary form) or "span" (the
+  highlighted inflected form, e.g. 止まって → とまって). It requires a nonempty
+  reading hint. An absent scope retains the existing lemma-hint convention.
+- Global translation/reading/source metadata is ancillary. When a bundled text
+  acquires new associations its global translation may be revised/neutralized.
+  Same ID+revision+text with different ancillary metadata remains loadable:
+  first pack wins display (bundled then saved). Saved custom snapshots remain
+  exportable. A reference's contextual explanation/hints remain independent.
+- References are immutable by ID. Changed explanation/spans/target require a new
+  reference ID. Reimporting an identical pack is idempotent. A changed text or
+  reference under an existing ID rejects the entire import before writing.
+- Old references to temporarily unavailable courses are retained on loading or
+  backup restoration and shown as unavailable, never retargeted by title. New
+  imports require known course IDs to catch typos. No inferred grammar links
+  are silently added from arbitrary substring matching.
+
+Validation boundaries
+v1 accepts JSON only, never executable HTML, Python, JavaScript or expressions.
+Maximum normalized custom pack 16 MiB, 5,000 examples, 30,000 references.
+JSON input text may be up to 32 MiB to allow indentation and a UTF-8 BOM; after
+parsing, the compact data must still fit 16 MiB. Exports use compact UTF-8 JSON.
+Example
+text/translation/reading each <=4,000 code points; each reference 1..100 spans;
+each short hint <=300; explanation <=2,000; finite 0<weight<=10. IDs <=256,
+course IDs <=1,024. Ill-formed Unicode, control characters, invalid anchors,
+unknown versions, duplicate IDs or non-finite values reject before any write.
+Unknown JSON metadata is retained within the same size bound; it never enables
+code execution or changes the meaning of the required v1 fields. Semantic
+schema changes need a new version with an explicit converter and migration
+tests. Do not reinterpret a v1 field in place. Unknown versions leave the
+original saved payload untouched, rather than replacing it with an empty pack.
+
+Lifecycle and future LLM boundary
+The same envelope accepts status="draft" for proposals. LLM output, external
+generation and user-authored batches should first be validated as drafts, then
+shown with the text, exact highlights, target IDs, per-reference explanation and
+hints for human review. Active import only accepts status="reviewed". A caller
+must obtain explicit review before promoting a generated draft; the status is
+not proof of linguistic correctness. No provider, API key, network call, tool
+instructions or generation prompt is executed by this format or this release.
+Generation should operate only on supplied stable target IDs and return this
+schema. Course or scheduler fields are never part of the model's write surface.
+Maintain source attribution in source_ids and a secondary source view; it must
+not crowd the main teaching text. Do not claim a generated gloss or pitch is
+reviewed dictionary evidence without validation.
+
+Experimental source-order Chinese reference (optional v1 extension, 2026-10-29)
+An example may carry order_translation=null or an inert object with exactly:
+  {"version":1,"status":"experimental","source_text":"私は常山の趙子龍です。",
+   "source_translation":"我是常山的赵子龙。","text":"吾，常山赵子龙是也。"}
+source_text and source_translation must exactly match that example's text and
+ordinary translation (empty string if absent), including whitespace. This dual
+anchor prevents applying one contextual meaning to a same-spelled sentence with
+another meaning. Old packs need no new field; IDs, text revisions, spans, normal
+translations and references remain unchanged. Import/export/backup preserve the
+optional value; invalid types, versions, anchors or unknown object keys reject.
+As with other ancillary metadata, merged active packs retain the first display
+snapshot. They do not silently overwrite an existing reference translation.
+An explicitly imported/retained valid reference may fill an absent/null value
+only when ID, revision, Japanese text and ordinary Chinese translation all match.
+It never replaces an existing experimental translation or another source meaning.
+
+The reference aggressively preserves Japanese information order and the roles
+and scope of particles/function words, negation, tense/aspect, modality and tone.
+Faithful meaning and valid Chinese grammar are hard constraints. Within them,
+source order takes priority over contemporary usual syntax or register: attested
+Classical/literary, premodern, modern written or colloquial constructions are all
+available. Neither modern vocabulary nor modern syntax is mandatory. Actively
+try grammatical topic/object fronting, resumption, 所/者 nominalization and suitable
+sentence-final nominal judgments, rather than merely copying a familiar ordinary
+translation. Do not mechanically append 是也 to です: negative, interrogative,
+adjectival and verbal predicates require different treatment. Do not invent
+grammar, splice incompatible constructions, retain Japanese particles in Chinese,
+add assertion strength/focus/completion, or force a completed 把/了 construction.
+Use local word-order fallback only when no faithful established construction
+preserves that sequence; an identical ordinary translation is justified only if
+it already achieves the available structural fidelity, not just greater fluency.
+Decorative archaism is not itself the goal. A new policy hash requires fresh
+generation; older output caches keep their original policy identity and history.
+The shared generation rules live in order_translation_policy.ORDER_TRANSLATION_RULES.
+
+The UI labels this reference experimental and collapses it by default. It is not
+added to a question stimulus, answer, spoken text, grading signal or schedule.
+AI material generation supplies it separately for examples and instruction.example;
+instruction.order_translation binds to instruction.example/instruction.translation.
+Its presence or wording is excluded from new AI lesson identity/revision hashing.
+Each question_templates variant may also carry this optional field. It binds to
+the complete public Japanese prompt, a locally completed single literal （　）
+gap, or the complete canonical sentence answer for transformation/reorder/
+correction/production. source_translation is always empty for templates. Hidden
+listening, isolated words, mixed instructions and ambiguous sentence sources must
+use null. The builder passes it only as separate answer-detail metadata; it is
+not a pre-answer support channel. All nested order_translation fields are omitted
+from lesson revision hashes, preserving revisions of old records byte-for-byte.
+AI question proposals/snapshots may separately carry it with source_translation="".
+The source is the public Japanese prompt, or the locally reconstructed complete
+sentence for a single-gap cloze (prompt.replace("（　）", answer)). It is shown only
+after answering. The model cannot enable it through a safety flag or use it as
+hidden audio input. It is excluded from question fingerprints and duplicate checks.
+Nullable structured API fields do not force a migration of old saved snapshots.
+
+Learning-aware selection (presentation only)
+For each associated learning item, independent successful reviews contribute to
+a bounded familiarity heuristic. Mere enrollment, introductions, guide answers,
+revealed/assisted answers and failed answers alone yield zero. For an ability:
+  evidence = min(independent_success_count / 4, 1)
+  strength = stability / (stability + 14)
+  familiarity = evidence * (0.4 + 0.6 * strength)
+This is an ordering heuristic, not a calibrated recall probability. Word
+familiarity averages understanding and reading abilities that actually exist;
+optional listening/use abilities are irrelevant to reading these examples.
+Grammar/reading-rule familiarity averages their understanding/application.
+
+For a focused learning item, rank its examples by the weighted mean familiarity
+of the OTHER linked items. Excluding the target prevents its own known status
+from making every example look easy. This implements the requested familiar
+proportion rather than rewarding sentences merely for having more links. Each
+distinct target contributes once, with the maximum declared weight among its
+references. A duplicate reference cannot inflate a score. Unavailable/unknown
+linked items contribute zero. Examples without background links score zero.
+The example library instead includes every linked target. Sort descending by
+score, then stable example/reference IDs for repeatable ties. New learning is
+reflected on the next screen build; scoring never reschedules anything.
+
+Hints
+Each reference can specify meaning, reading and rule. The current focus always
+keeps its short sense/rule hint, even when familiar. A known background meaning
+or reading is suppressed independently using its corresponding ability; reading
+knowledge must not hide an unknown meaning, or the reverse. At familiarity
+>=0.65 a background ability's hint can be omitted. Duplicate hint text is not
+printed twice; grammar focus uses its rule instead of repeating a generic
+meaning. Full explanation remains on the example/reference detail view.
+These teaching hints must not be reused on live question screens where they
+could reveal an answer; the existing quiz support rules stay authoritative.
+
+Persistence and API
+Custom reviewed packs are stored in app_setting["shared_examples_v1"], retaining
+the existing learning database/backup version. Backups validate this setting
+before restoring any live records. Deleting learning history leaves authored
+examples intact, as it does other user preferences/resources.
+
+ExampleStore(store, learning_store, items, bundled_pack=None)
+  get(example_id) -> detached example or None
+  for_item(target_id) -> sorted example rows with reference, score, hints
+  all_examples(query="") -> sorted/searchable library rows
+  references(example_id, current_target_id=None) -> every contextual reference,
+      its target, plan status, familiarity and adaptive hints
+  overlapping_references(example_id, start, end, current_target_id=None)
+      -> all references touching that span
+  item_status(target_id) / familiarity(target_id, ability=None)
+  display_hints(reference, current_target_id=None)
+  add_example(text, translation, target_id, spans, hint, explanation="",
+              reading="", example_id=None) -> example
+  import_pack(reviewed_pack) -> active custom counts, atomic additive merge
+  export_pack(include_bundled=False) -> standalone valid JSON object
+  refresh() -> reload restored custom resources, without learning writes
+
+validate_pack(pack, known_targets=None) returns a detached valid snapshot.
+empty_pack(), example_id_for(text), reference_id_for(reference) support callers.
+Screen queries take two bulk learning-state SQL statements, rather than one
+database/history query for every example or every visible word. A restored or
+externally modified setting invalidates cached resources through database
+change tokens; callers may also explicitly refresh after a restore.
+
+Additive v1 field (0.13.0)
+A reference may set surface_hint: true when hint.rule explicitly gives the
+focused inflected form and its reading, e.g. 見る→見て（みて）. Absence means false.
+It is a Boolean; true requires a nonempty rule hint. This flag is metadata,
+not a new hint kind or a convention inferred from punctuation in prose.
+The reading cue stays visible until both meaning and reading are familiar.
+The UI uses it instead of placing a lemma-only reading beside an inflection.
+Older v1 readers can retain this optional reference field and still display
+the ordinary rule/explanation; existing records need no rewrite or migration.
+
+Bundled coverage (0.13.0)
+All 524 current course senses/rules have at least ten distinct example IDs.
+Exact sentence text is shared; each target has its own anchored reference.
+Original examples/references are preserved. Additional authored rows are pinned
+to lesson semantics, not learner state; an unknown or semantically changed
+saved sense is not silently assigned them. New curriculum revisions must
+recheck the authored contexts before updating example_expansion_signatures.py.
+Run tools/validate_example_coverage.py after any curriculum or corpus edit.

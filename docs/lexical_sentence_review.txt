@@ -1,0 +1,58 @@
+词库候选例句审校协议 v1
+
+范围与边界
+逐句审读 content.sqlite3 中的 8,823 条候选文本、每个已有译文、
+每个已有词条关联及其完整词典义项。原字典快照、来源和许可不改写。
+模型逐句语义审校并对不确定用法核对资料，不等同于母语编辑认证。
+结构/哈希校验只证明审校覆盖、引用完整和位置一致，不替代语义判断。
+
+审校产物
+research/lexical_sentence_audit/baseline_examples.jsonl 保留原文、原 payload
+与 SHA256；baseline_words.json 保留用于消歧的完整词条。
+part_1～part_3 的 assignment.json 固定分配范围；reviews_XXXX.json 为
+每条明确判断；review_ledger.json 记录实际阅读范围、资料和续审位置。
+build_lexical_review.py 必须收到全部 8,823 条且恰好一次，才能生成
+app/src/kanamemory/resources/lexical_sentence_review.sqlite3。
+审校缺行、源哈希不一致、译文/关联索引遗漏、义项不存在、片段错位均拒绝生成。
+
+独立维度
+japanese.status：reviewed / corrected / uncertain。
+translations：每个原译文单独 reviewed / corrected / uncertain / rejected，
+修正保留原译文，并记录新译文与理由。
+chinese_translation：中文展示译文及 reviewed / uncertain；不补编语境。
+associations：每个原关联单独 confirmed / corrected / rejected / uncertain；
+写入具体 sense_ids、原句 Unicode 片段、语境理由；多读法须显式选定
+词典基本形 reading，无法确定标 reading_status=uncertain。
+唯一符合所选义项限制的字典读法可直接复制；不会默认采用 display_reading
+替代语境消歧。resolved_reading 为空时不生成课程关联。
+例句总体状态优先“存疑”，其次“已修正”，其余“未发现问题”。
+这里的“未发现问题”不是无限范围的正确性保证。
+
+展示与共享
+ContentRepository 将审校作为只读覆盖层。每次源身份首次使用时比较完整
+原文及 payload 指纹，旧审校不能继承给相同 ID 的新内容。
+错误关联不占词条例句名额；一个句子关联多义项仍只显示一个例句卡。
+存疑候选可在“例句库 → 词库例句与审校”查看，不作为确定关联加入课程。
+课程关联需要：日语不存疑、中文译文明确、词条义项明确、词典读法明确，
+并与当前可用学习项的 word_id / sense_id / reading 完全对应。
+已存在基础课程“手紙”使用显式的等义映射，不按标题相似度猜测。
+新例句使用既有共享格式的文本哈希 ID、不可变文本版本与精确片段，
+同一句可复用，课程入口及反向索引、熟悉度排序、已加入状态沿用既有机制。
+读法提示标为词典基本形；不把活用片段误标为基本形的实际读音。
+主教学提示使用已审核课程的释义；关联判定理由、读法复核过程留在二级页。
+共享例句携带 lexical_provenance 快照：原句、原译文、署名、许可、来源 URL
+及审校版本。导出后即使接收端没有本审校数据库，仍能显示来源信息。
+相同文本的例句合并各来源快照与审校 ID，不因去重丢失署名。
+匹配时仅统一平假名/片假名和全半角；不合并不同发音。
+审校 v1 只从已确认的字典关联生成词汇课程引用。非空 course_refs 会明确
+拒绝编译，避免丢失手工判断；额外语法引用须使用既有共享例句 v1 格式，
+逐项核实后导入，不能从文字命中自动升级为通过。
+原文、原译文、修正理由、著作权署名和许可在“审校与来源”页查看，
+不堆入主要教学卡。页面反馈包含展示例句、原文、审校、目标词及片段快照。
+只为已存在/用户已添加课程按需载入共享关联；不会自动创建学习项或练习题。
+
+学习数据边界
+不迁移/改写任何 learner 表，不重置 FSRS、到期时间、历史或未完成题目、
+草稿；例句不是记忆单位。旧学习项 ID 与例句 ID 不变。
+导入/导出用户例句仍使用 kanamemory-example-pack v1；审校文件不是学习备份。
+原始来源快照与审校随私用内容包保存，代码和构建器在源码中。

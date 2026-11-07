@@ -1,0 +1,82 @@
+[现行规范指引 2026-11-01]
+角色：已被取代的备份候选。现行入口：docs/design_current/04_data_ai_interfaces.txt。
+当前不再使用小/大导出格式双轨；旧输入仅经转换入口。
+旧正文按原样保留；完整替代登记见docs/design_current/06_document_history.txt。
+
+长期学习备份的有界兼容方案（设计／私有实验，2026-10-27）
+
+状态
+未修改应用、Java桥、调度、卡片、题单或生产备份常量；未重新打包。
+只有完整多年主模拟实际导出触及64MiB后，才决定是否实施。本文件不把候选方案称为已交付能力。
+
+已核对的现状
+- progress_backup.py的MAX_BYTES=64MiB既用于外层JSON，又被domain的单会话题单／追加上限导入；不能直接将它改为128MiB。
+- export_backup一次读取全部表，按已有v1–v8规则规范化快照，再用iterencode限制输出。v2只避免旧题单JSON字符串的重复转义，不解决真正超过64MiB的v8总历史。
+- _validated读取整份UTF-8 JSON，在内存SQLite暂存，另保留sessions/cards/events等Python索引，完成关系与语义校验之后才允许替换。
+- import_backup先验证输入、调用export_backup保存恢复前记录，再在BEGIN IMMEDIATE中删除／写回学习表。目前原库超64MiB也会阻止恢复一个较小旧备份。
+- previous_backup只找learning-before-restore-*.json并限制64MiB。Android与桌面导入只提供JSON入口；Java导入严格UTF-8、64MiB读取，导出通过String桥且同限。反馈ZIP入口不应与学习备份混用。
+- app中的导出、检查与恢复调用仍同步执行Python数据库／JSON工作；压缩后额外耗时不能继续无条件放在UI线程。
+
+推荐最小格式：仍是64MiB以内的JSON文件
+1. 普通备份能在64MiB内导出时，继续使用原JSON格式和原版本选择；保留所有旧JSON导入。
+2. 仅超大备份改用独立封装format，例如kanamemory-learning-backup-envelope，envelope_version=1。
+   固定字段：format、version、encoding=gzip+base64、expanded_bytes、sha256、data。
+   data仅含一个gzip流的标准base64；解压结果仍是原备份JSON v1–v8，没有新表或调度含义。
+   SHA256核对原始内层UTF-8字节，检测损坏；它不是签名，也不能代替现有语义校验。
+3. 外层文件仍最多64MiB（含JSON字段和base64）；压缩字节受base64膨胀影响，理论上限不足48MiB，应按实际最终外层编码长度判断。
+   内层明确最多128MiB。这个上限是本轮候选值，不是今后自动随文件增大的阈值；达上限应失败并保留原记录。
+4. 保留MAX_BYTES=64MiB及domain所有引用不变。新增独立BACKUP_EXPANDED_LIMIT=128MiB。
+   只有经过封装解析及有界解压的内部路径可使用较大内层预算；普通JSON文件仍最多64MiB。
+   新封装还需显式检查每一份恢复后的单会话快照仍在64MiB内，防止压缩容器绕过原题单上限。
+5. 外层仍为*.json和application/json，previous_backup命名及Android/桌面文件选择、UTF-8桥无需改成二进制。
+   旧App不理解新format会正常拒绝；小备份继续兼容旧App，不能宣称旧App支持新封装。
+
+压缩与解压的资源边界
+- 压缩侧直接把JSONEncoder的UTF-8块送入gzip，同时累计内层字节数与SHA256；不先构造超过上限的完整大JSON。
+  为维持小备份的原格式，可以只保留最多64MiB普通输出；一旦超限释放该缓冲，继续有界压缩到最多128MiB。
+  当前全表list仍会占内存，流式编码不意味着整个导出已成为常量内存。
+- 先检查外层64MiB和精确字段／类型。expanded_bytes必须是正整数，bool不能冒充整数；封装版本、编码、digest格式和base64均严格校验。
+  外层键重复、未知encoding/version、嵌套封装一律拒绝；不要执行任何备份提供的SQL、文件路径或代码。
+- 使用zlib.decompressobj(wbits=31)，每次最多读64KiB压缩输入，decompress的max_length最多64KiB，按剩余额度加1字节侦测越界。
+  以实际输出累计字节数为准，不能信任expanded_bytes或gzip尾部ISIZE；宣称1KiB但实际输出更大的流必须提前停止。
+  验证gzip结束、CRC、声明长度和SHA256；拒绝截断、尾随垃圾、第二个gzip成员及非有限JSON。
+  不能直接gzip.decompress整个输入，也不能用无上限flush把输出一次性展开。
+- 解压完成后仍使用同一v1–v8表结构、卡片、调度状态、词例权重、草稿、前置及关联校验。只重构传输解码边界，不绕过原校验。
+  _validated的64MiB传输检查与“已解码payload校验”需拆开；不能通过临时修改模块全局MAX_BYTES给导入放行。
+
+恢复前备份与事务
+- 无效输入先拒绝，不能先覆盖学习表或创建“恢复前成功备份”。用户确认时仍只展示必要计数。
+- 当前库超64MiB时，恢复前导出也必须走同一封装路径；不允许为了恢复而跳过原记录备份。
+- 恢复前文件先写同目录唯一*.tmp，完整写入、flush、fsync成功后原子改名为最终*.json；失败即取消恢复。
+  previous_backup只枚举最终*.json，半写临时文件永远不能被当成可恢复备份。
+- 建议在用户确认后、实际替换前进入BEGIN IMMEDIATE，阻止其他连接在“备份原记录”和“替换原记录”之间写入。
+  需要将导出读取分为“已有事务中的快照导出”和“普通独立导出”，避免现有export_backup再次BEGIN导致嵌套事务错误。
+  在同一写锁下导出原状态并持久化备份，然后按现有顺序DELETE/INSERT、一次commit；任何校验／I/O／SQL／提交错误均rollback。
+  文件备份可以在SQL失败后保留，它对应事务开始前的可恢复原记录；失败不得更改内存scheduler与当前练习对象。
+- 成功提交后才刷新scheduler／派生cache和界面。导入过程必须绑定检查过的同一份不可变输入，不能确认后重新读取可能已变的外部文件。
+- 现有SAF导出成功回调表示文件写入完成；云文件提供商不一定支持原子替换，不能把本机SQLite的原子性声称为任意外部文件的原子性。
+
+私有实验与内存门槛
+environment/probe_large_backup_envelope.py只对.test_runs合成库的只读backup操作，不修改生产模块。
+样本：1471课程、14205次假名评分、150次课程评分，单会话14767947字节（约14.09MiB）。
+原v8内层42156479字节（约40.20MiB），gzip+base64 JSON为5604516字节（约5.34MiB）；逐字节解压相同，原v8语义校验通过。
+内层编码约1.72秒，封装0.50秒，有界解压0.25秒，原语义校验1.54秒，均为Windows私有样本，不代表Android耗时。
+实际Windows进程峰值提交394395648字节（约376.13MiB）；开始时约21.93MiB私有内存。
+因此即使压缩文件很小，“完整解压+现有对象/内存SQLite校验”仍可能占用显著内存。按此样本粗略外推128MiB内层可能到1GiB量级，但这是风险估算，非上界或设备实测。
+本实验保留原字节与解压字节对比的短时双副本，也未包含Android的Java String/桥接内存；不能直接拿其峰值作为最终实现保证。
+10项实验合同覆盖有效往返、bool/错误长度、hash错误、非法base64、外层截断、gzip截断、尾随内容、多成员和声明小长度的实际膨胀越界。
+报告environment/artifacts/long-term-envelope-probe.json，日志environment/logs/long-term-backup-envelope-probe.txt。
+当前样本尚未触及真实64MiB，不能据此宣称长期主模拟已发生导出失败。
+
+实施前必须通过的回归
+- v1–v8旧JSON与小文件导出兼容；大封装中完整卡片/事件/题单/草稿/暂停设置/学习路线/实际到期时间往返不变。
+- 外层64MiB、内层128MiB、单会话64MiB三种边界独立测试；不会因为放大备份预算允许超大题单。
+- 伪造长度／压缩炸弹／截断CRC／多成员／错误hash／未知版本／非法列／外键／非有限数值均在活跃数据修改前失败。
+- 大当前库恢复小旧JSON时生成可再次导入的封装恢复前备份；恢复前文件写入、fsync、改名或SQL中途失败保持原表完整。
+- 跨连接并发写入、取消文件选择、Activity销毁、重复回调及导入过程中断；使用已有平台、生命周期、恢复写失败合同继续检查。
+- 原生验证大文件导出→选取→检查→确认恢复→从恢复前备份撤销，记录实际RSS/峰值、耗时、ANR及队列恢复。超过设备可接受内存时不应仅提高上限。
+
+若128MiB内层或内存峰值仍不可接受
+进入下一阶段“磁盘暂存+分表流式容器”，不继续提高常量：只允许固定manifest和已知表的JSONL、明确压缩/解压总量及单行/题单上限，逐行导入私有临时SQLite。
+现有语义校验应重构为读取已暂存数据库，避免同时保留全表list、内存SQLite、sessions/cards/events大字典；最后仍按现有事务替换活跃表。
+这比JSON封装涉及更多校验改造，应单独评审，不能为赶本轮测试跳过语义与恢复前备份。

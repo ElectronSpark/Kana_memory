@@ -1,0 +1,196 @@
+KanaMemory 学习单位、证据、调度与续学合同
+0.30.0覆盖说明：本地练习开始时固定本轮题单及优先级，普通返回/同进程后台继续本轮；
+关闭后已提交作答和确认评分长期保留，题单归档退出活动调度，下次开始依长期进度新排。
+未评级作答保留原观察，不补造评分。到期/题型/前置/资格门仍每次检查。
+显式加入新批次重新计划并保留本进程未完成题；主线和单词工具分别拥有内存计划。
+本段替代下文“跨进程沿用活动题单”和“每题后重排/追加”的旧行为描述，
+不替代FSRS参数、记忆单位、评分幂等、辅助证据权重及AI/诊断独立所有权。
+实现与本轮验证范围：docs/practice_round_0300.txt；不得将下文历史V视为本轮全量验证。
+下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+
+核对日期：2026-11-01
+
+新增选题约束 [P，2026-11-01]：不假定有日文输入法。题目级输入能力门先于
+熟悉度升级、错误优先及独立产出到期探测；默认用App内控件、普通罗马音/数字
+输入。不能因缺工具记错、延长间隔或标已掌握。替代题按实际提示强度归档，
+原独立产出证据缺口仍保留。旧pending题与草稿不能静默改写或永久阻塞；课程、
+辅导、引导、检查与首页可答数用一致资格。完整边界见规范02及执行计划P2；
+当前只是纳入要求，生产接入与原生验证尚未完成。
+
+0. 文档边界与状态
+
+本文件描述当前可核实的实现，不是下一版需求。App版本0.28.2。路径均相对kana_memory根目录；下文代码文件省略前缀app/src/kanamemory/。
+
+I＝当前代码已实现；V＝有既有验证报告，必须连同其版本/范围解读；P＝提案或待接入能力，未成为当前产品行为；U＝证据不足、边界未验或需复验。存在测试文件只表示有测试定义，不自动授予当前全量V。
+
+核心边界：[I] 正式记忆状态、辅助证据、教学阶段和排队状态是不同东西。到期不等于遗忘，加入课程不等于掌握，介绍/引导不等于独立成功，选择一道题不等于给该题涉及的所有知识评分。[P] docs/knowledge_evidence_design_20261101.txt提出的新知识证据架构尚未开发；不能用它解释当前数据库的实际行为。
+
+1. 当前有哪些记忆单位
+
+[I] 假名正式卡的键仍是(content_id, skill, script)，由domain.StudyStore._card_key生成。平假名与片假名分开，同一字形的选择、输入、手写等具体方向仍可能各有自己的FSRS状态、due和review_count。题型切换和适应性选题可参考相关方向的证据，但这不等于它们已经共用一个正式进度。
+
+[I] 词汇/语法/读音规则的课程单位是(content_id, ability)，由learning_store._unit_id生成，每个learning_unit有自己的FSRS。词汇可有理解understanding、读法reading、运用use、听辨listening；语法及作为课程的读音规则使用理解understanding和应用application。只创建该内容实际支持/加入的能力，不由浏览词典创建所有能力。
+
+[I] learning_questions.KIND_ABILITIES实际归属：
+  vocab_meaning、vocab_zh_ja_contrast、reading_comprehension → understanding
+  vocab_reading、vocab_reading_choice → reading
+  vocab_recall、vocab_orthography、vocab_usage → use
+  vocab_audio_meaning、listening_comprehension、vocab_audio_word → listening
+  grammar_meaning、pronunciation_rule → understanding
+  grammar_cloze、grammar_transform、grammar_reorder、targeted_correction、
+  controlled_sentence_production、pronunciation_application → application
+同一内容同一能力的上述题型共用该能力状态；不同能力不因一题答对而全部更新。
+
+[I] 2026-11-06起所有词都有listening能力，新加入的词直接带此单位。此前已学的词快照不改，由
+LearningStore.admit_word_listening每天最多追加8个单位（仅限至少复习过一次的词），先走追加教学，
+不进复习队列、不动其他能力的到期时间。词典条目加入时也带listening，仍没有use。
+听词选词默认开启，设备没有日语语音时不出题，也不算失败；听词辨义、短句听力仍需用户启用。
+与中文同形同义的162个词（config/cognate_words_20261106.json）只从未来选题中减少映射题：
+vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还原基本形的题。
+听词选词、看词选读音只用于练习和Tutor，记忆检查与材料预测试不从中选题，检查的测量内容不变。
+
+[I] “罗马音拼单词”及其反向逐假名选罗马音等辅助工具，走domain.WORD_SKILLS与word_spelling_attempt。其词本身不因此获得独立单词记忆卡。若用户另外将该词加入正式词汇课程，那是另一条明确入学/正式作答路径。章节、小节、示例、介绍步骤、队列题、条件错误模式都不是FSRS记忆单位。
+
+[I；开发增量，最终V待完成] 0.28.3已经接通新假名首次冻结能力、首次评分唯一建卡，旧组在真实独立复习后捕获候选并于安全队列边界激活。选题、首页、准入、前置修复、管理和辅助词拼消费同一投影；输入probe保留较早验证期限。旧卡/事件不重写，旧未完成题不重绑，混合听音+手写不自动拆分。具体生产合同与备份保护以docs/kana_routing_0283.txt为准。
+
+2. 正式评分与时间合同
+
+[I] 运行时固定py-fsrs 6.3.2（app/pyproject.toml）。StudyStore新建Scheduler(enable_fuzzing=False)，新配置采用库默认目标保持率0.9、学习步1分钟/10分钟、重学步10分钟；已有库从app_setting.scheduler恢复其保存配置，不强制覆盖。四级1/2/3/4对应Again/Hard/Good/Easy。稳定性、难度、状态及新due均由该库review_card计算，不在本文另造近似FSRS公式。
+
+[I] 假名正式入口domain.StudyStore.record_review；课程入口learning_store.LearningStore.submit/finalize。课程先冻结第一份答案，再评分一次。错误、揭示答案或辅助后的作答按Again处理；独立正确需用户评分。课程unresolved/device_failure/invalid/cancelled不制造成功，也不更新该能力FSRS。假名音频/识别故障或识别未确认进入practice_attempt，不伪造正式失败。
+
+[I] 调度观察时间是实际提交答案的冻结时间，不是停留反馈页后点击评分的时间。课程finalize使用answer.submitted_at_utc；假名调用保存的提交时间，并另记finalized_at_utc。数日后保存反馈不能冒充多记住了数日。早于已有last_review的正式观察、非法评分及错配题身份会被拒绝。旧反馈没有原提交时间时无法追溯补造历史。
+
+[I] 防重复有多个边界：假名session_answer的(session_id, question_index)及事件；课程已存在learning_event.question_id则finalize返回已保存结果；学习证据event_id；辅助变化(card_kind, card_id, anchor_event_id, fingerprint)。不是靠比较“答案文本相同”去重。重新读页面或恢复草稿不产生评分。
+
+[I] 课程自由提取题另有probe_due_at_utc。_ability_due对自由提取取min(FSRS due, probe due)；较容易的选择题成功不能一直推迟原有的自由提取检查。它替换该能力的适用检查，不另建第二张记忆卡。关闭相关题型时不可把不可用检查算作失败。
+
+[I] 曝光冷却与FSRS分离：通常60秒，实际可答时间取原due/not_before与曝光冷却的较晚值。domain.feedback_wait_times按同一内容及字形共享反馈等待；learning_store._latest_due、question_not_before、effective_question_due给课程执行相应边界。冷却不写S/D、review_count或FSRS due；反复查询不重新起算。已冻结真实草稿/反馈按保护合同处理。
+
+[I] 日统计使用StudyStore._day_bounds的学习者当地午夜及真实时区/DST，不是固定UTC日，也不是Anki的凌晨4时。app_clock默认真实时钟，可显式安装FrozenClock用于隔离测试。倒退时间需明确检查点恢复；QA控制不要求改系统时间。测试入口的隔离与记录格式详见本套数据/验证文档及docs/learning_records_0282.txt。
+
+代码/测试定位：domain.py的record_review、feedback_wait_times、_day_bounds；learning_store.py的finalize、_ability_due；tests/test_app_clock.py、test_initial_familiarity.py、test_kana_initial_familiarity.py、test_learning_store.py、test_learning_resume_priority.py。
+
+3. 辅助练习如何有限影响实际间隔
+
+[I] 辅助不是“0.1次FSRS成功”。learning_evidence.bounded_due只改due，不改S/D、last_review、正式复习次数或创造正式review_event。以前一次真实正式事件为锚，定义：
+  L＝该正式事件的last_review；B＝其调度后的due；I＝B-L；C＝当前due；t＝辅助作答时间。
+  默认一次课程辅助步w＝0.10；单词拼写对假名的步w＝0.25。
+  B-0.25I ≤ 新due ≤ B+0.25I。
+  正确候选C+wI；错误候选C-wI；最终夹在上述范围且不早于t。
+  w还受该锚点剩余预算限制；所有辅助来源实际绝对移动量之和最多0.25I。
+因此先加后减仍消耗预算，不能来回抵消后无限调整。0.10、0.25是工程政策，未由本App真人效果标定。
+
+[I] 调整前要求已真实评过的现存、未暂停、算法版本一致的Review态卡；锚后除due外状态未被未知路径改动；B>L、t≥L、C>t且C在原限幅带内。已到期卡保持到期，学习/重学短步不被辅助挪走，未学项目不凭一次词拼写新建成熟状态。重复题指纹与同一正式锚不重复挪due；新正式评分后才有新锚。课程较早的自由提取probe不随辅助成功推迟。
+
+[I] word_interval.apply_word_interval_adjustments只针对可明确归因的拼写成分，同字形的kana_choice/kana_romaji/romaji_kana/romaji_kana_full四类已学视觉卡。听音/手写方向不顺带延长。一个词内同一成分只处理一次；同规范读法、同字形、同卡、同正式锚的已生效变化不重复。提示、允许的替代拼法、歧义归因不硬算规范假名错误；促音/长音/拨音/小假名的旧独立符号卡跳过，转规则证据路径。
+
+[I] 可撤回证据由LearningEvidenceStore.retract重建条件投影并在仍有效的正式锚边界重算辅助变化；不是从今天的due盲减曾经的秒数。原始事件/撤回原因用于审计。
+
+代码/测试定位：learning_evidence.py的remaining_budget、record_adjustment、_apply_course_adjustment、retract；word_interval.py；tests/test_learning_evidence.py、test_word_interval.py、test_word_interval_replay_ui.py、test_word_interval_backup.py。这些测试的存在不等于本轮重新运行过。
+
+4. 四类共通读音规则与局部验证
+
+[I] kana_reading_rules.py中小假名、促音、长音、拨音各为一个跨平/片假名的课程规则，不能再按对应符号分成两套新规则进度。完整拗音/外来音组合仍有各自假名卡。规则理解/应用能力由课程体系保存，不使所有组合变成一张卡。
+
+[I] 一个拗音答错，错的那个组合仍按自己的正式路径处理；domain.record_review派生的小假名规则观察可为unresolved，不能直接连坐所有拗音。kana_rule_evidence.next_rule_probe只在当前设置与熟悉度允许的上下文抽最多2项作验证；同一组合换平/片假名不算新上下文。规则探针有60秒等待、24小时重新开启边界，探针自身不复制一整套兄弟卡。
+
+[I] 单词拼写的word_rule_observations只对明确规则证据归因：例如可定位的大小假名、促音/拨音遗漏、已验证的长音单位问题；不明确的替代或帮助后答案不能被当成无帮助失败。record_rule_attempt只允许可信、未辅助、不过近重复的确定观察影响已建立规则application能力的辅助due；未完成首学/无正式锚时只记录和安排验证。词仍不因此成为独立记忆项。
+
+代码/测试定位：kana_reading_rules.py、kana_rule_evidence.py的record_rule_attempt/next_rule_probe/word_rule_observations、domain.py的规则派生记录；tests/test_kana_rule_evidence.py、test_kana_rule_integration.py。
+
+5. 首次教学、前置与题型变化
+
+[I] 首次熟悉度new/some/familiar分别影响完整介绍、精简回顾或满足未曝光条件的实际诊断。自报熟悉不会直接写FSRS成功或解锁前置。词汇/语法按已加入能力分别选择；部分已知部分未知仍介绍所需内容。全部能力熟悉且没有暴露答案，才走可用的直接诊断。诊断失败/揭示返回教学，不制造“已有成熟记忆遗忘”；真正独立成功只给本次受测能力正式评分。
+
+[I] 课程阶段intro → guide → bridge/check → done分离曝光、引导和首个独立检查。新内容的一组讲解/引导/首检受保护，避免要求用户从前置清单逐项寻找入口；实际出现哪些页面由保存的阶段与当前可用题型共同决定。假名熟悉度按内容×字形保存，不以认识平假名替代片假名。
+
+[I] learning_dependencies.independent_ready_ids要求历史真实无辅助正确primary事件及rating>1，能力限定理解/应用/读法/运用。后来忘记或暂停不撤销已经获得的前置资格，不把高级复习重新锁死。explicit acknowledgement与真实成功是不同事实。validate_catalog拒绝缺失依赖及环；effective_dependencies只为与已审目录精确匹配、未受保护的内容叠加当前依赖。已有评分、真实草稿及冻结结果保留其原路线，避免内容更新重写进行中的练习。
+
+[I] 新课程练习由learning_practice_policy.select_practice_plan读最多24个同内容/能力/版本的近期观察。失误后降低支架难度；连续无帮助成功可提高；两个识别/有提示选项的独立成功不证明自由产出，存在可用自由提取题时保留检查。最近3题指纹/2个语境用于减少原样重问，每4次完成中有覆盖/有界错误跟进位置，最终平局按已完成次数轮转。它选择题型，不直接挪due，也不把未学背景当已学。
+
+[I] 假名domain中的适应性阶段也参考同字形相关方向的独立成功与延迟证据，辅助词拼写为低权重线索；这只改变题型服务。各具体方向的正式卡仍分立，不能从此推导“手写已因选择题成功自动熟练”。
+
+代码/测试定位：learning_store.py的首次熟悉度及submit/finalize；learning_dependencies.py；learning_practice_policy.py；tests/test_initial_familiarity.py、test_initial_familiarity_ui.py、test_kana_initial_familiarity.py、test_learning_dependencies.py、test_learning_practice_policy.py、test_learning_practice_store.py。
+
+6. 队列、草稿、关闭题型与新增批次
+
+[I] 题目快照、选项顺序、题身份、第一份已提交答案与草稿持久保存。0.28.2假名使用session_question逐题行，session_checkpoint保存当前位置/状态；不再把旧聚合questions_json当当前运行时权威。课程learning_question各自保存snapshot/draft/result/status。批次追加不把原未完成队列当新批次覆盖；已在队列而未评分的项需排除重复抽入。
+
+[I] domain.append_prepared_session/append_session与课程append_questions在既有事务、稳定身份、已存在题/卡及时间标记的边界追加。重启不重新随机当前题的选项；重复保存同一答案不加第二条正式复习。真正等待页与当前可答题数分开，题单历史长度不应冒充“剩余题数”。辅助词拼写使用独立练习通道，追加旧词/新组与草稿有自己的保留边界。
+
+[I] 题型关闭的现行合同必须分开说明，不能写成“所有草稿无条件保留”：
+  a. 普通假名：reconcile_session_kinds把不允许的题移入跳过前缀，不评分、不改正式记录/due。仍允许的当前题草稿与其他存活题原始payload/相对顺序保留；若当前普通假名题本身被关闭，其未评分草稿/反馈状态会清掉。
+  b. 重开普通假名题型：可恢复仍对应当前真实安排的已评分重复步骤，排除已被后续安排取代的旧步；不会复活未评分首次题或将已学卡当新卡。整队关闭后可能完成该队列。
+  c. 辅助单词题：因没有正式词卡供重建，用WORD_KIND_PAUSE把被关闭题及其草稿停放在队尾；重新启用且到队头时_activate_word_draft才恢复。不能用它推断普通假名也如此。
+  d. 课程：当前设置过滤不删除其learning_unit历史；被暂停的练习引导/能力保留阶段与快照。具体题面是否可恢复由当前合法题型及已保存状态决定。
+[U] a与c的草稿体验不完全统一，是已核对的实现差异；未来若要求关闭任何题型都保存原输入，需单列改动与迁移/恢复验收，不能在文档中假装已支持。
+
+代码/测试定位：session_questions.py；domain.py的reconcile_session_kinds、_restorable_session_repetitions、_activate_word_draft、save_session_progress、append_prepared_session；learning_store.py的append_questions/current；tests/test_session_kind_filter.py（含test_disabled_current_draft_is_cleared_without_scoring）、test_complete_resumed_batch_ui.py、test_practice281_legacy_resume.py。
+
+7. 到期服务、首次教学公平性与长期中断
+
+[I] review_dispatch的常规优先级：0冻结反馈；1真实输入草稿；2实际到期的当日短步；3其他到期复习；4首次独立检查/其他新工作。打开空题、只播放声音或等待页不算有真实草稿。短步要同时满足学习/重学态、上次评分在当前本地学习日且不足一天、间隔不足一天、该方向今天正式评分少于2次；仅state=Learning/Relearning不够。第2次后只降到普通到期顺序，不删除题、不推迟due、不限制当天继续作答。
+
+[I] new_dispatch.choose_lane只在均为新工作时轮转课程/假名及假名难度带；高优先级原样比较。游标只在真实完成事务中更新，读页面不前进；已打开课程教学块连续到引导完成。
+
+[I] first_teaching_dispatch.choose_protected允许首学块在普通积压中获得有限服务，但不能抢冻结反馈、真实草稿及上述短步。teaching_review_threshold按已过滤普通到期队头的逾期年龄，用8/16/32/64次真实到期复习换取一个首学服务块（不足1日/≥1日/≥3日/≥7日）。这是服务比例，不是记忆阈值、每天新增上限或用户时间额度。服务由真实已完成primary事件跨会话/跨日推导，提前练习、AI辅助、技术故障不赚取额外信用。
+
+[I] 已开始的介绍/引导/首检以持久锚继续，额外未测能力方向也纳入服务轮转；同一天2次已完成但未能评分的首检会停止该日额外保护，避免故障题占死优先级，且不改记忆。无普通到期阻塞时，新工作仍按现有选择继续，不添加人为总量封顶。
+
+[I/V：有限修复验证] explicit_learning_start维护最多一个已claim教学块加一个待开始请求；未claim新增合并，重复/零新增不授额外服务权；旧块首个真实评分后才让合法pending成为当前。它不替换草稿/反馈/短步，不消耗未知禁用状态以猜测可前进。此修复针对长期合成运行中发现的旧claim吞掉后续开始请求问题。
+
+[I] 长期停学仍用实际经过时间与真实评分更新当前FSRS。不会因30/60/90天未打开批量归零、改所有due、降低全部能力或撤销前置；不把“没开App”当完全没接触日语。当前没有强制复学诊断，也没有已部署的savings补偿倍率或外部接触假定。
+
+[U] 长期中断后代表项优先的有界合成比较未显示一致优势，故保留原普通复习。
+
+代码/测试定位：review_dispatch.py、new_dispatch.py、first_teaching_dispatch.py、first_teaching_kana.py、explicit_learning_start.py；tests/test_review_dispatch.py、test_review_dispatch_runtime.py、test_first_teaching_dispatch_core.py、test_first_teaching_dispatch_runtime.py、test_first_teaching_backlog.py、test_first_teaching_lane_fairness.py、test_first_teaching_local_day.py、test_explicit_learning_start_pending.py。
+
+8. 条件错误：当前实际记录了什么
+
+[I] learning_evidence事件保存target_id、ability、kind、content_revision、source、role、condition_key、conditions、时间、结果、assisted/eligible及snapshot。snapshot可保存error_category、题ID、题干、答案、实际作答、可信来源与版本。原始可审计事件与紧凑投影分离；只有本地受控提交可写，不因模型自称可信就升格。
+
+[I] 可信、无辅助且确定correct/incorrect的观察才进入条件统计；其他降为exposure。primary/auxiliary/exposure是证据职责，不等于数据库里每个带source=kana的事件都是一次正式假名评分，规则派生观察也可能来自kana。
+
+[I] 实际聚合唯一键是(target_id, ability, kind, condition_key)。condition_key是经排序去重conditions及可选condition_revision的哈希。error_category虽在原事件snapshot中保存，却不是聚合键。因此当前会合并同条件同方向下不同错误类别，尚不能完整实现“A与B/C时错误1、A与C/D时错误2”的独立权重。
+
+[I] learning_conditions.for_question只从已审、版本一致、片段定位合法的共享例句关联提取with:ID；完整题目文本/音频文本必须精确命中，目标也需匹配版本，最多8个其他关联项。AI生成/引导/未知材料、冲突文本与超额集合不猜条件。condition_revision包含例句ID、例句版本、目标版本及引用证明摘要，所以当前严格匹配的是具体已审语境版本，不是任意共享A/B词的抽象情境。
+
+[I] 当前关注度c更新：独立正确c←0.60c；独立错误c←c+0.25(1-c)。读投影再乘exp(-距最后观察天数/90)。每目标最多4个条件模式、每模式最多3个近期例证，保留近期反证；少于3次标tentative，超过90日标stale。它是有界选题关注度，不是第二份记忆概率或已证明的错误原因。
+
+[I/U] learning_harness.conditional_priority要求目标版本、条件版本、能力、题型、完整条件集合都相等，并只用于既有targeted位置。跨例句相同知识组合未泛化；未采到某条件不代表掌握；当前类别合并、版本细分与数据稀疏会限制覆盖。不得把“有关联”宣传成识别出因果混淆。普通课程另有多语境选题策略，不是所有队列都走这套精确条件重排。
+
+代码/测试定位：learning_evidence.py的record_attempt/_condition_key/_update_pattern/context/retract；learning_conditions.py的_reviewed_index/for_question/candidate_context；learning_harness.py的conditional_patterns/conditional_priority；tutor_engine.py候选排序；tests/test_learning_evidence.py、test_learning_harness.py、test_harness_observation_roles.py。
+
+9. 当前AI教学harness与离线进度的权限边界
+
+[I] learning_harness是纯本地决策层，不直接写数据库、调用模型、改时钟或解锁内容。已合格目标内按progress → targeted → progress → independent_check四个完成位置轮转，错误跟进只占一处；独立检查的确定性选择不依赖错误排名。冻结题/结果先恢复；本地错题或揭示可触发一次讲解；没有合法候选则回现有课程/等待。它不越过当前题型设置、前置与队列保护。
+
+[I] tutor_store.submit只把local来源、正式锚仍一致、reviewed_question通过的确定无帮助结果记作可信辅助，并走第3节10%步/25%总预算。AI生成题的正确性不能靠自己声明变成正式评分或可信记忆成功。模型的讲解、建议、画像与加入语料提案不直接修改S/D、review_count或原始事件。
+
+[I] 两类记录并存但不是两套正式FSRS：离线正式进度是事件及卡状态；tutor_memory为可撤回、带证据引用的文字观察。模型观察默认tentative并最多30日有效，用户确认/更正另有来源；当前提示投影默认最多8条。近期任务/聊天窗口有界（tutor_store最多200条任务、60条消息），不把全生涯历史塞入提示，也不把被窗口淘汰的对话解释为遗忘。
+
+[I] 选择时读取有界相关证据/现有内容，模型输入与请求身份验证和上下文过期检查由tutor_context/tutor_store负责；生成后的解释和候选仍走现有应用提交路径。缓存命中是实际API观测，不是本地harness保证。具体模型配置、请求格式、提问建议、防泄题与内容接受/舍弃界面由本套AI/UI章节记录，本章不将旧设计愿景升级成现行能力。
+
+[P] 知识点图、显式观测片段/局部判题归因、条件×错误类别跨语境模型、统一假名能力承载、BKT/PFA影子对照及全App统一知识证据路由属于docs/knowledge_evidence_design_20261101.txt提案。当前并未部署第二个掌握概率或让模型任意重写离线数值。
+
+代码/测试定位：learning_harness.py、tutor_engine.py、tutor_store.py、tutor_memory.py；tests/test_learning_harness.py、test_tutor_memory.py、test_teaching_harness_resume.py、test_harness_protected_targets.py。
+
+10. 验证状态：历史验证与长期模拟记录不随公开源码发布。
+
+11. 旧文档范围替代关系
+
+本文件优先回答“0.28.2今天如何记忆/排队/取证”，旧文件保留追溯价值，不删除历史证据：
+
+  docs/memory_model_v2.txt：其统一假名能力愿景由本章第1节限定为P；不能据旧模型宣称已合并。
+  docs/runtime_learning_v2.txt、runtime_learning_v3.txt、learning_expansion_v2.txt：课程扩展的历史设计/阶段说明；题型→能力、实际评分和队列语义以本文件及当前learning_questions/learning_store为准，旧备份版本/初期课程数量不再描述0.28.2。
+  docs/initial_familiarity_scheduler_review.txt：保留历史修复和验收；当前正式时间/首次熟悉度合同由第2/5节统整，旧验证不自动覆盖后续改动。
+  docs/study_policy_0_22.txt、study_path_design.txt、study_path_multiselect.txt：课程组织/界面仍查其相应章节；排队优先、首学服务、显式pending以第6/7节为准。
+  docs/review_recovery_policy_20261027.txt、recovery_policy_180_comparison_20261027.txt、recovery_policy_v2_phase180_20261027.txt、recovery_release_0223.txt、long_term_recovery_observations_20261027.txt、long_term_recovery_result_20261027.txt：保留候选/旧版比较和旧版验收，不能替代第7/10节的现行策略及当前失败/暂停结论。
+  docs/teaching_harness_0260.txt：保留当时设计和证据；其条件使用限制、备份版本与当前精确条件重排/0.28.2格式有差异，以第8/9节及数据章节为准。
+docs/teaching_harness_0260_plan.txt、teaching_harness_0266_revised_plan.txt、harness_increment_0267.txt、harness_regression_repairs_0267.txt：历史计划与增量记录，不再作为执行入口。
+  docs/long_break_scope_0267.txt：保留有界复学比较原数据与局限；第7节引用其负结果，不宣布新复学算法上线。
+  docs/knowledge_evidence_design_20261101.txt：新设计P，全部按提案阅读；本文件明确其未开发部分。
+  docs/learning_records_0282.txt：现行记录格式/转换权威，与本文件互补；本文件不将旧runtime文档中的旧格式重新引入运行时。
+
+后续若改进多知识归因，先定义可定位证据及幂等更新边界，再改运行路由与验证；不能仅修改本文件把P改成I，也不能把一个已关联例句的整题对错无差别灌给全部关联知识。

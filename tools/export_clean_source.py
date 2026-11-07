@@ -13,6 +13,35 @@ ALLOWLIST = Path(__file__).with_name("public_source_files.txt")
 FORBIDDEN_PARTS = {".git", ".venv", "__pycache__", ".codex", ".agents", ".claude", "data", "resources", "research", "user-data", "artifacts"}
 SECRET = re.compile(rb"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{30,}")
 PRIVATE_PATH = re.compile(rb"[A-Za-z]:[\\/]Users[\\/][^\\/\r\n\"']+")
+# Personal delivery locations; spelled in pieces so this file does not match itself.
+PROCESS_TRACE = re.compile("|".join([r"\.\./g" + "drive", "kana_memory_" + "artifacts", "\u4ea7\u7269\u4ed3"]))
+PRIVATE_OPEN, PRIVATE_CLOSE, PUBLIC_ONLY = "[private]", "[/private]", "[public-only] "
+DOC_SUFFIXES = {".txt", ".md"}
+
+
+def strip_private_blocks(name, text):
+    """Drop [private] ... [/private] lines and unwrap [public-only] lines of a document.
+
+    The development copy keeps the full record; only the export loses the marked lines.
+    """
+    kept, inside = [], None
+    for number, line in enumerate(text.splitlines(keepends=True), 1):
+        marker = line.strip()
+        if marker == PRIVATE_OPEN:
+            if inside is not None:
+                raise ValueError(f"Nested private block in {name}:{number}")
+            inside = number
+        elif marker == PRIVATE_CLOSE:
+            if inside is None:
+                raise ValueError(f"Unopened private block end in {name}:{number}")
+            inside = None
+        elif inside is None:
+            kept.append(line[len(PUBLIC_ONLY):] if line.startswith(PUBLIC_ONLY) else line)
+        elif line.startswith(PUBLIC_ONLY):
+            raise ValueError(f"Public-only line inside a private block in {name}:{number}")
+    if inside is not None:
+        raise ValueError(f"Unclosed private block in {name}:{inside}")
+    return "".join(kept)
 
 
 def sha256(raw):
@@ -54,6 +83,12 @@ def _public_file(name, raw):
         text, count = re.subn(r'(?m)^formal_name\s*=.*$', 'formal_name = "KanaMemoryDemo"', text)
         if count != 1:
             raise ValueError("Expected one Briefcase formal name")
+        return text.encode("utf-8")
+    if PurePosixPath(name).suffix in DOC_SUFFIXES:
+        text = strip_private_blocks(name, raw.decode("utf-8"))
+        trace = PROCESS_TRACE.search(text)
+        if trace:
+            raise ValueError(f"Personal delivery path left in public document {name}: {trace.group(0)}")
         return text.encode("utf-8")
     return raw
 

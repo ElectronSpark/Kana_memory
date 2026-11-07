@@ -248,6 +248,13 @@ class StudyPathRuntimeMixin:
                 lambda w, identity=next_section["id"]: self._add_study_sections([identity]), multiline=True))
         self.home_secondary_slot.add(u.row(u.button("学习路线", self.show_study_path, flex=1, margin_right=8),
                                           u.button("添加内容", self.show_study_path_add, flex=1)))
+        from .practice_round import planned_round_running
+        if planned_round_running(self.store):
+            self.home_secondary_slot.add(u.button("重新计算今日队列", self.recompute_study_queue, multiline=True))
+        if getattr(self, "_study_queue_recomputed", False):
+            self._study_queue_recomputed = False
+            self.home_secondary_slot.add(u.label("已按当前进度重新计算；原题、草稿和复习时间不变。",
+                                                 size=12, color=u.MUTED))
         word_pending = self.store.load_session_progress(lane="word_romaji", lazy_questions=True)
         word_count = KanaMemory._word_drill_remaining(self, word_pending)
         self.home_secondary_slot.add(u.button(f"继续单词拼写（剩 {word_count} 词）" if word_count else "单词拼写",
@@ -257,6 +264,23 @@ class StudyPathRuntimeMixin:
         if path.get("required_partial_sections"):
             self.home_stats_label.text += f" · 部分加入 {path['required_partial_sections']} 节"
         KanaMemory._arm_home_review_refresh(self)
+
+    def recompute_study_queue(self, widget=None, **kwargs):
+        """Drop only this run's frozen main-lane order and rebuild the view.
+
+        This is the same explicit scheduling request as adding a batch:
+        practice_round.restart forgets in-memory order and priorities. Stored
+        questions, drafts, feedback, due times and FSRS state are untouched;
+        the next continue re-captures order from current long-term state.
+        """
+        from .practice_round import restart
+        # show_home already activated the main lane; the lane is also named
+        # explicitly, so a word-drill plan is never replaced from here.
+        if getattr(self, "page", None) != "home":
+            return
+        restart(self.store, lane="main")
+        self._study_queue_recomputed = True
+        self.refresh_home_actions()
 
     @page_view(replace=True)
     def continue_study_path(self, widget=None, *, _checkpoint_saved=False, **kwargs):

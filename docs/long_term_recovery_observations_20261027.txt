@@ -1,0 +1,99 @@
+停学恢复实验：只读观察、复现与解释边界（2026-10-27）
+
+1. 固定输入和可比较范围
+
+主比较使用 constrained、seed=20261027、1461 天（2027-01-01 至 2030-12-31）。
+保留原日历、SyntheticLearner、每会话剩余不足 55 秒即停的规则、题型能力系数、
+成功率与耗时、初学时间、方向间独立记忆、实际入队/选择/提交/评分调用。
+不能用提高正确率、缩短难题耗时或给未评分卡虚构复习来美化恢复结果。
+
+新策略必须使用新 output prefix；算法改变不能续接旧算法的 actor。
+同一新策略可以先完成前 180 天，再从该正常 checkpoint 继续到原 1461 天。
+源封存包含观察 helper，继续运行会验证原日志 hash/行数、actor/summary 一致性。
+只能从正常日终停止续跑；强制中止留下 run-in-progress 标记，不可当作 checkpoint。
+
+新跑示例（从 kana_memory 根目录执行；prefix 必须尚未使用）：
+  .\.venv\Scripts\python.exe -X utf8 environment/simulate_long_term_learning.py --profile constrained --seed 20261027 --days 1461 --fair-new --lazy-kana --availability-check-every 137 --storage-mode synchronous_off --stop-after 180 --output environment/artifacts/long-term-recovery-constrained-20261027-v1
+继续同一输入和策略：
+  .\.venv\Scripts\python.exe -X utf8 environment/simulate_long_term_learning.py --resume --output environment/artifacts/long-term-recovery-constrained-20261027-v1
+离线分析（不打开学习数据库）：
+  .\.venv\Scripts\python.exe -X utf8 environment/analyze_recovery_observations.py environment/artifacts/long-term-recovery-constrained-20261027-v1
+
+synchronous_off 仅用于可丢弃的模拟数据库；不是手机性能或耐久性配置建议。
+lazy-kana 和 availability-check-every 137 已有等价契约；实际选择和评分不会抽样。
+观察日志只增加 SELECT 和文件写入，不推进虚拟时间、不调用 RNG、不写学习数据库。
+
+2. 新观察记录
+
+<prefix>-observations.jsonl schema_version=1：
+  day_start：当天 07:00 已评分、未暂停且 SQL due 的记忆方向 key 集合。
+  session_start/end：序号、计划/已用/未用秒数、动作数、首尾动作、停止原因。
+  action：实际头部内容 ID、记忆方向、题型、教学/练习、前后阶段、开始/结束时间。
+  answer_observed：一次真实合成作答的发生日、耗时和结果，反馈中断后不会重复记。
+  day_end：已评分方向数、SQL due 按 lane/state 分布、配置开启状态、当天未触达旧卡、
+           课程内容的 intro/guide 等阶段数量。
+
+原 events/daily 的业务字段保持兼容；观察文件单独封存。
+延后评分有两条不同事实：原答案在提交日耗费答题时间；复开反馈只消耗 4 秒评分。
+离线报告按实际发生日统计两者，不能把答题耗时重新归到反馈恢复日。
+日志中的秒数是原模型推进的虚拟用户用时，不是设备墙钟时间。
+
+离线报告给出：
+  每日/每方向实际评分次数、提交次数、答题耗时、练习动作耗时；
+  各题型实际工作量、会话利用率和未用尾部；
+  每次停学后第 1/5/10 个活跃日的原 due cohort 覆盖率、未触达数、重复集中度、
+  实际教学次数及到期/最老逾期/逾期 P90；最后不足完整窗口时显式标记。
+  窗口也显示经历的日历天数，因为期间可能又遇到一次停学。
+
+3. 比较时必须分清的数
+
+raw_due 是已评分、未暂停的方向，仍可能被关闭、处于曝光冷却期或受前置条件限制。
+不能把 raw_due 当成界面“现在可答”。course_blocked 是待做问题/能力数，
+不是 blocked_content 的不同内容数；kana_ready 还可能包含未评分新方向。
+pending_questions 不是复习债务，新增但未初学也不是逾期旧卡。
+课程 stage 分布与 instruction_ready 可观察新内容积压；这里没有伪造假名内容级
+“已教学”状态，假名教学是否发生以 action 中的 content_id + script 为准。
+
+应同时报告：复习旧 cohort 覆盖、新内容教学推进、首次教学的内容与阶段、
+单位方向每天重复集中度、按实际难题耗时计的工作量、总预算/未用预算。
+不能只看清空题数或正确率，亦不能把每日两次优先额度解释为每天最多评分两次。
+
+4. 难题成本与模型边界
+
+原模型对假名的独立 key 是 content_id + script + kind；同内容的不同题型练习
+不会互相传递强度（最初教学会为所有方向建立初始记忆）。它是压力测试，
+不是共同掌握程度的实证认知模型，可能放大长期独立方向的总负担。
+
+constrained 的 handwriting 另有 0.80 能力系数，attention=0.93，且普通日/低状态
+日的 day_factor 会继续降低成功率；即使间隔接近零也不是必然答对。
+手写答题另加 10 秒，失败再加 4–13 秒，评分再花 4 秒。
+这些都是事先固定假设，不能拿本实验结果证明真实用户记忆效果或手写效率。
+
+既有 fair180 的 3260 次评分中手写占 987 次，手写本身平均约 26.4–26.7 秒，
+还未计共同评分时间；普通题约 16 秒。原 21 天停学的回归前五天中，两条方向
+占 40/106 次评分（37.7%），说明少数短步反复获得优先级值得修正，
+同时必须承认独立方向/难度模型对这项压力的贡献。
+
+原 4 年墙钟约 28219 秒，包含不同的纯性能源段；fair180 约 430 秒。
+不能把有无观察、不同样本、不同源段或 SQLite 同步模式的墙钟直接当成手机改进。
+
+5. 只读等价和续跑验证
+
+首次观察改动前保存的 driver SHA256：
+  562e1141c2833bf3d68709719007db1fd011a02fef03e7a374fd296b8b9db60e
+本地私有快照：
+  .test_runs/recovery-observation-baseline-20261027/simulate_long_term_learning.py
+该快照只用于 oracle，不是发布源码；在当前同一生产源码下加载新旧 driver。
+  .\.venv\Scripts\python.exe -X utf8 environment/verify_observation_oracle.py --baseline .test_runs/recovery-observation-baseline-20261027/simulate_long_term_learning.py --report environment/artifacts/recovery-observation-oracle-20261027.json
+
+7 天、15 次短会话、含 2 天停学与冻结反馈、87 次评分和 17 次教学的 oracle 通过。
+原 events 字节、scenario、daily 业务字段、全部数据库业务行 hash、模型/RNG、
+队列/评分计数完全一致。为比较所有不透明 ID，两边采用同一确定 UUID 序列；
+未替换 recall/calendar/option RNG、业务调度方法或作答参数。
+物理 DB 字节数和 wall timing 不作为确定性业务轨迹。
+
+26 项 tests/test_long_term_observations.py、test_long_term_graceful_resume.py、
+test_new_dispatch_harness_candidate.py 契约通过；日志包括连续 vs 断点观察文件
+完全相等、篡改拒绝且 DB 不写入、只执行 SELECT、冻结反馈不重复计作答。
+报告：environment/artifacts/recovery-observation-tests-20261027.xml。
+这些短契约不替代待执行的完整四年结果。

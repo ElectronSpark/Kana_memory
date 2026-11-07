@@ -1,0 +1,91 @@
+Full learning prerequisite and question-context review — 0.22.15 / 220015
+
+Scope and policy
+The audit covers all 524 bundled courses: 324 grammar, 34 pronunciation and
+166 word senses. The full learning path retains all 850 stable entry identities,
+including 241 playable kana directions and 85 references. The previous kana
+graph and same-script independent-success gate remain in force.
+
+Hard dependencies represent forms or semantic distinctions needed to answer a
+course's questions. The new target itself belongs in its introduction. Merely
+occurring in an example is not sufficient reason to require a separate course:
+incidental vocabulary receives safe local assistance instead.
+
+The course graph grows from 596 to 1047 direct edges. Additions affect 118
+courses; 208 ancestor closures expand. Examples include all applicable te/nai
+forms, plain verb/adjective/copula forms, transitivity, contraction source
+constructions and grammatical functions of pronunciation particles. A complete
+structural audit finds no missing node or cycle. Source references and the
+reviewed form-consumer lists are in course_prerequisites.py and the graph JSON.
+These sources support Japanese usage; the precise prerequisite order is the
+app's teaching decision, not an official curriculum mandated by those sources.
+
+Automatic selection and continuation
+Selecting a new item traverses already-reserved but unstarted ancestors, then
+adds only missing identities. Browsing and previewing remain read-only. Existing
+successful study, real drafts, ungraded feedback and explicit prior-knowledge
+acknowledgments keep their route. Playing audio or storing empty input is not
+evidence of an answer and no longer bypasses a prerequisite gate.
+
+For an untouched saved copy of an exact bundled lesson, runtime admission
+uses the current additional prerequisites without rewriting its original lesson,
+question or draft. Source IDs, material fingerprint and abilities must match;
+an unrelated custom/AI item cannot become trusted merely by using the same ID.
+Continue appends missing prerequisites once. Each required course must receive
+a genuine unassisted successful primary rating before unlocking its successor;
+reading, guided practice and an ungraded correct answer do not create evidence.
+Later lapses do not revoke a previously established foundation.
+
+An old custom branch with missing or cyclic dependencies remains unresolved
+and blocked; it cannot prevent unrelated valid courses from continuing. Explicit
+new enrollment still rejects invalid dependencies. No fake content is created.
+The fully closed-graph cache checks saved membership and external DB changes;
+local hot checks for all 524 courses take about 5–6 ms, versus 245–280 ms without
+the cache. These desktop timings are not phone performance guarantees.
+
+Section and unit grouping follows the corrected topology. Entry identities,
+learning records and reservations survive regrouping; derived section/unit IDs
+and counts may differ. No content database or learner schema migration occurs.
+
+Question context and non-disclosure
+The audit enumerates 1674 local question variants. Safe non-target annotation
+is available in 961 of 983 cloze/usage variants. Exact local vocabulary senses
+and 97 manually reviewed public prompts supply short lexical context; 732 of
+1302 grammar meaning/cloze variants have such help, with 1093 individual glosses.
+Known background word senses can suppress unnecessary hints. Japanese spans
+retain their study typography, distinct from Chinese instructions.
+
+The manual context set covers 50 course groups, including basic place/action
+sentences and decisive time, role or lexical cues such as 毎朝, アレルギー,
+目覚まし and 案じる. Meanings of base verbs do not translate the tested tense,
+aspect, voice or modality. A work-description scene disambiguates the habitual
+use of a progressive-form example sentence. New progressive/result meaning choices use
+parallel abstract functions so a background noun cannot select the answer.
+
+The old mu-te-form production question also required ください. New questions
+ask only for the verb form. Exact unchanged old questions keep their original
+answer and receive a note identifying the fixed given ending. Display support
+for saved questions is read-only, anchored to the exact bundled target, variant,
+prompt, task, answer and options. It cannot alter stored scoring or manufacture
+trusted hints for imported/edited questions.
+
+Target text, equivalent readings and answer-bearing hints remain excluded.
+Cloze questions remain silent; annotation does not enable TTS to read a hidden
+answer. Reading/pitch/listening answers are not disclosed. Uncertain meanings
+are not guessed from a dictionary's first sense. Unmatched background tokens
+are not all missing dependencies: many cloze tasks already provide Chinese
+context, and some apparent tokens are the form being taught. The counts above
+are coverage evidence, not a claim that every possible Japanese example has
+received exhaustive semantic certification.
+
+Validation and release evidence
+Release validation covers final test accounting, package identity and preservation results.
+The full rollout test enrolls all 524 courses in reverse request order and uses
+public teaching/answer/rating methods. Every dispatch checks actual predecessor
+successes; finalization creates exactly 524 primary observations, with no
+duplicate identity, unresolved item or unfinished question.
+
+A native check exposed an inconsistent draft check: saving initial familiarity rejected an old audio-only checkpoint that admission accepted. set_initial_familiarity now shares the meaningful-answer predicate while retaining its independent frozen-result safeguard.
+Final automated accounting contains 1737 distinct passing cases, including
+seven additional metadata-only/real-draft/frozen-result guard regressions.
+
