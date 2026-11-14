@@ -26,6 +26,9 @@ def registry(monkeypatch):
     value = {'format': 'kanamemory-pitch-sequences', 'version': 1,
              'sources': [{'id': 'synthetic', 'title': 'Synthetic protocol fixture', 'url': 'https://example.test/synthetic'}], 'records': []}
     monkeypatch.setattr(alignment, 'load_namespace', lambda name, default=None: deepcopy(value) if name == 'pitch_sequences' else default)
+    # Scenarios edit this registry in place, unlike an installed (immutable)
+    # pack: read it live instead of through the shared per-pack copy.
+    monkeypatch.setattr(alignment, '_registry', lambda loader, name, default: loader(name, default))
     return value
 
 

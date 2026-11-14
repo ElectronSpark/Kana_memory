@@ -37,6 +37,10 @@ class ContentBlockedCurrent(TypedDict):
     type: Literal["content_blocked"]
     question_ids: list[str]
     counts: dict[str, Any]
+    # Absent (the default) keeps the original meaning: retired/blocked material
+    # questions. "library_disabled": only content of a disabled or missing
+    # library remains (design 08 section 8.2); question_ids is then empty.
+    reason: NotRequired[Literal["library_disabled"]]
 
 
 class WaitingCurrent(TypedDict):

@@ -12,6 +12,8 @@ from support.fake_ui import View, text_of
 from support.app_fixtures import question_app, setup_app
 from kanamemory import app as app_module
 from kanamemory.app import FOCUSED_PAGES, KanaMemory
+from kanamemory.ai_ui import AI_PRACTICE_PAGES
+from kanamemory.tutor_ui import TUTOR_PAGES
 from kanamemory.domain import StudyStore
 from kanamemory.learning_ui import LEARNING_PAGES, LearningUIMixin
 from kanamemory.navigation import PageState, page_view
@@ -161,7 +163,10 @@ def test_interactive_focused_pages_hide_bar_and_share_confirmation_policy(focuse
     assert app.page == page and len(app.pending_confirmation) == 1
     resolve_confirmation(app, False)
     dialog = app.main_window.dialog.await_args.args[0]
-    assert dialog.title == ("返回今日？" if page in LEARNING_PAGES else "返回首页？")
+    # AI/tutor exits keep their own wording (ai_ui/tutor_ui, outside G5 N9).
+    assert dialog.title == ("返回首页？" if page in AI_PRACTICE_PAGES | TUTOR_PAGES else "返回今日？")
+    if page not in AI_PRACTICE_PAGES | TUTOR_PAGES | {"free_ink", "practice_setup", "word_drill_setup"}:
+        assert dialog.message == "已作答的题与草稿都会保留。"
     assert app.page == page and app.navigation not in app.root.children
     app.store.record_review.assert_not_called()
 

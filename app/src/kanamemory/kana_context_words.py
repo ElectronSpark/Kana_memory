@@ -74,9 +74,11 @@ def context_priority(question, store=None):
         or isinstance(question.metadata.get("kana_rule_probe_v1"), dict)) else None
 
 
-def _knowledge(repo, store, now):
+def _knowledge(repo, store, now, unavailable=None):
     """Use independent successful glyph evidence, never merely enrollment."""
     from .kana_reading_rules import READING_RULE_IDS, rule_for_symbol
+    # One decode of item controls; same rule as store.is_content_available.
+    unavailable = store.unavailable_content_ids(now) if unavailable is None else unavailable
     rows = {r.get("id", r.get("entry_id")): r for r in repo.kana_list()}
     letters = {"hiragana": {}, "katakana": {}}
     combinations = {"hiragana": {}, "katakana": {}}
@@ -89,7 +91,7 @@ def _knowledge(repo, store, now):
         cid, script = record["content_id"], record["script"]
         from .content_history import contribution_valid
         if not contribution_valid(store._db, record['event_id'], cid): continue
-        if cid not in rows or script not in letters or not store.is_content_available(cid, now):
+        if cid not in rows or script not in letters or cid in unavailable:
             continue
         if json.loads(record["review_log_json"]).get("kana_answer_evidence", {}).get("accepted_homophone"):
             continue
@@ -104,7 +106,7 @@ def _knowledge(repo, store, now):
     has_courses = store._db.execute("SELECT 1 FROM sqlite_master WHERE name='learning_content'").fetchone()
     ready_rules = {r[0] for r in store._db.execute(f"""SELECT content_id FROM learning_content
         WHERE content_id IN ({placeholders}) AND stage IN ('bridge','check','done')""", READING_RULE_IDS)
-        if store.is_content_available(r[0], now)} if has_courses else set()
+        if r[0] not in unavailable} if has_courses else set()
     # Rule teaching makes its written sign available, without crediting a kana
     # card or equating the introduction with an independently recalled symbol.
     for row in rows.values():
@@ -131,7 +133,8 @@ def context_candidates(repo, store, kinds, *, audio_available=False, now=None, l
         enabled -= {"word_kana"}
     if not enabled:
         return []
-    knowledge, rules, combinations = _knowledge(repo, store, now)
+    unavailable = store.unavailable_content_ids(now)
+    knowledge, rules, combinations = _knowledge(repo, store, now, unavailable)
     from .word_spelling import _catalog, _tokenize
     kana_rows = repo.kana_list()
     token_catalogues = {script: _catalog(kana_rows, script) for script in knowledge}
@@ -147,7 +150,7 @@ def context_candidates(repo, store, kinds, *, audio_available=False, now=None, l
         reading = row.get("reading") or row.get("display_reading") or ""
         cid = row.get("id", row.get("entry_id"))
         if (not isinstance(cid, str) or cid in reserved or row.get("practice_approved") is not True
-                or not 2 <= len(reading) <= 6 or not store.is_content_available(cid, now)):
+                or not 2 <= len(reading) <= 6 or cid in unavailable):
             continue
         script = "katakana" if any("ァ" <= c <= "ヺ" for c in reading) else "hiragana"
         from .domain import to_script
@@ -233,8 +236,38 @@ def _probe_candidates(candidates):
     return probes[:128]
 
 
+def _context_plan(repo, store, kinds, pending, *, audio_available, now):
+    """Read-only part of ensure_kana_context_word; None means nothing to add.
+
+    Reserves nothing and writes nothing, so it may run outside the write
+    transaction. The caller re-validates the revision before using it.
+    """
+    from .kana_rule_evidence import next_rule_probe, SETTING as PROBE_SETTING
+    if pending and any(q.kind in KINDS and context_active(q, store) for q in pending["questions"][pending["question_index"]:]):
+        return None
+    state, count = _state(store), formal_count(store, now)
+    active_rules = [rule for rule, entry in store.get_setting(PROBE_SETTING, {}).get("rules", {}).items()
+        if len(entry.get("probes", [])) < 2
+        and datetime.fromisoformat(entry["not_before_utc"]) <= now
+        and store.is_content_available(rule, now)]
+    if count - state["last_review_count"] < EVERY_REVIEWS and not active_rules:
+        return None
+    candidates = context_candidates(repo, store, kinds, audio_available=audio_available, now=now,
+        limit=32 if active_rules else 1, preferred_rules=active_rules)
+    probes = _probe_candidates(candidates)
+    probe = next_rule_probe(store, probes, enabled_kinds=kinds, now=now, reserve=False)
+    if not candidates or (count - state["last_review_count"] < EVERY_REVIEWS and probe is None):
+        return None
+    return {"state": state, "count": count, "candidates": candidates, "probes": probes, "probe": probe}
+
+
 def ensure_kana_context_word(repo, store, kinds, *, audio_available=False, now=None):
-    """Reserve at most one word at an explicit continue boundary, atomically."""
+    """Reserve at most one word at an explicit continue boundary, atomically.
+
+    Candidates are computed read-only before the write lock. BEGIN IMMEDIATE
+    then only proves the database revision is unchanged (otherwise the plan is
+    recomputed inside the transaction, exactly as before) and writes.
+    """
     from .domain import _utc, prepare_session_snapshot
     from . import session_questions
     from .kana_rule_evidence import next_rule_probe
@@ -244,28 +277,24 @@ def ensure_kana_context_word(repo, store, kinds, *, audio_available=False, now=N
         return {"added": 0, "session_id": None}
     if store._db.in_transaction:
         raise RuntimeError("Word context insertion requires its own transaction")
+    revision = store.read_revision()
+    pending = store.load_session_progress(lane="main", lazy_questions=True)
+    plan = _context_plan(repo, store, kinds, pending, audio_available=audio_available, now=now)
+    if plan is None:
+        # Nothing to reserve: the same reads under a lock would only commit
+        # an empty transaction.
+        return {"added": 0, "session_id": None}
     try:
         store._db.execute("BEGIN IMMEDIATE")
-        pending = store.load_session_progress(lane="main", lazy_questions=True)
-        if pending and any(q.kind in KINDS and context_active(q, store) for q in pending["questions"][pending["question_index"]:]):
-            store._db.commit()
-            return {"added": 0, "session_id": None}
-        state, count = _state(store), formal_count(store, now)
-        from .kana_rule_evidence import SETTING as PROBE_SETTING
-        active_rules = [rule for rule, entry in store.get_setting(PROBE_SETTING, {}).get("rules", {}).items()
-            if len(entry.get("probes", [])) < 2
-            and datetime.fromisoformat(entry["not_before_utc"]) <= now
-            and store.is_content_available(rule, now)]
-        if count - state["last_review_count"] < EVERY_REVIEWS and not active_rules:
-            store._db.commit()
-            return {"added": 0, "session_id": None}
-        candidates = context_candidates(repo, store, kinds, audio_available=audio_available, now=now,
-            limit=32 if active_rules else 1, preferred_rules=active_rules)
-        probes = _probe_candidates(candidates)
-        probe = next_rule_probe(store, probes, enabled_kinds=kinds, now=now, reserve=False)
-        if not candidates or (count - state["last_review_count"] < EVERY_REVIEWS and probe is None):
-            store._db.commit()
-            return {"added": 0, "session_id": None}
+        if store.read_revision() != revision:
+            # Another write landed after the read-only pass: decide again on
+            # the locked, current rows (the original in-transaction path).
+            pending = store.load_session_progress(lane="main", lazy_questions=True)
+            plan = _context_plan(repo, store, kinds, pending, audio_available=audio_available, now=now)
+            if plan is None:
+                store._db.commit()
+                return {"added": 0, "session_id": None}
+        state, count, candidates, probes, probe = (plan[key] for key in ("state", "count", "candidates", "probes", "probe"))
         if probe:
             probe = next_rule_probe(store, probes, enabled_kinds=kinds, now=now, reserve=True)
         question = (probe or candidates[0])["question"]
@@ -296,20 +325,60 @@ def ensure_kana_context_word(repo, store, kinds, *, audio_available=False, now=N
         raise
 
 
+def _rule_probe_candidates(repo, store, kinds, pending, *, now):
+    """Read-only due, independently known combinations in the main suffix.
+
+    None means there is nothing to probe (no queue or an active probe).
+    """
+    from .domain import WORD_SKILLS
+    from .kana_reading_rules import SMALL_KANA_RULE
+    from .kana_rule_evidence import small_kana_context, active_probe
+    from .kana_question_policy import question_allowed
+    from .kana_dependency_runtime import kana_dependency_state, kana_dependency_graph, kana_prerequisite_status
+    from .review_dispatch import kana_resume_priority
+    if not pending:
+        return None
+    index = pending["question_index"]
+    suffix = pending["questions"][index:]
+    if any(active_probe(store, q.metadata.get("kana_rule_probe_v1")) for q in suffix):
+        return None
+    catalogue = {r.get("id", r.get("entry_id")): r for r in repo.kana_list()}
+    state, graph = kana_dependency_state(store), kana_dependency_graph()
+    candidates = []
+    for position, q in enumerate(suffix, start=index):
+        if (q.kind not in kinds or q.kind in WORD_SKILLS or not question_allowed(q)
+                or position == index and kana_resume_priority(pending["state"]) is not None):
+            continue
+        card = store.get_scheduling_card(q.content_id, q.kind, q.script)
+        if (not card or not card["review_count"] or card["suspended"]
+                or datetime.fromisoformat(card["due_at_utc"]) > now
+                or q.metadata.get("not_before_utc") and datetime.fromisoformat(q.metadata["not_before_utc"]) > now
+                or kana_prerequisite_status(q, graph, state)["blocked"]):
+            continue
+        symbol = q.metadata.get("kana_symbol") or catalogue.get(q.content_id, {}).get(q.script, "")
+        context = small_kana_context(symbol)
+        if context:
+            candidates.append({"rule_id": SMALL_KANA_RULE, "context_id": context,
+                "content_id": q.content_id, "kind": q.kind, "script": q.script,
+                "source": "kana", "question": q, "position": position, "symbol": symbol})
+        if len(candidates) >= 128:
+            break
+    return candidates
+
+
 def ensure_kana_rule_probe(repo, store, kinds, *, now=None):
     """Reserve an already-due, independently known combination in its queue.
 
     No new review is invented and no future timer is removed. A genuine answer
     receives its normal rating; every other combination keeps its exact state.
-    This works even with all word exercise kinds disabled.
+    This works even with all word exercise kinds disabled. Candidates are read
+    before the write lock; the transaction re-validates the revision (else
+    recomputes them on locked rows) and then reserves and writes.
     """
-    from .domain import _utc, WORD_SKILLS
+    from .domain import _utc
     from . import session_questions
     from .kana_reading_rules import SMALL_KANA_RULE
-    from .kana_rule_evidence import next_rule_probe, small_kana_context, SETTING as PROBE_SETTING
-    from .kana_question_policy import question_allowed
-    from .kana_dependency_runtime import kana_dependency_state, kana_dependency_graph, kana_prerequisite_status
-    from .review_dispatch import kana_resume_priority
+    from .kana_rule_evidence import next_rule_probe, SETTING as PROBE_SETTING
     now = _utc(now)
     empty = {"added": 0, "session_id": None}
     trigger = store.get_setting(PROBE_SETTING, {}).get("rules", {}).get(SMALL_KANA_RULE)
@@ -318,39 +387,19 @@ def ensure_kana_rule_probe(repo, store, kinds, *, now=None):
         return empty
     if store._db.in_transaction:
         raise RuntimeError("Rule reservation requires its own transaction")
+    revision = store.read_revision()
+    pending = store.load_session_progress(lane="main", lazy_questions=True)
+    candidates = _rule_probe_candidates(repo, store, kinds, pending, now=now)
+    if candidates is None or next_rule_probe(store, candidates, enabled_kinds=kinds, now=now, reserve=False) is None:
+        return empty
     try:
         store._db.execute("BEGIN IMMEDIATE")
-        pending = store.load_session_progress(lane="main", lazy_questions=True)
-        if not pending:
-            store._db.commit()
-            return empty
-        index = pending["question_index"]
-        suffix = pending["questions"][index:]
-        from .kana_rule_evidence import active_probe
-        if any(active_probe(store, q.metadata.get("kana_rule_probe_v1")) for q in suffix):
-            store._db.commit()
-            return empty
-        catalogue = {r.get("id", r.get("entry_id")): r for r in repo.kana_list()}
-        state, graph = kana_dependency_state(store), kana_dependency_graph()
-        candidates = []
-        for position, q in enumerate(suffix, start=index):
-            if (q.kind not in kinds or q.kind in WORD_SKILLS or not question_allowed(q)
-                    or position == index and kana_resume_priority(pending["state"]) is not None):
-                continue
-            card = store.get_scheduling_card(q.content_id, q.kind, q.script)
-            if (not card or not card["review_count"] or card["suspended"]
-                    or datetime.fromisoformat(card["due_at_utc"]) > now
-                    or q.metadata.get("not_before_utc") and datetime.fromisoformat(q.metadata["not_before_utc"]) > now
-                    or kana_prerequisite_status(q, graph, state)["blocked"]):
-                continue
-            symbol = q.metadata.get("kana_symbol") or catalogue.get(q.content_id, {}).get(q.script, "")
-            context = small_kana_context(symbol)
-            if context:
-                candidates.append({"rule_id": SMALL_KANA_RULE, "context_id": context,
-                    "content_id": q.content_id, "kind": q.kind, "script": q.script,
-                    "source": "kana", "question": q, "position": position, "symbol": symbol})
-            if len(candidates) >= 128:
-                break
+        if store.read_revision() != revision:
+            pending = store.load_session_progress(lane="main", lazy_questions=True)
+            candidates = _rule_probe_candidates(repo, store, kinds, pending, now=now)
+            if candidates is None:
+                store._db.commit()
+                return empty
         proposal = next_rule_probe(store, candidates, enabled_kinds=kinds, now=now, reserve=True)
         if proposal is None:
             store._db.commit()

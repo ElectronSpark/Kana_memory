@@ -23,6 +23,13 @@ from .typography import configure_text_role
 from . import ui_components as u
 
 AI_PRACTICE_PAGES = {"ai_question", "ai_feedback", "ai_practice_done", "retention_question", "retention_feedback", "retention_done", "retention_wait"}
+AI_DRAFT_BUSY_STATUS = "数据库正忙，草稿暂未保存；继续输入或操作时会自动重试。"
+
+
+def focus_scope(page):
+    """The focus scope's content (StoreArrangement.scope_contents), None without one or without the study path."""
+    arrangement = getattr(page, "study_arrangement", None)
+    return arrangement().scope_contents() if callable(arrangement) else None
 
 
 class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUIMixin, TutorUIMixin, AIServiceUIMixin):
@@ -364,8 +371,11 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     def _ai_scope(self, *, request=False):
         from .ai_questions import build_learning_scope
+        # Design 12 H2: a model request puts the focus scope first (one settings read without a scope).
+        scope = focus_scope(self) if request else None
         return build_learning_scope(self.learning_store, self.learning_preferences()["enabled"],
-                                    limit=24 if request else None)
+                                    limit=24 if request else None,
+                                    **({} if scope is None else {"scope_contents": scope}))
 
     def _ai_target(self, item_id):
         if not item_id:
@@ -518,6 +528,8 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         self.refresh_ai_form_connection()
         children.append(self._ai_connection_slot)
         self.screen("ai_form", {"questions": "按已学内容出题", "examples": "生成例句", "analyze": "解析日文"}[mode], *children)
+        # The scope label already reflects this text; refresh again only when it changes.
+        self._ai_form_selection_marker = (key, saved.get("source_text", "")) if mode == "analyze" else None
         if getattr(self, "_ai_request_operation", None) is not None:
             self._set_ai_form_busy(True)
             self._ai_form_status.text = "材料仍在生成，结果会保存到材料任务。"
@@ -538,38 +550,87 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
             self._ai_form_status.text = ""
 
     def save_ai_form(self, widget=None, **kwargs):
+        """on_change (widget given): coalesce; explicit call: save now, False if not saved.
+
+        The same draft as before is written, at most 0.25 s after typing; the
+        submit path, show_material_selection, file import (explicit calls) and
+        every page change (app.flush_drafts) write it first.
+        """
         context = getattr(self, "_ai_form_context", None)
         fields = getattr(self, "_ai_form_fields", {})
         if (self.page != "ai_form" or not context or "count" not in fields or "topic" not in fields
                 or widget is not None and all(widget is not control for control in fields.values())):
             return
+        values = {key: str(control.value or "") for key, control in fields.items()}
+        draft = getattr(self, "_ai_form_draft", None)
+        if widget is not None:
+            from .tutor_ui import page_draft_debouncer
+            draft = page_draft_debouncer(self, "_ai_form_draft", lambda: AIUIMixin.flush_ai_form_draft(self))
+            if draft is not None:
+                draft.accept(context["key"], (deepcopy(context), values))
+                return
+        elif draft is not None and draft.pending is not None:
+            if draft.pending[0] == context["key"]:
+                draft.flush_now()  # Superseded by the current fields written below.
+            else:
+                AIUIMixin.flush_ai_form_draft(self)  # Another form's text: never drop it.
+        return AIUIMixin._persist_ai_form(self, context, values)
+
+    def flush_ai_form_draft(self):
+        """Synchronously persist a pending (debounced) AI form draft; None if none."""
+        draft = getattr(self, "_ai_form_draft", None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        context, values = pending[1]
+        return AIUIMixin._persist_ai_form(self, context, values)
+
+    def _persist_ai_form(self, context, entered):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        current = getattr(self, "_ai_form_context", None)
+        visible = self.page == "ai_form" and isinstance(current, dict) and current.get("key") == context["key"]
+        status = getattr(self, "_ai_form_status", None) if visible else None
+
+        def say(text):
+            if status is not None:
+                status.text = text
         raw = self.store.get_setting(AI_FORM_SETTING, {})
         raw = dict(raw) if isinstance(raw, dict) else {}
         drafts = dict(raw.get("drafts", {}))
         from .ai_ui_state import MAX_FORM_DRAFTS
         if context["key"] not in drafts and len(drafts) >= MAX_FORM_DRAFTS:
-            self._ai_form_status.text = "输入草稿已满，请先处理或舍弃已有分享草稿。"
+            say("输入草稿已满，请先处理或舍弃已有分享草稿。")
             return False
         if context.get("input_id"):
             from .material_share import MaterialShareStore
             shared = MaterialShareStore(self.store).get(context["input_id"])
             if shared is None or shared["status"] == "discarded":
-                self._ai_form_status.text = "这份草稿已舍弃。"
+                say("这份草稿已舍弃。")
                 return False
         saved = dict(drafts.pop(context["key"], {}))
-        values = {key: str(control.value or "")[:4000 if key == "source_text" else 200]
-                  for key, control in fields.items()}
-        if "source_text" in fields and len(str(fields["source_text"].value or "")) > 4000:
-            if getattr(self, "_ai_form_status", None) is not None:
-                self._ai_form_status.text = "原文超过 4000 字，尚未保存；请先分段。"
+        values = {key: value[:4000 if key == "source_text" else 200] for key, value in entered.items()}
+        if "source_text" in entered and len(entered["source_text"]) > 4000:
+            say("原文超过 4000 字，尚未保存；请先分段。")
             return False
         if any(saved.get(key) != value for key, value in values.items()):
             for key in ("request_id", "request_fingerprint", "request_finished"):
                 saved.pop(key, None)
         saved.update(values)
         drafts[context["key"]] = saved
-        self.store.set_setting(AI_FORM_SETTING, {"last": deepcopy(context), "drafts": drafts})
-        self.refresh_material_selection()
+        if persist_with_lock_notice(
+                lambda: self.store.set_setting(AI_FORM_SETTING, {"last": deepcopy(context), "drafts": drafts}),
+                record=lambda exc: record_error("ai_form_draft", "save", exc),
+                debouncer=getattr(self, "_ai_form_draft", None), key=context["key"],
+                value=(deepcopy(context), dict(entered)), notice=lambda: say(AI_DRAFT_BUSY_STATUS)) is False:
+            return False
+        if status is not None and getattr(status, "text", None) == AI_DRAFT_BUSY_STATUS:
+            status.text = ""
+        marker = (context["key"], entered.get("source_text"))
+        if visible and "source_text" in entered and marker != getattr(self, "_ai_form_selection_marker", None):
+            # Re-segmenting up to 4000 characters runs once per changed, saved text.
+            self._ai_form_selection_marker = marker
+            self.refresh_material_selection()
 
     def _ai_request(self):
         context = self._ai_form_context
@@ -1281,12 +1342,56 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
             self._ai_current.setdefault('draft', {})['presented'] = True
 
     def save_ai_answer(self, widget=None, **kwargs):
-        if self.page == "ai_question":
-            self.ai_practice_store().save_draft(self._ai_current["id"], {"answer": self._ai_answer_input.value or ""})
+        """on_change: the same save_draft as before, at most 0.25 s later.
+
+        Submit, show answer and every page change (app.flush_drafts) force it.
+        """
+        if self.page != "ai_question":
+            return
+        from .tutor_ui import page_draft_debouncer
+        row_id, value = self._ai_current["id"], {"answer": self._ai_answer_input.value or ""}
+        draft = page_draft_debouncer(self, "_ai_answer_draft", lambda: AIUIMixin.flush_ai_answer_draft(self))
+        if draft is None:
+            return AIUIMixin._persist_ai_answer(self, row_id, value)
+        draft.accept(row_id, value)
+
+    def flush_ai_answer_draft(self):
+        """Synchronously persist a pending typed AI answer; None if none pending."""
+        draft = getattr(self, "_ai_answer_draft", None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        return AIUIMixin._persist_ai_answer(self, *pending)
+
+    def _persist_ai_answer(self, row_id, value):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        current = getattr(self, "_ai_current", None) or {}
+        status = (getattr(self, "_ai_question_status", None)
+                  if self.page == "ai_question" and current.get("id") == row_id else None)
+
+        def busy():
+            if status is not None:
+                status.text = AI_DRAFT_BUSY_STATUS
+        saved = persist_with_lock_notice(lambda: self.ai_practice_store().save_draft(row_id, value),
+            record=lambda exc: record_error("ai_practice_draft", "save", exc),
+            debouncer=getattr(self, "_ai_answer_draft", None), key=row_id, value=deepcopy(value), notice=busy)
+        if saved is False:
+            return False
+        if status is not None and getattr(status, "text", None) == AI_DRAFT_BUSY_STATUS:
+            status.text = ""
+        return saved
+
+    def flush_ai_drafts(self):
+        """Forced flush of the AI answer and AI form drafts; False if one was not saved."""
+        results = (AIUIMixin.flush_ai_answer_draft(self), AIUIMixin.flush_ai_form_draft(self))
+        return False if any(result is False for result in results) else None
 
     def submit_ai_answer(self, answer, *, question_id=None, revealed=False):
         if self.page != "ai_question" or question_id is not None and question_id != self._ai_current["id"]:
             return
+        # The typed draft reaches storage before the answer is graded (as before).
+        AIUIMixin.flush_ai_answer_draft(self)
         if not str(answer or "").strip() and not revealed:
             self._ai_question_status.text = "请先作答。"
             return
@@ -1303,10 +1408,13 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     def show_ai_feedback(self, result):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import entered_answer_row, distinct_explanation
+        from .answer_result_ui import entered_answer_row, distinct_explanation, shown_explanation, shown_text
         from .answer_autoplay import autoplay_answer
         question = self._ai_current["question"]
-        children = [u.label(result.get("answer", question["answer"]), size=20,
+        # Like every result page (design 11 section 7, rule 9): the Japanese shown after the answer carries
+        # kana. A generated question has no reading entry, so only its target word and course words that the
+        # course reads one way are marked; the comparisons below keep the plain strings.
+        children = [u.label(shown_text(question, result.get("answer", question["answer"])), size=20,
                             flex=1, text_role=learning_text_role(question, "answer"))]
         children[0]._feedback_fragment = {"kind": "ai_answer_result", "question": deepcopy(question), "result": deepcopy(result)}
         audio_text = self._learning_answer_audio_text(question)
@@ -1317,10 +1425,11 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
             children[0] = u.row(children[0], u.speaker_button(play_answer, "朗读答案对应的日语"))
         children.insert(0, build_answer_feedback(result))
         if result.get("answered_text") and not result.get("correct") and result["answered_text"] != result.get("answer", question["answer"]):
-            children.append(entered_answer_row(u, result["answered_text"], text_role=learning_text_role(question, "answer")))
+            children.append(entered_answer_row(u, shown_text(question, result["answered_text"]),
+                                               text_role=learning_text_role(question, "answer")))
         explanation = distinct_explanation(result.get("explanation"), result.get("answer", question["answer"]))
         if explanation and explanation != str(result.get("answer", question["answer"])).strip():
-            children.append(u.label(explanation, size=15))
+            children.append(u.label(shown_explanation(question, explanation), size=15))
         from .ai_questions import order_translation_source
         reference = question.get('order_translation')
         source = order_translation_source(question) if isinstance(reference, dict) else None

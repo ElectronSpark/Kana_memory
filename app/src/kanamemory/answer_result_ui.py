@@ -9,6 +9,46 @@ def answer_text(question, answer=None):
     return str(question.get('answer', '') if answer is None else answer)
 
 
+def shown_answer(question, answer=None):
+    """answer_text as a result page shows it: a Japanese answer carries kana on every kanji word.
+
+    Design 11 section 7, rule 9 (result_readings): after the answer nothing is left to give away.
+    A Chinese meaning is returned as it is. Display only; nothing stored uses this string.
+    """
+    return shown_text(question, answer_text(question, answer))
+
+
+def shown_text(question, text):
+    """An answer or an entered answer already in its display form, with kana when the answers are Japanese."""
+    from .result_readings import annotate, answers_in_japanese
+    return annotate(question, text) if isinstance(text, str) and answers_in_japanese(question) else text
+
+
+def shown_explanation(question, explanation):
+    """The explanation under a result, with kana on the Japanese words the question has readings for."""
+    from .result_readings import annotate_explanation
+    return annotate_explanation(question, explanation)
+
+
+def asked_text(question, explanation=""):
+    """The Japanese the question was about, with kana, when the result page would not show it; else None.
+
+    A meaning question's result shows a Chinese answer only, and a reading question's shows kana: the
+    sentence or the word that was asked then appears here with its readings. Left out when the
+    answer or a line of the explanation already is that text.
+    """
+    from .result_readings import annotate, answers_in_japanese, stimulus
+    base = stimulus(question)
+    if not base:
+        return None
+    shown = [str(explanation or "")]
+    if answers_in_japanese(question):
+        shown.append(answer_text(question))
+    if any(base in text for text in shown):
+        return None
+    return annotate(question, base)
+
+
 def distinct_explanation(explanation, answer):
     """Remove exact answer-only lines, retaining translations and explanations."""
     return "\n".join(line for line in str(explanation or "").splitlines()

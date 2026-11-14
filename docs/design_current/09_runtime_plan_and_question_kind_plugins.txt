@@ -1,0 +1,214 @@
+KanaMemory 卡死解决方案、题型模块化（插件化）与实施工作包
+
+状态：WP1–WP7 已实现（I，2026-11-08，本地提交：WP1 76b9085、WP2 f0784ae、WP3 44a47e1、WP4 66423de/239a8df/cfcca1d、WP5 e46e22b、WP6 91b68b5、WP7a 0cddedd、WP7b 8e97cdc；fake UI 与合成探针验证，原生未验）；第 5 节开放问题与各 WP 标注的未做项仍为 P。2026-11-08 起草，基于 095548b 与只读审查 docs/performance_freeze_review_20261108.txt。
+本文把三件事合成一个可执行计划：(1) 学习时失去响应的解决方案；(2) 题型按统一规格注册、
+分模块实现（“插件化”）；(3) 与 08_importable_libraries.txt 可导入学习库的衔接。
+硬约束沿用 CLAUDE.md 与 07 第 06 节：不改 FSRS 参数、辅助证据权重、记录格式；保留学习 ID、题目快照、
+草稿、未完成队列、到期、评分幂等、防泄题与返回语义；纯规则不依赖 Toga/数据库；页面不新增 SQL；
+写事务归现有 Store；内容包不含可执行代码。题型名（kind 字符串）、题目快照字段与评分结果字段全部不变。
+
+1 卡死解决方案（按成因 → 对策 → 工作包）
+
+A 一次作答的同步链过长、随历史增长
+  对策 A1：一次“继续/评分”动作建立一个读取上下文（沿用 StudyPathService.read_operation 范式），
+    链内共享 current/counts/exposure_times/independent_ready_ids/content_rows/ability_teaching.state_map，
+    提交前只重验最新状态；目标为一次作答只跑一次 current、一次 prepare_next_question、一次 reconcile。
+  对策 A2：题目组装与入队候选在独立连接的后台线程计算（沿用 build_in_background＋页面令牌/修订校验），
+    主线程只做最终校验与提交。
+  对策 A3：主线会话前缀归档（沿用 practice_archive 轮次归档事务），整会话 json.dumps/sha256/扫描回到
+    O(未完成题)。
+  对策 A4：choose_protected 的 since=datetime.min 改有界窗口；resume_practice 用 lazy_questions；
+    show_question 不二次 reconcile；is_content_available/get_setting 在一次动作内缓存解码结果。
+  → WP3（A1、A4）、WP5（A2）、WP6（A3）。
+
+B SQLite 写锁 busy 等待 10 秒 > ANR 5 秒
+  对策：主连接 timeout 降至 2.5 秒；UI 写入口捕获 OperationalError(database is locked) 返回“稍后重试”
+    状态而不整页阻塞；feedback.sqlite3 开 WAL；后台连接的 schema 检查改只读探测、缺失才写；
+    archive_current 不在持有 progress 写锁时拿 feedback 库锁。PRAGMA synchronous=NORMAL 待用户决定（Q1）。
+  → WP1（timeout、WAL、错误提示）、WP5（后台连接 schema 探测与锁顺序）。
+
+C GIL 争用（启动预热与练习组装的 CPU 线程）
+  对策：_reviewed_index 改为单飞（一个线程计算，其他调用者等待同一结果，主线程通过 await 等待而不重算）；
+    review_data 与指纹索引改为构建期预计算（内容包携带），运行时只查表；后台 CPU 任务分片让出 GIL。
+  → WP1（单飞）、WP6（预计算索引）。
+
+D TTS 每条朗读同步绑定调用
+  对策：音色选择结果按语言缓存（引擎重建/语言变化/音色列表变化时失效）；每条朗读只 speak；
+    prepare_tts 的 getVoices 移出首帧路径。
+  → WP1。
+
+E 内存与 GC
+  对策：启动导入完成后 gc.freeze()；_read_namespace 不长期持有解码原件（或只读视图代替 deepcopy）；
+    varied_practice/context_choice 按 item_fingerprint 分片懒加载；validate_installed_pack 改文件级 sha256；
+    运行时 load_namespace 调用点改模块级一次读取。
+  → WP1（gc.freeze、运行时 load_namespace 调用点）、WP6（分片懒加载、文件级校验）。
+
+F 原生回调里的裸 call_later 不唤醒
+  对策：统一经 loop.call_soon_threadsafe 包装再 call_later（现有 app.py 2590 的做法推广到 1245/3362、
+    learning_ui 231，及两处 create_task）。
+  → WP1。
+
+G 每键同步写盘
+  对策：按键只改内存草稿，150–300 ms 防抖合并落盘；离页、提交、切后台、页面销毁时强制落盘；
+    save_draft 返回轻量结果，fingerprint 在题目对象缓存一次。草稿语义不变：任何可见输入最终都落盘。
+  → WP1（课程文本输入与假名练习 _checkpoint 的防抖）；最大延迟见 Q2。
+
+2 题型模块化（插件化）
+
+2.1 现状
+题型相关逻辑分散在约 40 个模块：learning_questions（kind 常量表 KIND_ABILITIES/KIND_LABELS/DEFAULT_KINDS/
+OPT_IN_LISTENING_KINDS/TEXT_KINDS/PRACTICE_ONLY_KINDS/KINDS_ADDED_AT、_word_question/_grammar_question 的
+按 kind 分支、grade_learning_answer）、question_presentation（提示与 span 投影）、answer_input（输入资格）、
+assessment_contract/assessment_parts（评分合同）、question_support（注音/TTS 安全门）、learning_ui 与各
+*_ui（multi_cloze_ui、pitch_practice_ui、order_translation_ui 等）、practice_preferences（设置页）、
+ai_question_capabilities（AI 可见能力）、word_sound_questions（两种读音题的模板生成）、learning_questions 内
+context_choice 模板来源。新增一个题型要改十余处，且没有一处能回答“这个 kind 的全部行为是什么”。
+
+2.2 目标形态
+- 一个纯规则注册表 question_kind_registry.py：QuestionKindSpec（冻结数据类）字段：
+    kind、label、family（word/grammar/pronunciation）、ability、default_enabled、opt_in_listening、
+    needs_audio、text_input（自由输入）、practice_only（不进记忆检查/材料预测试）、added_at_version、
+    template_source（"authored"｜"sound"｜"context_choice"｜…：模板来自哪个内容命名空间/生成器）、
+    builder（从教案/模板构造题目快照）、grader（评分合同部件）、presenter（提示/span/折叠投影）、
+    input_mode_policy（输入资格）、feedback_renderer_id、ai_capability（模型可见操作说明）、
+    experimental。
+  注册表只持有规格与可调用钩子，不持有内容、不读数据库、不依赖 Toga。
+- 内置题型分文件实现：question_kinds/ 包，一个 kind 族一个模块（vocab_choice、vocab_text、vocab_sound、
+  vocab_context、grammar_meaning、grammar_cloze、grammar_production、pronunciation）；每个模块只做
+  build/grade/present/input 的 kind 专属部分，共享安全门与支架仍走 question_support/答题协调层。
+- 现有消费者改为查注册表：KIND_ABILITIES 等常量从注册表派生并保留原名与原值（强约束：派生值与现值
+  逐项相等，由冻结快照测试守住）；practice_preferences 的题型列表、标签、默认/版本补齐；
+  ai_question_capabilities 的能力目录；course_planning/learning_practice_policy 只按 spec.ability 与
+  spec.practice_only 过滤。
+- “插件”的边界：插件是 App 内的代码模块（公开源码的一部分），不是内容包里的代码（内容包永不含可执行物）。
+  内容库（08）只能为已注册 kind 提供模板；注册表提供 validate_templates(kind, payload)，未知 kind 的模板
+  被忽略并记诊断，使旧 App 装新库时优雅降级。
+- 迁移方式为“绞杀”（strangler）：先建注册表并让规格钩子委托给现有函数（行为零变化），再逐族把
+  learning_questions/question_presentation/answer_input/assessment 中的 kind 分支搬进对应模块，每搬一族
+  用题目快照黄金对照（全目录每 kind 每 variant 的 build_learning_question 输出哈希）证明逐字节不变；
+  评分合同用现有 assessment 测试与 grade_learning_answer 对照。
+
+2.3 不变项
+kind 字符串、快照字段、评分结果字段、draft 结构、KINDS_ADDED_AT 的版本号、设置键 practice_queue_kinds 的
+值域、PRACTICE_ONLY_KINDS 的排除语义、音频就绪扣除规则（audio_ready_kinds）、题型关闭的草稿合同（03 第 6 节）。
+
+3 与可导入学习库（08）的衔接
+- 库的 teaching 命名空间中的模板按 kind 登记；注册表是“kind 是否存在、模板结构是否合法”的唯一判据。
+- 库清单可声明 requires.kinds（本库模板依赖的 kind 列表）；缺失 kind 的模板在合并时忽略并在内容库页提示。
+- 有效目录的合并策略（08 第 6.2 节）对 learning_questions/varied_practice/context_choice/word_sound_mix
+  命名空间按 kind→item_fingerprint 两级键合并；WP6 的分片懒加载与之共用分片键。
+- 可用性投影（08 第 7–8 节）与题型注册表正交：前者决定内容项是否可派题，后者决定 kind 是否可出题。
+
+4 工作包（WP）、文件所有权与验收
+
+通用规则：每个 WP 一个 Opus 子代理，只改其所有权文件；新模块必须加入 tools/public_source_files.txt
+与 tools/architecture_policy.json（如需要）并通过 python -X utf8 tools/check_python.py；测试用
+.venv/Scripts/python.exe，--basetemp 放 .test_runs/<wp>/<轮次>/tmp；不碰 data/、resources/、research/；
+不提交、不 push（由指挥会话按显式文件列表本地提交）；禁止删断言、扩大 skip 或吞异常。
+
+WP1 性能止血（低风险，可独立发版）
+  所有权：domain.py（connect timeout）、feedback_store.py（WAL）、app.py（gc.freeze、on_running、
+  call_later 包装、假名每键 _checkpoint 防抖）、learning_conditions.py（_reviewed_index 单飞）、
+  platform_android.py（TTS 音色缓存）、answer_input_ui.py 与 learning_ui.py 的 save_learning_input（防抖）、
+  semantic_errors.py/pitch_sequence.py/pitch_alignment.py/kana_reading_rules.py（运行时 load_namespace 改
+  模块级一次读取）。新纯规则模块允许：draft_debounce.py（防抖状态机，无 Toga/DB）。
+  验收：相关既有测试通过；新增测试覆盖 单飞并发只算一次、防抖合并与强制落盘（离页/提交/后台）、
+  锁错误转提示、TTS 缓存失效条件；check_python 通过。
+  完成（2026-11-08，76b9085）：进度库与反馈库 SQLite busy timeout 10→2.5 s（低于 5 s ANR），UI 写入口把 database is locked 转为重试提示；feedback.sqlite3 改 WAL；课程文字与假名按键草稿经 draft_debounce 合并（≤0.25 s），提交、离页、转后台与退出前强制落盘，落盘内容不变；启动后 gc.freeze()、_reviewed_index 单飞、TTS 音色按语言缓存、原生回调安排的定时器/任务加事件循环唤醒包装、运行时 load_namespace 改模块级共享读取；原生未验。
+
+WP2 题型注册表骨架（行为零变化）
+  所有权：新建 question_kind_registry.py、question_kinds/__init__.py 与 question_kinds/builtin.py；
+  learning_questions.py（常量改为从注册表派生，保留原名）、practice_preferences.py、
+  ai_question_capabilities.py（只改读取来源）。
+  验收：冻结快照测试证明 KIND_ABILITIES/KIND_LABELS/DEFAULT_KINDS/OPT_IN_LISTENING_KINDS/LISTENING_KINDS/
+  TEXT_KINDS/PRACTICE_ONLY_KINDS/KINDS_ADDED_AT/WORD_KINDS/GRAMMAR_KINDS/PRONUNCIATION_KINDS 逐项与改前相等；
+  注册表不变量测试（无重复 kind、每 kind 有 ability/label、practice_only ⊆ 已注册）；
+  全目录题目快照黄金对照（改前生成、改后比对，证据放 .test_runs/wp2）；check_python 与架构守卫通过。
+  完成（2026-11-08，f0784ae）：question_kind_registry 与 question_kinds/builtin 描述全部学习题型，learning_questions 的常量表由注册表派生，名称、取值与顺序不变（冻结快照测试固定）；全目录 27,854 道题改前后逐字节相同；钩子字段留待 WP4；同提交加入本文件。
+
+WP3 继续链去重（A1、A4）
+  所有权：study_path_runtime.py、study_path.py、learning_store.py 的 current/counts 读取上下文、
+  first_teaching_dispatch.py（有界窗口）、kana_context_words.py（候选计算移出写事务）、app.py 的
+  resume_practice/show_question。
+  验收：探针记录一次作答的 SQL 条数、current/prepare/reconcile 次数、整会话序列化字节改前后对照；
+  现有调度/续学/首页计数测试通过；派题结果与到期时间逐项不变。
+  完成（2026-11-08，44a47e1）：LearningStore.read_operation 在一次继续/首页动作内共享就绪 ID、曝光时间、教学状态、内容行与 current/counts 结果；PreparedKana 让 resume/show_question 跳过 continue 刚做过的 reconcile 与 prepare（每次评分 reconcile 3→1、prepare 2→1、写事务 4→2）；due_reviews_served 按新到旧读取；假名语境词与规则探测候选移到 BEGIN IMMEDIATE 之前计算；派题、到期与全部存储行改前后逐项相同；原生未验。
+
+WP4 题型分族迁移（每族一轮）
+  所有权：question_kinds/<族>.py 与 learning_questions/question_presentation/answer_input/assessment_*
+  中该族分支。验收：黄金对照逐字节不变；该族评分/展示/输入测试通过。
+  第1轮完成（2026-11-08）：vocab_sound、vocab_context——question_kinds/vocab_sound.py 与 vocab_context.py 定义 template_provider(item, spec, env)；learning_questions 的 practice_templates/_word_question/question_kinds 回退/_kind_source 改按注册表钩子与 template_source 分派；其余钩子仍为 None（走通用路径）；题目快照、评分与 practice_templates 黄金对照逐项相等（.test_runs/wp4）。
+  第2轮完成（2026-11-08）：vocab_choice、vocab_text——question_kinds/vocab_choice.py（vocab_meaning、vocab_audio_meaning、vocab_orthography、vocab_usage、vocab_zh_ja_contrast、reading_comprehension、listening_comprehension）与 vocab_text.py（vocab_reading、vocab_recall）定义 builder/grader/presenter/input_mode_policy；learning_questions 的 _word_question 与 grade_learning_answer、question_presentation 的提示表、answer_input 的罗马字资格改按注册表钩子分派（vocab_orthography 共用 vocab_text 的写法评分）；唯一有意行为变化：reviewed_practice_context 按 kind 的 template_source 查找来源，读句选词可返回复习上下文（此前恒为 None），因此读句选词词库多空题的新快照带上 learning_conditions/learning_condition_source/learning_condition_revision 并随之改变 assessment_contract（全目录 558 条，均为 vocab_context_choice；换回旧查找后与改前逐项相等）；评分、practice_templates 与展示/输入投影黄金对照逐项相等，其余题目快照逐项相等（.test_runs/wp4/r2）。
+  第3轮完成（2026-11-08）：grammar、pronunciation——语法族按作答形态分三个模块（不按每 kind 一文件）：question_kinds/grammar_meaning.py（grammar_meaning 提示，并持有全部语法 kind 共用的旧式 builder，经 BuildEnv.legacy_grammar_variants 借用 GRAMMAR_QUESTIONS）、grammar_cloze.py（grammar_cloze：单空补全提示与译文折叠、罗马字仅拉丁段）、grammar_production.py（grammar_transform、grammar_reorder、targeted_correction、controlled_sentence_production：产出整句，排列提示、prompt_is_instruction、罗马字仅拉丁段）；pronunciation.py 以新钩子 snapshot_finisher 写入读音快照字段（去音频、tests_reading、显式 text_roles）；learning_questions 的 _grammar_question 与读音 domain 分支、question_presentation 的残余提示表与 instruction_prompt kind 集、answer_input 的残余罗马字表改按注册表分派（vocab_reading_choice 提示归 vocab_sound，读句选词任务文本归 vocab_context，question_presentation/answer_input 不再有按 kind 表）；跨族集合改为 spec 字段派生：safe_support、background_support、order_translation_source（prompt/gap/answer）、dictionary_lesson、reads_written_form，KindPresentation 增 prompt_is_instruction/ui_cues/study_tasks，_JAPANESE_CUES 由 Registry.study_cues() 与折叠提示 cue 派生，均由 test_question_kind_registry 冻结快照守住原值；按题目 family/domain/input_mode 判定的语法假名等价（_grammar_kana：评分归一、构造时补 accepted、answer_input、personal_question）、guided 看词辨义改写、pitch/multi_cloze/prosody 按题形分派仍留原处；无有意行为变化，题目快照、评分/practice_templates、展示/输入投影黄金对照逐项相等（.test_runs/wp4/r3）。
+
+WP5 后台组装与锁顺序（A2、B 后半）
+  所有权：practice_worker.py、domain.py 的 prepare_next_question 组装部分、study_path.py ensure_kana_queue、
+  record_schema/learning_evidence 的 schema 探测、feedback_export_worker.py。
+  验收：主线程只校验提交；后台结果经页面令牌与修订校验；锁顺序测试；现有 practice_worker/backup 测试通过。
+  完成（2026-11-08）：ensure_kana_queue 拆出只读 plan_kana_queue（候选筛选/模板选择/快照序列化），App 启动后开轮时由 practice_worker.run_in_background 在独立连接线程组装，主线程经 BackgroundTicket（页面令牌＋修订）校验后仅提交，离页丢弃、数据变则重算；prepare_next_question 排序与课程 current() 因依赖进程内练习轮计划留在主线程；record_schema/learning_evidence 的 schema 探测按（文件, schema_version）进程缓存＋连接内正向缓存，迁移后失效，已有库打开不取写锁；feedback_export_worker 写明 progress→feedback 锁顺序不变量并加归档前无锁预检；WAL 连接设 synchronous=NORMAL（Q1 已确认）；diagnostic_events 补锁错误操作名。合成探针主线程 SQL：旧式评分 986→929、课程道评分 383→326、开轮继续 6734→6429（主线程 1.40→0.90 s），派题结果与到期逐项相同（.test_runs/wp5/r1）；原生未验。
+
+WP6 内容分片与预计算（E、C 后半、A3）
+  所有权：content_pack.py、learning_questions.py 的模板读取、tools/build_teaching_content.py（分片与
+  文件级 sha256）、material_review.py（预计算索引）、practice_archive.py（前缀归档）。
+  验收：启动内存与时间探针对照；validate 改文件级后对坏包仍拒绝；归档后旧题/答案/事件可读且备份校验通过。
+  完成（2026-11-08）：内容包 v2——tools/build_teaching_content.py 默认把每个命名空间写成带 sha256/大小的分片，清单校验和写入 metadata.manifest_sha256（=content_sha256），varied_practice/context_choice 按内容 id 分片（清单列出每片 item_fingerprint 与模板 kind，content_pack.shard_index 给出 kind→item_fingerprint→id），顶层键（含 12 MiB provenance）各自成片；layout=legacy 仍可写 v1，v1 包照旧可读。load_namespace 签名不变：整体命名空间每次重新解码（去掉 lru_cache 原件＋deepcopy 双份），分片命名空间返回只读 ShardedNamespace，首次访问某条目才校验 sha256 并解码；learning_questions 未改，模板读取经此透明分片。validate_installed_pack 对 v2 只校验清单与分片大小（deep=True 全量），篡改/缺失/多余分片与清单不符均拒绝。material_review.review_index 首次加载时建立题目匹配桶、target_fingerprints 集合与 references 载荷表，结果与逐项扫描相等。practice_archive.archive_session_prefix（显式用例，不自动触发）以收据冻结会话已结算前缀（题/答/词例/复习事件的计数与 sha256），行不移动，学习 ID、评分幂等与备份格式不变，archived_prefix 读回；整会话 O(未完成) 收益需 domain.py 消费者改用前缀边界（未做）。临时 v2 包探针：validate 1.11→0.02 s，导入 RSS 240→75 MiB、对象 60.6 万→11.4 万、完整 GC 0.17→0.02 s，34 个命名空间与 722 项 practice_templates 逐项相等（.test_runs/wp6/r1）；resources/ 下正式包未重建。
+
+5 开放问题
+Q1 是否接受 PRAGMA synchronous=NORMAL（WAL 下掉电可能丢最后一次提交）。
+Q2 草稿防抖最大延迟（建议 250 ms）与是否在切后台时同步落盘。
+Q3 WP1 是否先单独出一个止血版本再做 WP2–WP6。
+Q4 题型模块目录名 question_kinds/ 与注册表模块名是否接受；是否要求每个族模块有独立测试文件。
+Q5 WP4 迁移顺序（建议：vocab_sound → vocab_context → vocab_choice → vocab_text → grammar_* → pronunciation）。
+
+WP7b 完成（2026-11-08）：辅导/AI 服务/材料页的草稿防抖与锁错误提示、复习索引查表、反馈库 synchronous。
+  tutor_ui：文本作答（save_tutor_answer）与问 AI 输入（save_tutor_chat_input 的 on_change）改按 WP1 的
+  DraftDebouncer 合并（≤0.25 s），写入仍是原 save_draft/save_chat_draft，内容与结构不变；提交、显示答案、
+  换题、问 AI、返回确认前强制落盘；send/back/continue/toggle 等显式调用仍同步保存并在失败时阻止离开；
+  page_draft_debouncer(app, attr, on_due) 供本组页面共用（无事件循环时同步写）。material_reference_ui：
+  参考摘录与逐项核对表单的按键改为防抖，“保存草稿”/返回/导航为同步保存（返回在锁失败时停留），提交前先
+  落盘待写副本，迟到的计时器不会复活已清空的草稿；save_material_reference_draft 成为本组页面的强制落盘入口
+  （同时落盘辅导草稿），app.py 现有的 _capture_page/go_back/_checkpoint 已调用它。ai_service_ui 与
+  material_study_ui 原本无每键写盘，只把显式保存（服务配置、材料预算、发送范围、加入学习）的锁超时转为可
+  重试提示。锁错误经 is_database_locked 判定后记诊断（tutor_request/material_review/ai_generation/
+  material_input，均为已有操作名），其他异常照常抛出。切后台与退出尚未经过本组入口：需 app.py 的
+  flush_drafts 增加一行调用 save_material_reference_draft（见回报），未加前最多丢失切后台前 0.25 s 内的按键。
+  learning_conditions._reviewed_index 的已核目标改用 material_review.is_reviewed_target（WP6 预计算集合），
+  保留 _single_flight；与旧列表逐项判断的结果逐项相等（含顺序）。feedback_store 的 WAL 连接在 journal_mode
+  实际为 wal 时设 synchronous=NORMAL，非 WAL 保持 FULL（Q1 已确认）。测试：tests/test_page_draft_debounce_ui.py
+  （新）、test_feedback_store 与 test_reviewed_index_single_flight 扩展（.test_runs/wp7b/r1）；原生未验。
+
+WP7a 完成（2026-11-08）：继续链剩余读取去重、封轮评分→下一题后台化、前缀归档消费者。
+  所有权：personal_content_versions.py、personal_content_compensation.py、personal_question.py（仅 rows_for 读取来源）、
+  learning_store.py（_LearningRead、read_operation、current/_counts 的读取投影、reader；validate_backup_rows 未动）、
+  practice_round.py、study_path_runtime.py、domain.py（session_append_token/_restorable_session_repetitions）、
+  tools/architecture_policy.json（新增/更新本 WP 的行，删去三条因本 WP 失效的旧例外）。practice_worker.py 未改（原样复用
+  run_in_background 与 BackgroundTicket）。
+  1) 个人内容 head/hold 读取：LearningStore.read_operation 把 _LearningRead 挂到 StudyStore._learning_read（嵌套恢复外层，
+  离开即撤下）；personal_settings() 一次以与原 GLOB 相同的语句读入全部 head_v1/hold_v1 键（personal_content_versions.SettingIndex，
+  键＝前缀＋digest([kind, content_id])，即按内容 id 索引，顺序同原查询）。active_version、held、hold_requirements、
+  changed_resources、personal_question.rows_for 改经 setting/setting_rows 取值；事务内（含全部写路径）与无读取操作时逐键现读；
+  本连接写入/回滚（total_changes 变化）后下次查找即重读并清空本次操作的其他投影，其他连接的提交在下一次修订校验点发现
+  （与 WP3 投影在一次 current/counts 计算内的界限相同）。learning_store 中给 personal_graph.dependency_override 用的两个
+  SimpleNamespace 视图补上 store=self.store（同样的逐键读取，使投影生效）；continue_study_path 的 ensure_prerequisites 到课程补题
+  这一段也包在一个 read_operation 内。prepare/commit 等写前读取仍直接 get_setting。
+  2) 封轮逐题评分：practice_round.RoundSnapshot（冻结数据类：lane、run_id、course_order、priorities、native_orders/positions、
+  捕获时 UI 连接修订与 course_order_token）只在封轮且未结束时可捕获；install() 只给工作线程连接装一份私有封轮副本（不扩充）。
+  continue_study_path 在 reconcile/prepare 之后，若为 startup 开启的后台模式、主 lane、已封轮、无事务、未绑定示例库，
+  显示 WP5 同一短等待页 kana_queue_assembly（等待页本身若写库则直接内联），由 practice_worker.run_in_background 在独立连接上运行
+  study_path_runtime.course_current_in_worker（LearningStore.reader 只探测表存在，不建表、不取写锁）计算 current() 的课程候选筛选与排序；
+  回主线程先验 BackgroundTicket（页面＋页面令牌＋修订）、RoundSnapshot.current 与题型设置，通过后经 _LearningRead.seed 以与
+  current() 相同的键（LearningStore.current_key＋练习轮令牌）放入本次读取投影，再走原 _continue_dispatch；离页丢弃；任一失配或
+  工作线程异常（记诊断 kana_queue_assembly/read）则整次继续内联重算。prepare_next_question 仍在主线程（它写会话检查点与题序，
+  且需在 current 之前提交），未拆分。
+  3) 前缀归档消费者：StudyStore._archived_prefix 读取 practice_archive.archived_prefix（计数校验）。存在收据时 session_append_token 只读
+  检查点行与 [upto, …) 后缀，令牌改为对（检查点行、收据 upto 与 sha256 摘要、后缀）求哈希（_session_append_state 用同一算法，
+  无收据时字节级等于原整会话哈希）；_restorable_session_repetitions 只在 [upto, index) 找被跳过的重复步，父答案可在前缀内（按序号单查）。
+  语义说明：显式归档后，归档前缀内被跳过的定时重复步视为已关闭历史，重新启用题型时不再恢复（tests/test_prefix_archive_consumers.py
+  固定此行为；边界之后的照旧恢复）。归档仍是显式用例、不自动触发；行不移动，备份/恢复与评分幂等不变。
+  探针（.test_runs/wp7a/r1，合成学习者，主线程 SQL 条数，改前 HEAD ea66a4e → 改后；表哈希、到期与派题逐项相同）：首页刷新 997→281
+  （调用栈含 personal_content_versions 的语句 620→2，含 compensation 的 230→2）；已封轮评分→下一题 864→189（personal_content_versions 378→0，current 移到工作线程：工作线程 315 条、无 BEGIN IMMEDIATE），
+  主线程 0.115→0.043 s；开轮继续 6429→3758（其余 248 条个人内容读取在追加题目的写事务内，按约束保持现读）；旧式评分 929→515；
+  课程道评分 326→276。耗时含探针调用栈归因开销，仅同批比较。测试：tests/test_personal_setting_projection.py、
+  tests/test_round_snapshot_dispatch.py、tests/test_prefix_archive_consumers.py（新，私有：依赖课程夹具或未在 demo 导出树验证）。
+  未做：prepare_next_question 的排序/写入拆分与后台化；reconcile_session_kinds 的整会话体积检查、_storage_rows 与 record_review 扩队的
+  整会话序列化仍按全会话；07 结构文档未更新（07 归另一会话）；原生未验。

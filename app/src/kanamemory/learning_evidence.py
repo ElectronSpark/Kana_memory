@@ -38,51 +38,97 @@ def _now(value=None):
 
 
 def tables_present(db):
-    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_meta'").fetchone() is not None
+    from .record_schema import object_present
+    return object_present(db, "evidence_meta")
+
+
+_DDL = (
+    "CREATE TABLE IF NOT EXISTS evidence_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)",
+    """CREATE TABLE IF NOT EXISTS learning_evidence (
+        event_id TEXT PRIMARY KEY,target_id TEXT NOT NULL,ability TEXT NOT NULL,
+        kind TEXT NOT NULL,content_revision TEXT NOT NULL,source TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('primary','auxiliary','exposure')),
+        condition_key TEXT NOT NULL,conditions_json TEXT NOT NULL,
+        occurred_at_utc TEXT NOT NULL,outcome TEXT NOT NULL,
+        assisted INTEGER NOT NULL CHECK(assisted IN (0,1)),
+        eligible INTEGER NOT NULL CHECK(eligible IN (0,1)),
+        snapshot_json TEXT NOT NULL,retracted INTEGER NOT NULL DEFAULT 0 CHECK(retracted IN (0,1)),
+        retraction_reason TEXT NOT NULL DEFAULT '',retracted_at_utc TEXT)""",
+    """CREATE TABLE IF NOT EXISTS learning_evidence_pattern (
+        pattern_id TEXT PRIMARY KEY,target_id TEXT NOT NULL,ability TEXT NOT NULL,kind TEXT NOT NULL,
+        condition_key TEXT NOT NULL,conditions_json TEXT NOT NULL,
+        opportunities INTEGER NOT NULL,successes INTEGER NOT NULL,errors INTEGER NOT NULL,
+        concern REAL NOT NULL,last_at_utc TEXT NOT NULL,
+        UNIQUE(target_id,ability,kind,condition_key))""",
+    """CREATE TABLE IF NOT EXISTS learning_aux_adjustment (
+        adjustment_id TEXT PRIMARY KEY,event_id TEXT NOT NULL,target_id TEXT NOT NULL,
+        ability TEXT NOT NULL,card_kind TEXT NOT NULL CHECK(card_kind IN ('course','kana')),
+        card_id TEXT NOT NULL,anchor_event_id TEXT NOT NULL,occurred_at_utc TEXT NOT NULL,
+        result TEXT NOT NULL CHECK(result IN ('correct','incorrect')),fingerprint TEXT NOT NULL,
+        base_due_at_utc TEXT NOT NULL,base_last_review_at_utc TEXT NOT NULL,
+        before_due_at_utc TEXT NOT NULL,after_due_at_utc TEXT NOT NULL,weight REAL NOT NULL,
+        retracted INTEGER NOT NULL DEFAULT 0 CHECK(retracted IN (0,1)),
+        UNIQUE(card_kind,card_id,anchor_event_id,fingerprint))""",
+    "CREATE INDEX IF NOT EXISTS evidence_target_time ON learning_evidence(target_id,occurred_at_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS evidence_context ON learning_evidence(target_id,ability,kind,condition_key,occurred_at_utc,event_id)",
+    "CREATE INDEX IF NOT EXISTS evidence_pattern_target ON learning_evidence_pattern(target_id,concern DESC)",
+    "CREATE INDEX IF NOT EXISTS evidence_adjustment_anchor ON learning_aux_adjustment(card_kind,card_id,anchor_event_id)",
+    "CREATE INDEX IF NOT EXISTS evidence_adjustment_event ON learning_aux_adjustment(event_id)",
+    """CREATE UNIQUE INDEX IF NOT EXISTS evidence_opportunity_unit
+        ON learning_evidence(json_extract(snapshot_json,'$.opportunity.id'),target_id,ability)
+        WHERE json_extract(snapshot_json,'$.opportunity.id') IS NOT NULL""",
+)
+_REQUIRED_OBJECTS = None
+
+
+def _required_objects():
+    """Names the DDL below creates, derived once by running it on :memory:."""
+    global _REQUIRED_OBJECTS
+    if _REQUIRED_OBJECTS is None:
+        import sqlite3
+        from . import semantic_errors
+        probe = sqlite3.connect(":memory:")
+        try:
+            for sql in _DDL:
+                probe.execute(sql)
+            semantic_errors.create_indexes(probe)
+            _REQUIRED_OBJECTS = frozenset(row[0] for row in probe.execute(
+                "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
+        finally:
+            probe.close()
+    return _REQUIRED_OBJECTS
+
+
+def _schema_complete(db):
+    """Read-only probe: every evidence object and meta row already exists."""
+    required = _required_objects()
+    names = {row[0] for row in db.execute(
+        "SELECT name FROM sqlite_master WHERE name IN (" + ",".join("?" * len(required)) + ")",
+        tuple(sorted(required)))}
+    if names != required:
+        return False
+    meta = dict(db.execute("SELECT key,value FROM evidence_meta WHERE key IN ('schema_version','revision')").fetchall())
+    return meta.get("schema_version") == str(VERSION) and "revision" in meta
 
 
 def ensure_schema(db):
-    """Add new tables without copying or changing existing learning records."""
+    """Add new tables without copying or changing existing learning records.
+
+    A file already verified at its current PRAGMA schema_version (process cache,
+    record_schema) or whose objects all exist is checked read-only: no write
+    lock is taken. Only a missing object opens the original write transaction.
+    """
     if db.in_transaction:
         raise RuntimeError("Evidence initialization requires its own transaction")
+    from .record_schema import mark_schema_verified, schema_key, schema_verified
+    if schema_verified("evidence", schema_key(db)):
+        return
+    if _schema_complete(db):
+        mark_schema_verified("evidence", db)
+        return
     with db:
         db.execute("BEGIN IMMEDIATE")
-        for sql in (
-            "CREATE TABLE IF NOT EXISTS evidence_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)",
-            """CREATE TABLE IF NOT EXISTS learning_evidence (
-                event_id TEXT PRIMARY KEY,target_id TEXT NOT NULL,ability TEXT NOT NULL,
-                kind TEXT NOT NULL,content_revision TEXT NOT NULL,source TEXT NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('primary','auxiliary','exposure')),
-                condition_key TEXT NOT NULL,conditions_json TEXT NOT NULL,
-                occurred_at_utc TEXT NOT NULL,outcome TEXT NOT NULL,
-                assisted INTEGER NOT NULL CHECK(assisted IN (0,1)),
-                eligible INTEGER NOT NULL CHECK(eligible IN (0,1)),
-                snapshot_json TEXT NOT NULL,retracted INTEGER NOT NULL DEFAULT 0 CHECK(retracted IN (0,1)),
-                retraction_reason TEXT NOT NULL DEFAULT '',retracted_at_utc TEXT)""",
-            """CREATE TABLE IF NOT EXISTS learning_evidence_pattern (
-                pattern_id TEXT PRIMARY KEY,target_id TEXT NOT NULL,ability TEXT NOT NULL,kind TEXT NOT NULL,
-                condition_key TEXT NOT NULL,conditions_json TEXT NOT NULL,
-                opportunities INTEGER NOT NULL,successes INTEGER NOT NULL,errors INTEGER NOT NULL,
-                concern REAL NOT NULL,last_at_utc TEXT NOT NULL,
-                UNIQUE(target_id,ability,kind,condition_key))""",
-            """CREATE TABLE IF NOT EXISTS learning_aux_adjustment (
-                adjustment_id TEXT PRIMARY KEY,event_id TEXT NOT NULL,target_id TEXT NOT NULL,
-                ability TEXT NOT NULL,card_kind TEXT NOT NULL CHECK(card_kind IN ('course','kana')),
-                card_id TEXT NOT NULL,anchor_event_id TEXT NOT NULL,occurred_at_utc TEXT NOT NULL,
-                result TEXT NOT NULL CHECK(result IN ('correct','incorrect')),fingerprint TEXT NOT NULL,
-                base_due_at_utc TEXT NOT NULL,base_last_review_at_utc TEXT NOT NULL,
-                before_due_at_utc TEXT NOT NULL,after_due_at_utc TEXT NOT NULL,weight REAL NOT NULL,
-                retracted INTEGER NOT NULL DEFAULT 0 CHECK(retracted IN (0,1)),
-                UNIQUE(card_kind,card_id,anchor_event_id,fingerprint))""",
-            "CREATE INDEX IF NOT EXISTS evidence_target_time ON learning_evidence(target_id,occurred_at_utc DESC)",
-            "CREATE INDEX IF NOT EXISTS evidence_context ON learning_evidence(target_id,ability,kind,condition_key,occurred_at_utc,event_id)",
-            "CREATE INDEX IF NOT EXISTS evidence_pattern_target ON learning_evidence_pattern(target_id,concern DESC)",
-            "CREATE INDEX IF NOT EXISTS evidence_adjustment_anchor ON learning_aux_adjustment(card_kind,card_id,anchor_event_id)",
-            "CREATE INDEX IF NOT EXISTS evidence_adjustment_event ON learning_aux_adjustment(event_id)",
-            """CREATE UNIQUE INDEX IF NOT EXISTS evidence_opportunity_unit
-                ON learning_evidence(json_extract(snapshot_json,'$.opportunity.id'),target_id,ability)
-                WHERE json_extract(snapshot_json,'$.opportunity.id') IS NOT NULL""",
-        ):
+        for sql in _DDL:
             db.execute(sql)
         version = db.execute("SELECT value FROM evidence_meta WHERE key='schema_version'").fetchone()
         if version is not None and version[0] != str(VERSION):
@@ -94,6 +140,7 @@ def ensure_schema(db):
         semantic_errors.create_indexes(db)
         if not has_index:
             semantic_errors.rebuild(db)
+    mark_schema_verified("evidence", db)
 
 
 def reviewed_question(question):
@@ -181,7 +228,8 @@ def _update_pattern(db, row, rebuild=False):
 
 
 def _course_anchor(db, target_id, ability):
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='learning_unit'").fetchone():
+    from .record_schema import object_present
+    if not object_present(db, "learning_unit"):
         return None
     unit = db.execute("SELECT * FROM learning_unit WHERE content_id=? AND ability=? AND suspended=0", (target_id, ability)).fetchone()
     if unit is None or not unit["review_count"] or not unit["scheduler_state_json"]:
@@ -255,35 +303,75 @@ def record_adjustment(db, *, event_id, target_id, ability, card_kind, card_id, a
     return True
 
 
-def _apply_course_adjustment(db, event, question, now):
-    pair = _course_anchor(db, event["target_id"], event["ability"])
-    if pair is None:
-        return
-    unit, anchor = pair
+def _apply_bounded_adjustment(db, event, question, now, *, card_kind, card_id, row, anchor, same_due, move):
+    """The one gate of a bounded auxiliary adjustment, shared by a course unit and a kana card.
+
+    ``row`` is the unit or card (scheduler_version, scheduler_state_json,
+    due_at_utc); ``anchor`` its latest formal event (event_id,
+    occurred_at_utc, state_after_json). Only a row in review, unchanged since
+    its anchor except for its due, on the current algorithm, whose stored due
+    matches its state (``same_due``), is moved: by the shared bounded_due,
+    within remaining_budget, audited by record_adjustment; ``move(state_json,
+    due_text)`` then writes the row's new state and due.
+    """
     from .domain import ALGORITHM_VERSION
-    base, state = json.loads(anchor["state_after_json"]), json.loads(unit["scheduler_state_json"])
-    if (unit["scheduler_version"] != ALGORITHM_VERSION or base.get("state") != 2 or state.get("state") != 2
+    base, state = json.loads(anchor["state_after_json"]), json.loads(row["scheduler_state_json"])
+    if (row["scheduler_version"] != ALGORITHM_VERSION or base.get("state") != 2 or state.get("state") != 2
             or not base.get("last_review") or anchor["occurred_at_utc"] > event["occurred_at_utc"]
             or {k: v for k, v in state.items() if k != "due"} != {k: v for k, v in base.items() if k != "due"}
-            or state["due"] != unit["due_at_utc"]):
+            or not same_due(state["due"], row["due_at_utc"])):
         return
     base_due, last, before = (datetime.fromisoformat(value) for value in (base["due"], base["last_review"], state["due"]))
     from .assessment_opportunity import auxiliary_weight
-    weight = min(auxiliary_weight(event), remaining_budget(db, "course", unit["unit_id"], anchor["event_id"], base_due, last))
+    weight = min(auxiliary_weight(event), remaining_budget(db, card_kind, card_id, anchor["event_id"], base_due, last))
     after = bounded_due(base_due, last, before, event["outcome"], now, weight)
     if after is None:
         return
     from .tutor_store import question_fingerprint
     fingerprint = question_fingerprint(question)
     if not record_adjustment(db, event_id=event["event_id"], target_id=event["target_id"], ability=event["ability"],
-            card_kind="course", card_id=unit["unit_id"], anchor_event_id=anchor["event_id"], now=now,
+            card_kind=card_kind, card_id=card_id, anchor_event_id=anchor["event_id"], now=now,
             outcome=event["outcome"], fingerprint=fingerprint, base_due=base_due, last_review=last,
             before_due=before, after_due=after, weight=weight):
         return
     state["due"] = after.isoformat()
-    # Keep an earlier independent free-recall probe; auxiliary success must not postpone it.
-    db.execute("UPDATE learning_unit SET scheduler_state_json=?,due_at_utc=? WHERE unit_id=?",
-               (_json(state), after.isoformat(), unit["unit_id"]))
+    move(_json(state), after.isoformat())
+
+
+def _apply_course_adjustment(db, event, question, now):
+    pair = _course_anchor(db, event["target_id"], event["ability"])
+    if pair is None:
+        return
+    unit, anchor = pair
+
+    def move(state_json, due):
+        # Keep an earlier independent free-recall probe; auxiliary success must not postpone it.
+        db.execute("UPDATE learning_unit SET scheduler_state_json=?,due_at_utc=? WHERE unit_id=?",
+                   (state_json, due, unit["unit_id"]))
+    _apply_bounded_adjustment(db, event, question, now, card_kind="course", card_id=unit["unit_id"], row=unit,
+                              anchor=anchor, same_due=lambda state_due, row_due: state_due == row_due, move=move)
+
+
+def _apply_kana_adjustment(db, event, card_id, question, now):
+    """The kana counterpart of _apply_course_adjustment: one scheduling card, its latest formal review the anchor.
+
+    Only a card that is reviewed, not paused and of the event's kana is
+    considered; the gate, step, cap and audit are _apply_bounded_adjustment's.
+    """
+    card = db.execute("SELECT * FROM study_card WHERE card_id=?", (card_id,)).fetchone()
+    if card is None or card["suspended"] or not card["review_count"] or card["content_id"] != event["target_id"]:
+        return
+    anchor = db.execute("SELECT * FROM review_event WHERE card_id=? ORDER BY occurred_at_utc DESC,rowid DESC LIMIT 1",
+                        (card_id,)).fetchone()
+    if anchor is None:
+        return
+
+    def move(state_json, due):
+        db.execute("UPDATE study_card SET scheduler_state_json=?,due_at_utc=? WHERE card_id=?",
+                   (state_json, due, card_id))
+    _apply_bounded_adjustment(
+        db, event, question, now, card_kind="kana", card_id=card_id, row=card, anchor=anchor, move=move,
+        same_due=lambda state_due, row_due: datetime.fromisoformat(state_due) == datetime.fromisoformat(row_due))
 
 
 class LearningEvidenceStore:
@@ -379,6 +467,35 @@ class LearningEvidenceStore:
                 semantic_errors.index_event(db, row)
         _bump(db)
         return dict(row)
+
+    def record_auxiliary(self, event_id, question, result, *, source, trusted, now=None, kana_card_id=None):
+        """One auxiliary answer in its own transaction, with its bounded adjustment (design 12 E3).
+
+        source "course": record_attempt with adjust (the unit of the question's
+        target and ability). source "kana": record_attempt, then the same
+        bounded adjustment of the scheduling card ``kana_card_id``. The
+        opportunity is this answer alone (shared budget, AUXILIARY_STEP).
+        Returns the adjustment row written for this answer, or None when
+        nothing moved (an ineligible answer, a state not in review or already
+        due, the budget used, the same question on the same anchor).
+        """
+        if source not in {"course", "kana"} or (source == "kana") != bool(kana_card_id):
+            raise ValueError("An auxiliary practice answer belongs to one course unit or one kana card")
+        db = self._db
+        if db.in_transaction:
+            raise RuntimeError("Auxiliary practice evidence requires its own transaction")
+        now = _now(now)
+        from .assessment_opportunity import identity
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self.record_attempt(event_id, question, result, source=source, role="auxiliary", now=now,
+                                      trusted=trusted, adjust=source == "course",
+                                      opportunity_id=identity(source, event_id))
+            if source == "kana" and row["event_id"] == event_id and row["eligible"] and row["role"] == "auxiliary":
+                _apply_kana_adjustment(db, row, kana_card_id, question, now)
+            adjustment = db.execute("SELECT * FROM learning_aux_adjustment WHERE event_id=? AND retracted=0",
+                                    (event_id,)).fetchone()
+        return dict(adjustment) if adjustment else None
 
     def context(self, target_ids, now=None, limit=24):
         result = {"format": FORMAT, "version": VERSION, "revision": 0, "targets": []}

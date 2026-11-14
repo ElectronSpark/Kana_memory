@@ -4,6 +4,8 @@ import asyncio
 from .retention_scope_form import ScopeFormStore, request_id
 from .retention_scope_ai import ScopeAIStore, generate, snapshot
 
+SCOPE_BUSY_STATUS = '数据库正忙，范围草稿暂未保存；继续操作时会自动重试。'
+
 
 class ScopeUIMixin:
     def scope_forms(self):
@@ -25,6 +27,9 @@ class ScopeUIMixin:
             'offsets': context['offsets'], 'exposed': sorted([list(pair) for pair in context['exposed']]),
             'message': context['ai_message'].value or '' if 'ai_message' in context else context.get('message_value', '')}
         saved = self.scope_forms().edit(context['form_id'], changes)
+        draft = getattr(self, '_diagnostic_scope_draft', None)
+        if draft is not None and draft.pending is not None and draft.pending[0] == context['form_id']:
+            draft.flush_now()  # The live form, typed requirement included, is now saved.
         context['request_id'] = request_id(saved)
         if current and current['revision'] != saved['revision']:
             if context.get('ai_button') is not None and not context.get('ai_busy'):
@@ -32,12 +37,69 @@ class ScopeUIMixin:
         return saved
 
     def _scope_changed(self, context):
+        """Save the live scope form; False (with a status) if it was not saved.
+
+        A lock timeout is a retry status and keeps the form queued for the next
+        forced flush; other storage errors still raise.
+        """
         if self._diagnostic_scope is not context or context.get('restoring'):
-            return
+            return None
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        from .tutor_ui import page_draft_debouncer
+        draft = page_draft_debouncer(self, '_diagnostic_scope_draft',
+                                     lambda: ScopeUIMixin.flush_diagnostic_scope_draft(self))
+        message = context['ai_message'].value or '' if 'ai_message' in context else context.get('message_value', '')
+        def busy():
+            context['status'].text = SCOPE_BUSY_STATUS
         try:
-            self._save_diagnostic_scope(context)
+            saved = persist_with_lock_notice(lambda: self._save_diagnostic_scope(context),
+                record=lambda exc: record_error('retention_scope_draft', 'save', exc),
+                debouncer=draft, key=context.get('form_id'), value=message, notice=busy)
         except ValueError as exc:
             context['status'].text = str(exc)
+            return False
+        if saved is False:
+            return False
+        if context['status'].text == SCOPE_BUSY_STATUS:
+            context['status'].text = ''
+        return None
+
+    def _type_scope_message(self, context):
+        """on_change of the AI requirement: save at most 0.25 s later.
+
+        The requirement is a semantic field, so a save still bumps the form
+        revision and drops stale suggestions, once per flush, not per key.
+        Start, both suggestion requests and leaving save the live form first.
+        """
+        if self._diagnostic_scope is not context or context.get('restoring'):
+            return
+        from .tutor_ui import page_draft_debouncer
+        draft = page_draft_debouncer(self, '_diagnostic_scope_draft',
+                                     lambda: ScopeUIMixin.flush_diagnostic_scope_draft(self))
+        if draft is None:
+            self._scope_changed(context); return
+        draft.accept(context['form_id'], context['ai_message'].value or '')
+
+    def flush_diagnostic_scope_draft(self):
+        """Synchronously save a pending scope edit; None if none pending."""
+        draft = getattr(self, '_diagnostic_scope_draft', None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        context = getattr(self, '_diagnostic_scope', None)
+        if context and context.get('form_id') == pending[0]:
+            return ScopeUIMixin._scope_changed(self, context)
+        # A failed save was followed by a new scope page: keep the typed requirement.
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        try:
+            saved = persist_with_lock_notice(lambda: self.scope_forms().edit(pending[0], {'message': pending[1]}),
+                record=lambda exc: record_error('retention_scope_draft', 'save', exc),
+                debouncer=draft, key=pending[0], value=pending[1])
+        except ValueError:
+            return None  # That form has started or been replaced; nothing editable remains.
+        return False if saved is False else None
 
     def _restore_scope_controls(self, context, saved):
         from .retention_session_ui import PURPOSE_LABELS, BUDGET_LABELS
@@ -57,7 +119,7 @@ class ScopeUIMixin:
         from . import ui_components as u
         context['scope_box'] = u.col(); context['scope_busy'] = False
         context['scope_button'] = u.button('按要求建议范围', lambda w: self.request_scope_suggestion(context), compact=True)
-        context['ai_message'].on_change = lambda w, **kw: self._scope_changed(context)
+        context['ai_message'].on_change = lambda w, **kw: self._type_scope_message(context)
         self.scope_ai().recover()
         saved = self.scope_forms().get(context['form_id'])
         if saved['scope_plan']:

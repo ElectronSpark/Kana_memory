@@ -32,11 +32,10 @@ def test_complete_pretty_bundle_roundtrip_preserves_learning_and_drafts(stores, 
     learning.save_draft(saved_question["id"], {"answer": "未完成的草稿"})
     before = snapshot(store)
     pretty = json.dumps(pack, ensure_ascii=False, indent=2).encode("utf-8")
-    # The audited catalogue originally exceeded 16 MiB when indented. Keep
-    # checking that boundary if later editorial shortening makes it smaller.
-    if len(pretty) <= MAX_BYTES:
-        pretty += b" " * (MAX_BYTES + 1 - len(pretty))
-    assert MAX_BYTES < len(pretty) <= MAX_IMPORT_BYTES
+    # The normalized budget now equals the 32 MiB raw allowance: the indented
+    # catalogue (24.2 MiB with the 2026-11-09 expansion) is larger than its
+    # compact form and must still import.
+    assert len(serialize_pack(pack)) < len(pretty) <= MAX_IMPORT_BYTES
     decoded = parse_pack(pretty, items)
     assert decoded == pack
     resources = ExampleStore(store, learning, items, bundled_pack=empty_pack())
@@ -110,12 +109,15 @@ def test_exact_raw_boundary_and_utf8_bom_remain_valid():
 
 def test_larger_file_allowance_does_not_raise_the_normalized_material_limit():
     pack = {**empty_pack(), "extra": "x" * MAX_BYTES}
-    raw = json.dumps(pack, separators=(",", ":")).encode()
-    assert MAX_BYTES < len(raw) < MAX_IMPORT_BYTES
-    with pytest.raises(ValueError, match="16 MiB"):
-        parse_pack(raw)
-    with pytest.raises(ValueError, match="16 MiB"):
+    with pytest.raises(ValueError, match="例句材料超过 32 MiB"):
         serialize_pack(pack)
+    # Both budgets are 32 MiB. Text within the raw allowance can still
+    # normalize above it (1e15 -> 1000000000000000.0) and is rejected.
+    count = MAX_BYTES // 19 + 1
+    raw = (json.dumps(empty_pack())[:-1] + ', "extra": [' + ",".join(["1e15"] * count) + "]}").encode()
+    assert len(raw) < MAX_IMPORT_BYTES and MAX_BYTES <= count * 19
+    with pytest.raises(ValueError, match="例句材料超过 32 MiB"):
+        parse_pack(raw)
 
 
 def test_export_validates_and_import_preview_preserves_explicit_review_gate():

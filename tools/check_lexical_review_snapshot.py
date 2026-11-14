@@ -12,6 +12,11 @@ sys.path.insert(0, str(ROOT / "app/src"))
 from kanamemory.lexical_review import fingerprint
 
 
+def part_folders(audit):
+    """Every review part folder (part_1, part_2, ...) in numeric order."""
+    return sorted(Path(audit).glob("part_*"), key=lambda folder: int(folder.name.split("_", 1)[1]))
+
+
 def check_snapshot(content_path, audit):
     baselines = [json.loads(x) for x in (audit / "baseline_examples.jsonl").read_text(encoding="utf-8").splitlines()]
     words = json.loads((audit / "baseline_words.json").read_text(encoding="utf-8"))
@@ -28,8 +33,8 @@ def check_snapshot(content_path, audit):
     finally:
         db.close()
     assigned = []
-    for part in range(1, 4):
-        assignment = json.loads((audit / f"part_{part}/assignment.json").read_text(encoding="utf-8"))
+    for folder in part_folders(audit):
+        assignment = json.loads((folder / "assignment.json").read_text(encoding="utf-8"))
         if len(assignment["ids"]) != assignment["count"]:
             raise ValueError("Assignment count mismatch.")
         assigned.extend(assignment["ids"])

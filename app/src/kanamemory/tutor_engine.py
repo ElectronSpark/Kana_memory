@@ -18,8 +18,8 @@ from .material_review import reviewed_question
 from .learning_dependencies import independent_ready_ids, prerequisite_status
 from .learning_harness import (rank_targets, selection_mode, decide_next_step,
                                conditional_patterns, conditional_priority)
-from .tutor_store import (COOLDOWN_SECONDS, question_available, question_fingerprint,
-                          validate_tutor_value)
+from .tutor_store import (COOLDOWN_SECONDS, practice_background_ready, question_available,
+                          question_fingerprint, validate_tutor_value)
 
 MAX_TARGETS = 24
 MAX_CANDIDATES = 8
@@ -86,8 +86,11 @@ def _target_candidate(item, target, recent, state, now, patterns, *, system_japa
     best, priority = None, 0.
     ceiling = max((row["concern"] for row in patterns), default=0.)
     from .learning_practice_policy import practice_candidates
+    # The tutor's own admission rule runs before the gate picks a pass, so a
+    # relaxed tier it refuses does not hide the next one it can serve.
     descriptors = list(practice_candidates(item, target["allowed_kinds"],
-        known_background_ids=known_background_ids, system_japanese=system_japanese))
+        known_background_ids=known_background_ids, system_japanese=system_japanese,
+        admit=lambda descriptor, template: practice_background_ready(template, known_background_ids, item["id"])))
     for kind in _kind_order(target, recent):
         # Once a fallback exists, unrelated directions cannot improve an exact
         # condition match. Avoid hydrating every template on ordinary turns.
@@ -106,6 +109,10 @@ def _target_candidate(item, target, recent, state, now, patterns, *, system_japa
                 continue
             from .answer_input import available
             if not available(question, system_japanese=system_japanese):
+                continue
+            # A relaxed descriptor (design 11, D4/D5) may name unmet practice
+            # background; the tutor keeps requiring it independently known.
+            if not practice_background_ready(question, known_background_ids, item["id"]):
                 continue
             if question_seen_recently(question, state, now=now):
                 continue

@@ -21,7 +21,8 @@ from .kana_question_policy import _KANA_KINDS
 @lru_cache(maxsize=1)
 def _bundled_graph():
     from .content import ContentRepository
-    with ContentRepository(Path(__file__).with_name("resources") / "content.sqlite3") as repository:
+    from .content_pack import lexicon_path
+    with ContentRepository(lexicon_path()) as repository:
         return MappingProxyType(_with_reading_rules(repository.kana_list(), strict=True))
 
 

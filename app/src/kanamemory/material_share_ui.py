@@ -21,7 +21,7 @@ class MaterialShareUIMixin:
 
     def refresh_shared_material_notice(self):
         from . import ui_components as u
-        slot = getattr(self, "home_material_slot", None)
+        slot = getattr(getattr(self, "_study_home", None), "material_slot", None)   # the home's showing (design 13 S3)
         if slot is None:
             return
         rows = self.shared_material_rows()

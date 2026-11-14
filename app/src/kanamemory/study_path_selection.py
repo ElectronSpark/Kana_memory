@@ -38,7 +38,14 @@ class NodeSelectionStatus:
 
 
 class StudyPathSelection:
-    def __init__(self, overview, selected_entry_ids=()):
+    """Selection over one route's overview.
+
+    route_id names that route for the page's service calls (None: the core
+    route, design 10 WP-R3); refresh() must receive the same route's overview.
+    """
+
+    def __init__(self, overview, selected_entry_ids=(), *, route_id=None):
+        self.route_id = route_id
         self._selected = set()
         self.refresh(overview)
         if isinstance(selected_entry_ids, str):

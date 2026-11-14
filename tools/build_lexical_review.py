@@ -217,13 +217,13 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "app/src/kanamemory/resources/lexical_sentence_review.sqlite3")
     parser.add_argument("--content", type=Path, default=ROOT / "app/src/kanamemory/resources/content.sqlite3")
     args = parser.parse_args()
-    from check_lexical_review_snapshot import check_snapshot
+    from check_lexical_review_snapshot import check_snapshot, part_folders
     check_snapshot(args.content, args.audit)
     baselines = [json.loads(line) for line in (args.audit / "baseline_examples.jsonl").read_text(encoding="utf-8").splitlines()]
     words = json.loads((args.audit / "baseline_words.json").read_text(encoding="utf-8"))
     decisions = []
-    for part in range(1, 4):
-        folder = args.audit / f"part_{part}"
+    for folder in part_folders(args.audit):
+        part = folder.name.split("_", 1)[1]
         assignment = json.loads((folder / "assignment.json").read_text(encoding="utf-8"))
         rows = []
         for file in sorted(folder.glob("reviews_*.json")):
@@ -231,7 +231,7 @@ def main():
         expected = assignment.get("ids") or assignment.get("example_ids")
         checked(expected is not None and len(rows) == len(expected) and {r["id"] for r in rows} == set(expected), f"part {part} coverage incomplete")
         decisions.extend(rows)
-    meta = compile_database(baselines, decisions, words, args.output)
+    meta = compile_database(baselines, decisions, words, args.output, expected_count=len(baselines))
     (args.audit / "compilation_report.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(meta, ensure_ascii=False, indent=2))
 

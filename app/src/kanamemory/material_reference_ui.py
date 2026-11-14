@@ -13,11 +13,85 @@ LABELS = {'family': '类别', 'domain': '领域', 'title': '写法', 'reading': 
 STATES = {'仍待核实': 'pending', '所列参考支持本项': 'supported', '所列参考与本项冲突': 'contradicted'}
 
 
+REFERENCE_PAGES = {'material_reference_source', 'material_reference_claim'}
+REFERENCE_BUSY_STATUS = '数据库正忙，草稿暂未保存；继续输入或操作时会自动重试。'
+
+
 class MaterialReferenceUIMixin:
     def save_material_reference_draft(self):
+        """Forced flush of AI-area page drafts; app.py calls it before navigation.
+
+        Writes the current reference form (as before) and any debounced tutor
+        answer/chat or reference draft. False when a write hit a lock timeout.
+        """
+        results = []
+        tutor = getattr(self, 'flush_tutor_drafts', None)
+        if callable(tutor):
+            results.append(tutor())
+        results.append(MaterialReferenceUIMixin.flush_material_reference_draft(self))
         save = getattr(self, '_material_reference_save', None)
-        if getattr(self, 'page', '') in {'material_reference_source', 'material_reference_claim'} and callable(save):
-            save()
+        if getattr(self, 'page', '') in REFERENCE_PAGES and callable(save):
+            results.append(save())
+        return False if any(result is False for result in results) else None
+
+    def flush_material_reference_draft(self):
+        """Synchronously persist a pending (debounced) reference form draft."""
+        draft = getattr(self, '_material_reference_draft', None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        return MaterialReferenceUIMixin._persist_material_reference(self, *pending)
+
+    def _type_material_reference(self, key, value):
+        """on_change: keep typing in memory, write at most 0.25 s later."""
+        from .tutor_ui import page_draft_debouncer
+        draft = page_draft_debouncer(self, '_material_reference_draft',
+                                     lambda: MaterialReferenceUIMixin.flush_material_reference_draft(self))
+        if draft is None:
+            return MaterialReferenceUIMixin._persist_material_reference(self, key, value)
+        draft.accept(key, value)
+
+    def _save_material_reference_now(self, key, value):
+        """Explicit save (button, Back, navigation): drop the superseded pending copy."""
+        draft = getattr(self, '_material_reference_draft', None)
+        if draft is not None and draft.pending is not None:
+            if draft.pending[0] == key:
+                draft.flush_now()
+            else:
+                MaterialReferenceUIMixin.flush_material_reference_draft(self)
+        return MaterialReferenceUIMixin._persist_material_reference(self, key, value)
+
+    def _persist_material_reference(self, key, value):
+        from copy import deepcopy
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        owner, owner_key, note, saved_text = getattr(self, '_material_reference_feedback', None) or (None,) * 4
+        visible = (getattr(self, 'page', '') in REFERENCE_PAGES and owner is not None and owner_key == key
+                   and getattr(self, '_material_reference_owner', None) is owner)
+
+        def write():
+            if self.store.get_setting(key, {}) != value: self.store.set_setting(key, value)
+
+        def busy():
+            if visible:
+                note.text = REFERENCE_BUSY_STATUS
+        if persist_with_lock_notice(write, record=lambda exc: record_error('material_reference_draft', 'save', exc),
+                debouncer=getattr(self, '_material_reference_draft', None), key=key, value=deepcopy(value),
+                notice=busy) is False:
+            return False
+        if visible and (saved_text or note.text == REFERENCE_BUSY_STATUS):
+            note.text = saved_text or ''
+        return True
+
+    def _material_reference_locked(self, exc, note):
+        """A commit hit a lock timeout: nothing was recorded; the press can be retried."""
+        from .draft_debounce import is_database_locked
+        if not is_database_locked(exc):
+            return False
+        from .diagnostic_events import record_error
+        record_error('material_reference_draft', 'commit', exc)
+        note.text = '数据库正忙，请稍后再试；已输入的内容仍在本页。'
+        return True
 
     @page_view(detail=True, refresh=True)
     def show_material_senses(self, identity):
@@ -91,25 +165,34 @@ class MaterialReferenceUIMixin:
         body = u.toga.MultilineTextInput(placeholder='粘贴可核对的原文摘录', value=old.get('text',''), style=u.Pack(height=220))
         note = u.label('', size=13, color=u.MUTED); owner = object(); self._material_reference_owner = owner
         def active(): return self.page == 'material_reference_source' and self._material_reference_owner is owner
+        def form():
+            return {'label': (label.value or '')[:400], 'locator': (locator.value or '')[:1600], 'text': (body.value or '')[:32000]}
         def save_draft(widget=None):
             if not active(): return
-            value = {'label': (label.value or '')[:400], 'locator': (locator.value or '')[:1600], 'text': (body.value or '')[:32000]}
-            if self.store.get_setting(key, {}) != value: self.store.set_setting(key, value)
-            note.text = '草稿已保存。'
+            return MaterialReferenceUIMixin._save_material_reference_now(self, key, form())
+        def typed(widget=None):
+            if not active(): return
+            MaterialReferenceUIMixin._type_material_reference(self, key, form())
         def save(widget=None):
             if not active(): return
+            # A pending debounced copy must not rewrite the draft after it is cleared.
+            MaterialReferenceUIMixin.flush_material_reference_draft(self)
             try:
                 MaterialReferenceStore(self.store).add_source(job['proposal_id'], label.value or '', locator.value or '', body.value or '')
                 self.store.set_setting(key, {})
             except ValueError as exc: note.text = str(exc); return
+            except Exception as exc:
+                if MaterialReferenceUIMixin._material_reference_locked(self, exc, note): return
+                raise
             self._material_reference_save = None
             self.show_material_references(identity)
+        self._material_reference_feedback = (owner, key, note, '草稿已保存。')
         self._material_reference_save = save_draft
-        for control in (label, locator, body): control.on_change = save_draft
+        for control in (label, locator, body): control.on_change = typed
         self.screen('material_reference_source', '添加参考', label, locator, body,
             u.label('参考与学习原文分开。尚未发送的 AI 复核会使用这些摘录；已完成的意见保留原版本。', size=12, color=u.MUTED),
             note, u.button('保存参考', save, primary=True), u.button('保存草稿', save_draft, compact=True),
-            u.button('返回', lambda w: (save_draft(), self.show_material_references(identity))))
+            u.button('返回', lambda w: save_draft() is not False and self.show_material_references(identity)))
 
     @page_view(detail=True, refresh=True)
     def show_material_reference_claim(self, identity, claim_id):
@@ -160,16 +243,23 @@ class MaterialReferenceUIMixin:
         if draft and draft.get('expected') != expected:
             note.text = '核对记录已更新。已恢复未提交草稿，请重新核对后保存。'
         owner = object(); self._material_reference_owner = owner; request_id = uuid4().hex
-        def save_draft(widget=None):
-            if self.page != 'material_reference_claim' or self._material_reference_owner is not owner: return
+        def form():
             index = labels.index(source.value)-1
-            value = {'expected': expected, 'source_id': sources[index]['id'] if index >= 0 else None,
+            return {'expected': expected, 'source_id': sources[index]['id'] if index >= 0 else None,
                 'excerpt': (excerpt.value or '')[:32000], 'status': STATES[state.value],
                 'reason': (reason.value or '')[:4000], 'comparison': (comparison.value or '')[:4000],
                 'checks': {k:(c.value or '')[:4000] for k,c in notes.items()}}
-            if self.store.get_setting(draft_key, {}) != value: self.store.set_setting(draft_key, value)
+        def active(): return self.page == 'material_reference_claim' and self._material_reference_owner is owner
+        def save_draft(widget=None):
+            if not active(): return
+            return MaterialReferenceUIMixin._save_material_reference_now(self, draft_key, form())
+        def typed(widget=None):
+            if not active(): return
+            MaterialReferenceUIMixin._type_material_reference(self, draft_key, form())
         def save(widget=None):
-            if self.page != 'material_reference_claim' or self._material_reference_owner is not owner: return
+            if not active(): return
+            # A pending debounced copy must not rewrite the draft after it is cleared.
+            MaterialReferenceUIMixin.flush_material_reference_draft(self)
             citations = []; index = labels.index(source.value)-1; quote = excerpt.value or ''
             if index >= 0 and quote:
                 row = sources[index]; start = row['text'].find(quote)
@@ -178,11 +268,19 @@ class MaterialReferenceUIMixin:
                 service.record(expected, citations=citations, status=STATES[state.value], reason=reason.value or '',
                     check_notes={k:c.value or '' for k,c in notes.items()}, model_comparison=comparison.value or '', request_id=request_id)
             except ValueError as exc: note.text = str(exc); return
-            self.store.set_setting(draft_key, {})
+            except Exception as exc:
+                if MaterialReferenceUIMixin._material_reference_locked(self, exc, note): return
+                raise
+            try:
+                self.store.set_setting(draft_key, {})
+            except Exception as exc:
+                if MaterialReferenceUIMixin._material_reference_locked(self, exc, note): return
+                raise
             self._material_reference_save = None
             self.show_material_references(identity)
+        self._material_reference_feedback = (owner, draft_key, note, None)
         self._material_reference_save = save_draft
-        for control in (excerpt, state, reason, comparison, *notes.values()): control.on_change = save_draft
-        source.on_change = lambda w: (selected(w), save_draft(w))
-        children += [u.button('保存本项核据', save, primary=True), u.button('返回', lambda w: (save_draft(), self.show_material_references(identity)))]
+        for control in (excerpt, state, reason, comparison, *notes.values()): control.on_change = typed
+        source.on_change = lambda w: (selected(w), typed(w))
+        children += [u.button('保存本项核据', save, primary=True), u.button('返回', lambda w: save_draft() is not False and self.show_material_references(identity))]
         self.screen('material_reference_claim', '逐项核对', *children)

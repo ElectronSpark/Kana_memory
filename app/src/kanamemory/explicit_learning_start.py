@@ -259,7 +259,7 @@ def claim(db, content_id, *, introduction_id=None, script=None, now):
     return True
 
 
-def choose(store, learning, value, *, enabled_kinds, kana_kinds, now, service, kana_service):
+def choose(store, learning, value, *, enabled_kinds, kana_kinds, now, service, kana_service, projection=None):
     """Read existing eligible heads; never manufacture or reschedule a question."""
     from .first_teaching_kana import probe
     from types import SimpleNamespace
@@ -272,7 +272,8 @@ def choose(store, learning, value, *, enabled_kinds, kana_kinds, now, service, k
 
     def heads(course_ids, kana_slots):
         course = learning.current(enabled_kinds, now=now, fair_new=True, teaching_only=True,
-                                  teaching_content_ids=course_ids) if course_ids else None
+                                  teaching_content_ids=course_ids,
+                                  **({} if projection is None else {'projection': projection})) if course_ids else None
         kana = probe(store, kana_kinds, now, slots=kana_slots) if kana_slots else None
         lane = store.teaching_queries.choose_lane(kana.get('dispatch_priority') if kana else None,
                            course.get('dispatch_priority') if course else None,

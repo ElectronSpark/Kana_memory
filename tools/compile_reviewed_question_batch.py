@@ -64,7 +64,9 @@ def apply_retirements(output, authoring, review, items):
         raise ValueError('Retirement review identities differ')
 
 
-def compile_batch(authoring, review, items, previous):
+def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
+                  coverage_key='expansion_0291', method='sol_exact_slot_review_0291'):
+    """Publish one exactly reviewed batch; the reviewer and batch names are recorded as given."""
     from kanamemory.learning_questions import KIND_ABILITIES, validate_practice
     from kanamemory.material_review import item_fingerprint
     from kanamemory.multi_cloze import is_cloze_question, validate_snapshot
@@ -76,10 +78,10 @@ def compile_batch(authoring, review, items, previous):
             or not authoring['questions']):
         raise ValueError('The authored batch is incomplete')
     if (review.get('format') != 'kanamemory-exact-question-review'
-            or review.get('version') != VERSION or review.get('reviewer') != 'gpt-6.1-sol'
+            or review.get('version') != VERSION or review.get('reviewer') != reviewer
             or review.get('authoring_sha256') != digest(authoring)
             or not isinstance(review.get('questions'), list)):
-        raise ValueError('An exact Sol review manifest is required')
+        raise ValueError('An exact review manifest from the named reviewer is required')
     approved = {}
     for verdict in review['questions']:
         identity = verdict.get('slot_id')
@@ -154,7 +156,7 @@ def compile_batch(authoring, review, items, previous):
         templates.append(raw)
         record['contexts'][fingerprint] = {'background_glosses': []}
         output['provenance'].append({'target_id': target, 'kind': kind, 'template_sha256': fingerprint,
-            'method': 'sol_exact_slot_review_0291', 'slot_id': identity,
+            'method': method, 'slot_id': identity,
             # Full authoring and independent review ledgers are release artifacts.
             # Their exact hashes retain provenance without copying lengthy source
             # bindings into every phone-resident question record.
@@ -164,7 +166,7 @@ def compile_batch(authoring, review, items, previous):
     apply_retirements(output, authoring, review, by_id)
     merged = append_history(output, previous)
     merged['coverage'] = deepcopy((previous or {}).get('coverage', {}))
-    merged['coverage']['expansion_0291'] = {'new_slots': len(seen) - len(authoring.get('retirements', [])),
+    merged['coverage'][coverage_key] = {'new_slots': len(seen) - len(authoring.get('retirements', [])),
         'authored_slots': len(seen),
         'by_kind': dict(Counter(row['kind'] for row in authoring['questions'])),
         'reviewer': review['reviewer'], 'authoring_sha256': digest(authoring),

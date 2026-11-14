@@ -11,6 +11,7 @@ import json
 from .content_pack import load_namespace
 from . import pitch_sequence as sequence
 
+_registry = sequence.namespace_reader()  # Shared read-only registry copy.
 PREFIX = 'pp3:'
 MAX_UNIT_BEATS = 32
 MAX_TOTAL_BEATS = 128
@@ -105,7 +106,7 @@ def specification(question):
             raise ValueError('Source-pitch alignment requires pitch composition')
         spec = question.get('pitch_practice')
         refs = _validate(spec)
-        registry = load_namespace('pitch_sequences', {})
+        registry = _registry(load_namespace, 'pitch_sequences', {})
         if (not isinstance(registry, dict) or registry.get('format') != 'kanamemory-pitch-sequences'
                 or type(registry.get('version')) is not int or registry['version'] != 1
                 or not isinstance(registry.get('sources'), list) or not isinstance(registry.get('records'), list)):

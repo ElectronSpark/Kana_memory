@@ -58,7 +58,8 @@ def main():
 
     def validate(name, pack, targets):
         try:
-            validate_pack(pack, known_targets=targets)
+            # Bundled catalogue packs (baseline, runtime, audited sources).
+            validate_pack(pack, known_targets=targets, limits=BUNDLED_LIMITS)
         except (TypeError, ValueError, KeyError) as exc:
             check(name, False, error=str(exc))
         else:
@@ -79,7 +80,7 @@ def main():
 
     sys.path.insert(0, str(ROOT / "app/src"))
     from kanamemory.example_catalogue import bundled_example_pack
-    from kanamemory.example_store import reference_id_for, validate_pack
+    from kanamemory.example_store import BUNDLED_LIMITS, reference_id_for, validate_pack
     from kanamemory.learning_content import learning_items
 
     final_items = learning_items()

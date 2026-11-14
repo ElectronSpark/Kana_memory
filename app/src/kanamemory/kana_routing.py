@@ -210,11 +210,15 @@ def representatives(cards, now):
     return [min(group, key=priority) for group in grouped.values()]
 
 
-def candidate_cards(store, kinds, now):
-    """Allowed current modes; actual question eligibility is checked by builders."""
+def candidate_cards(store, kinds, now, *, cards=None, stages=None):
+    """Allowed current modes; actual question eligibility is checked by builders.
+
+    cards/stages: the caller's same-action project_cards(aliases=True) rows and
+    _adaptive_stages per script, read with no write in between; None reads live.
+    """
     from .domain import _adaptive_stages, _adaptive_new_kinds
-    result, stages = [], {}
-    for card in project_cards(store, aliases=True):
+    result, stages = [], dict(stages or {})
+    for card in (project_cards(store, aliases=True) if cards is None else cards):
         if card["skill"] not in kinds or card["suspended"] or card["review_count"] <= 0:
             continue
         if card.get("mode_reviewed") is False:

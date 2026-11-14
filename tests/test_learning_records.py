@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from support.learning_store_fixtures import START, item, question, ready, stores
-from kanamemory.learning_store import LearningStore, FEEDBACK_COOLDOWN_SECONDS
+from kanamemory.learning_store import LearningStore, FEEDBACK_COOLDOWN_SECONDS, UNRESOLVED_RETRY_SECONDS
 from kanamemory import learning_records
 
 
@@ -186,7 +186,9 @@ def test_records_exclude_teaching_and_show_unscored_feedback_cooldown(stores):
     learning.finalize("q1", now=when)
     learning.append_questions(question(qid="after-feedback"), now=when)
     assert learning_records.learning_records_snapshot(learning, now=when)["due"] == 0
-    assert learning_records.learning_records_snapshot(learning, now=when+timedelta(seconds=60))["due"] == 1
+    # An unresolved answer is not a short feedback pause: it waits UNRESOLVED_RETRY_SECONDS (0.32.1).
+    assert learning_records.learning_records_snapshot(learning, now=when+timedelta(seconds=60))["due"] == 0
+    assert learning_records.learning_records_snapshot(learning, now=when+timedelta(seconds=UNRESOLVED_RETRY_SECONDS))["due"] == 1
 
 
 def test_record_widgets_display_effective_probe_time_not_later_fsrs_time(stores, monkeypatch):

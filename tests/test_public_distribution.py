@@ -1,6 +1,7 @@
 """Real clean-source builds: no private tree, inherited content, or user state."""
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
@@ -144,6 +145,39 @@ def test_incomplete_allowlist_fails_before_creating_a_partial_export(tmp_path):
     with pytest.raises(ValueError, match="kana_routing.py"):
         export_source(target, allowlist=allowlist)
     assert not target.exists()
+
+
+def _support_modules(source):
+    """Names of tests/support modules a public test or tool imports."""
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[1] for alias in node.names
+                         if alias.name.startswith("support."))
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            parts = node.module.split(".")
+            if parts[0] != "support":
+                continue
+            if len(parts) > 1:
+                names.add(parts[1])
+            else:
+                names.update(alias.name for alias in node.names
+                             if (ROOT / "tests/support" / (alias.name + ".py")).is_file())
+    return names
+
+
+def test_public_tests_and_tools_import_only_public_support_modules():
+    entries = {line.strip() for line in (ROOT / "tools/public_source_files.txt").read_text("utf-8").splitlines()
+               if line.strip() and not line.startswith("#")}
+    missing = set()
+    for entry in sorted(entries):
+        if entry.endswith(".py") and entry.split("/", 1)[0] in {"tests", "tools"}:
+            for name in _support_modules((ROOT / entry).read_text("utf-8")):
+                if "tests/support/" + name + ".py" not in entries:
+                    missing.add(entry + " -> support." + name)
+    assert not missing, sorted(missing)
+    sample = "from support.x_support import a\nimport support.y\nfrom other import z\n"
+    assert _support_modules(sample) == {"x_support", "y"}
 
 
 def test_exported_demo_loads_lessons_queries_words_and_builds_questions(tmp_path):

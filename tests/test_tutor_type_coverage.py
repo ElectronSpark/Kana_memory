@@ -34,8 +34,8 @@ def test_catalogue_covers_every_real_kind_without_authorizing_more_generation():
     enabled = ["vocab_reading", "pronunciation_application", "word_romaji", "kana_handwriting"]
     value = capability_catalog(enabled, [{"kind": "vocab_reading"}, {"kind": "word_romaji"}])
     indexed = {row["kind"]: row for row in value}
-    assert len(KIND_ABILITIES) == 19 and len(SKILLS) == 9
-    assert len(value) == 28 and set(indexed) == set(KIND_ABILITIES) | SKILLS
+    assert len(KIND_ABILITIES) == 20 and len(SKILLS) == 9
+    assert len(value) == 29 and set(indexed) == set(KIND_ABILITIES) | SKILLS
     assert {k for k, row in indexed.items() if row["route"] == "course"} == set(KIND_ABILITIES)
     assert {k for k, row in indexed.items() if row["route"] == "native"} == SKILLS
     assert {k for k, row in indexed.items() if row["generation"]} == set(AI_CHOICE_KINDS)

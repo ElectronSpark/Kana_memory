@@ -61,12 +61,28 @@ def completed(db, lane, *, kind=None):
                (SETTING, json.dumps(value, ensure_ascii=False, allow_nan=False)))
 
 
-def choose_lane(db, kana_priority, course_priority, *, course_started=False):
-    """Priority 0..3 wins unchanged; rotate only when both candidates are new."""
+def choose_lane(db, kana_priority, course_priority, *, course_started=False, inside=None, kana_started=False):
+    """Priority 0..3 wins unchanged; rotate only when both candidates are new.
+
+    ``inside``: (kana head inside, course head inside) the learner's focus
+    scope, or None without a scope (design 12 H2). When both heads are at
+    tier 3 or above and only one is inside, that one goes first, unless the
+    head outside is an opened teaching block (``course_started``, or
+    ``kana_started``: an introduced kana whose first question is the head),
+    which goes on (H4). This holds also when the inside head is new work and
+    the outside one a due review (H2 as written; lead decision, design 12
+    section 12 WP-H). Tiers 0..2 and every other case keep the rule below (H5).
+    """
     if kana_priority is None:
         return "course" if course_priority is not None else None
     if course_priority is None:
         return "kana"
+    if (inside is not None and min(kana_priority[0], course_priority[0]) >= 3
+            and not (course_started and not inside[1]) and not (kana_started and not inside[0])):
+        from .arrangement.rules.focus import inside_first
+        lane = inside_first(*inside)
+        if lane is not None:
+            return lane
     if min(kana_priority[0], course_priority[0]) < 4:
         return "kana" if kana_priority <= course_priority else "course"
     if course_started:

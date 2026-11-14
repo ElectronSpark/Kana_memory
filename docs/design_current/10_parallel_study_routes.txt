@@ -1,0 +1,299 @@
+KanaMemory 平行学习路线设计（多路线共存、单份学习进度、依赖关系处理）
+状态：WP-R1–R5 已实现（I，2026-11-08：WP-R1 37029e6、WP-R2 42e59b7、WP-R3 62bb962、WP-R4a 7852533、WP-R4b c9ba6dd、WP-R5 339198e；合成数据单元、fake UI 与核心主线黄金对照验证，原生未验）。2026-11-08 起草，基于 0.32.0 工作树；可导入学习库 08 阶段 0–5 已实现。
+按 01 的 I/V/U/P 口径：第 1 节为现行代码事实盘点（I），第 13 节各 WP 完成行与行内标 I 处为已实现记录，其余各节为设计说明（P）。
+硬约束（CLAUDE.md）：不改 FSRS 参数、辅助证据权重、记录格式；保留学习 ID、题目快照、草稿、未完成队列、
+到期、评分幂等、防泄题与返回语义；纯规则不依赖 Toga/数据库；页面不新增 SQL 或 _db/_pending 访问；
+写事务归现有 Store；新文件默认私有，判为公开后入清单。
+
+目录
+  0 一句话方案
+  1 现状盘点（I）
+  2 目标与非目标
+  3 术语与总体模型
+  4 学习进度与路线分离：状态推导与跨路线影响
+  5 学习项依赖关系的处理（决定 D1–D8）
+  6 路线来源、规格与构建
+  7 持久化、备份、重置与迁移
+  8 调度、首页与“继续学习”
+  9 页面
+  10 与可导入学习库（08）的衔接
+  11 风险
+  12 开放问题（需用户决定）
+  13 实现方案（WP-R1…WP-R5）
+  14 测试策略
+  15 与现有文档的关系
+
+0 一句话方案
+学习路线只是对同一份学习项目录的“导航视图”（阶段→单元→小节→条目身份），不拥有进度；掌握情况仍由
+learning_unit（内容×能力，各自 FSRS）、study_card（假名×技能×书写系统）与事件表唯一保存。多条路线并存时，
+条目身份（内容 ID、kana:<id>:<script>）跨路线共享，每条路线的条目状态都是同一份项级状态的投影；
+“已选择学习”（reserved_entries）与“参考已读”（reference_read）是项级事实，跨路线共享；只有“整节已加入”
+（added_sections）是路线级记录。依赖关系属于学习项（全局唯一、所有路线共享），路线只能据此排序，不能放宽
+或新增硬前置。持久化只新增一个设置键 study_routes_v1（当前路线、各非核心路线的 added_sections 与规格），
+study_path_v1 与全部进度表不改。
+
+1 现状盘点（I，含代码定位）
+1.1 唯一一棵路线树
+- study_path_catalog.build_study_path(kana_rows, learning_items, extra_items) 用有效目录（含扩展库 contribution）
+  生成唯一一棵“阶段→单元→小节→条目”树；阶段表 STAGES、PATH_VERSION、COHERENCE_RULES、GRAMMAR_ROUTE_CONFIG、
+  PRONUNCIATION_ROUTE_CONFIG 是核心库 singleton（08 第 6.2 节）；WORD_TOPICS、GRAMMAR_TOPICS 等是 map_by_key/contribution。
+- 条目身份：学习项用内容 ID（词/语法/读音规则），假名用 kana:<id>:<script>；参考条目同身份、kind=reference。
+- 小节身份：section:<digest("<stage_id>|<unit_key>|<topic>|<depth>")>，单元 unit:<digest(stage|unit_key)>；
+  与这棵树绑定，没有路线维度。小节 depends_on 由其条目的项级 depends_on 聚合（owner 不同则成边），单元内与
+  单元间按前置先行做拓扑排序；_combine_micro_lessons/_weave_vocabulary 做小节合并与词汇穿插。
+1.2 路线状态与学习进度
+- 设置键 study_path_v1 = {version:1, added_sections[], reserved_entries[], reference_read[]}（study_path.validate_path_state）。
+  added_sections 记整节加入；reserved_entries 记用户选择学习的条目身份（含自动加入的前置）；reference_read 记已读参考。
+- 条目状态在读取时推导（StudyPathService._entry_states）：学习项按 learning_unit 的 stage（intro/guide/done、needs_teaching）；
+  假名按 reviewed_kana_rows、kana_introductions_v1、主队列中的身份；参考按 reference_read 或 practice_retired 且已复习。
+  即：进度本身已经是项级的，路线只决定“把哪些项放在一起看”。
+- 进度表（learning_unit/learning_question/learning_event/learning_evidence/study_card/review_event/session_*）没有任何路线字段。
+1.3 路线对调度的影响点
+- StudyPathService.plan_kana_queue/kana_advancement_targets 枚举 self.sections/self.entries 中 kind=kana 且身份在 reserved_entries 的条目。
+- add_sections/add_entries：按小节/条目闭包（learning_dependencies.build_dependency_plan、effective_dependencies、
+  prerequisite_status）入学，写 study_path_v1 与 learning_unit 在同一事务（LearningStore.enroll 的 _after_enroll 回调）。
+- 首页（study_path_runtime.refresh_study_home）读 overview 的 next_section、in_progress_sections、required_* 计数；
+  “开始下一小节/学习下一小节”调用 _add_study_sections；continue_study_path 的派题本身是项级（LearningStore.current、
+  ensure_kana_queue），不读路线。
+- 其他读 study_path_v1 的地方：explicit_learning_start（reserved_entries 判显式开始）、example_store（reserved_entries
+  判假名是否已加入）、progress_backup（validate_path_state）、learning_reset（删除该键）。
+1.4 依赖关系的现行层次（08 第 9.1 节 L1–L5）
+- L1 项级 depends_on（硬前置，首次教学先后）；L2 course_prerequisites 规则贡献；L3 题目 background_ids（出题门）；
+  L4 包级 references；L5 包级 depends_libraries。前置资格 independent_ready_ids 来自真实无辅助成功事件，全局。
+- effective_dependencies 对未动过且精确匹配指纹的已学项叠加当前目录的新增前置；已有真实作答/草稿/冻结结果的项
+  保留原前置集合（preserves_existing_route——此处“route”指该项自己的前置集合，与学习路线无关）。
+- 自报“我已了解前置”（checkpoint.prerequisite_acknowledged）是项级放行，不是成功证据。
+
+2 目标与非目标
+目标
+- 多条学习路线同时存在、同时可用：用户可在任一路线中加入小节/条目并学习，首页有“当前路线”。
+- 学习进度唯一：任何路线中的学习都更新同一份项级掌握状态；其他路线立即看到（同一次读取内一致）。
+- 依赖关系唯一：硬前置属于项，所有路线共享；路线只影响顺序与呈现。
+- 路线可来自核心库、扩展库（08）与用户目标（个人路线，分阶段）。
+- 现有唯一路线成为“核心主线”，其小节身份、顺序、首页文案在只有它一条时逐字节不变。
+非目标
+- 不做每路线独立进度、独立 FSRS、独立到期；不做“同一项在不同路线不同掌握度”。
+- 不改变任何题型、评分、辅助证据、四之二批引入、假名专项的规则；不新增每日配额。
+- 不做不重启的内容库热切换（08 R1 仍成立）；路线来自库时也是重启生效。
+- 不做路线间的“同步/合并进度”功能：无需同步，因为只有一份。
+
+3 术语与总体模型
+- 学习项（item）：有身份、有依赖、有进度的最小单位（内容 ID；假名则为 kana:<id>:<script>）。
+- 路线（route）：route_id、标题、来源库、阶段表、单元/小节分组与顺序、条目身份列表的只读导航树。
+  route_id = "route:<library_id>:<key>"；现有路线固定为 route:kanamemory.core:main（下称核心主线）。
+- 路线集（RouteSet）：启动时由有效目录（08 EffectiveCatalogue）构建的全部可用路线，进程内一次，clear_cache 重建。
+- 条目（entry）：路线中对某学习项的一次引用；条目身份＝项身份，同一项可出现在多条路线（每条路线内至多一处）。
+- 小节（section）：路线内的最小可整体加入单位；小节身份带路线作用域（核心主线保持旧公式，见 6.4）。
+- 路线状态（route state，路线级、持久）：该路线的 added_sections。
+- 项级选择（item intent，持久、跨路线）：reserved_entries、reference_read（仍在 study_path_v1）。
+- 项级进度（item progress，持久、唯一）：learning_unit/study_card/事件（不改）。
+- 当前路线（active route）：首页“下一小节/初学统计”所指的路线；设置项，可切换。
+  模型图：
+    有效目录 ──构建──> RouteSet{核心主线, 库路线…, 个人路线…}
+    项级进度（唯一） ──读时投影──> 每条路线的条目/小节/单元/阶段状态
+    项级选择（reserved/read，唯一） ──┘
+    路线状态（added_sections，每路线一份） ──> 该路线“做过整节加入”的记录
+
+4 学习进度与路线分离：状态推导与跨路线影响
+4.1 不变原则
+- 进度表零结构变化；进度写入只发生在现有 Store 写入口（enroll/submit/finalize/record_review/…），这些入口不接收
+  route_id，也不记录来源路线（12 Q4）。
+- 条目状态函数 entry_state(item_progress, item_intent, entry) 与路线无关；RouteSet 对所有路线共用同一次
+  _entry_states 计算（在 WP3 的 read_operation 内缓存一次），再按各路线的条目投影。
+4.2 跨路线影响矩阵（A 路线中的动作 → B 路线可见变化）
+  动作（在 A）                          项级结果                           B 中同一项/小节的表现
+  整节加入（add_sections）              项入学 intro，reserved 增加         条目 added；小节变 partial/added；B 的“下一小节”跳过全 added 节
+  按条目加入（add_entries）             同上（仅所选与其硬前置）           同上；B 中被动包含的前置也显示 added
+  完成初学（stage done）                learning_unit stage=done            条目 completed；小节 completed 则 B 统计 +1
+  取得真实无辅助成功                    independent_ready_ids 含该项        B 中以它为前置的项不再 blocked（无需任何写入）
+  参考已读                              reference_read 增加                 B 中同身份参考条目 completed
+  假名首次评分/复习                     study_card/review_event             B 中同 kana 条目 started/completed
+  停用题型/暂停项（study_item_controls）项级控制                           两条路线都不派题，状态文字一致
+  追加能力                              新 learning_unit                    两条路线无差别（能力不属于路线）
+  B 的 added_sections 不会因 A 的动作自动写入：它记录的是“用户在该路线做过整节加入”；但小节显示状态
+  （partial/added/completed）由条目推导，所以 B 看到的是真实情况。首页“已加入 N 节”按条目推导（fully_added），
+  核心主线今天就已如此（_overview 用 new_count==0），不依赖 added_sections 计数。
+4.3 “下一小节”的跨路线语义
+- 每条路线各自有 next_section（第一个有 new 条目且非可选的小节）。首页只显示当前路线的；路线页显示每条路线的。
+- 若 B 的下一小节的全部条目都已在 A 中学过，它自然不是“下一小节”（new_count==0）。
+4.4 复习与到期
+- 复习队列、到期、练习轮顺序（practice_round）均为项级，不区分路线；首页“现在可答/待到期”是全局数字。
+  路线页可显示“本路线待复习 N 题”作为投影（按条目身份过滤同一份到期集合），只读。
+
+5 学习项依赖关系的处理（决定）
+D1 硬前置唯一且全局：L1 项级 depends_on、L2 规则贡献、假名依赖（practice_kana_dependencies、读音规则）与 L4 包级
+   references 只属于学习项/内容库，所有路线共享同一份 effective_dependencies 与 prerequisite_status。
+D2 路线不能放宽硬前置：路线规格没有 waive/skip 字段；“我已了解前置”仍是项级自报（prerequisite_acknowledged），
+   在任一路线确认后对所有路线生效（它改的是项的 checkpoint，不是路线）。
+D3 路线不能新增硬前置：路线规格可声明软顺序 after:[entry_id…]（“本路线建议先学 X 再学 Y”），只参与该路线内
+   单元/小节的拓扑排序，不进入 prerequisite_status，不阻塞派题；软顺序成环时忽略并记诊断。
+D4 路线外前置照常入学：在路线 B 加入小节/条目时，仍以 build_dependency_plan 求硬前置闭包（含不在 B 中的项），
+   按 08 第 9.3 节 dependency_frontier 分批入学（首批＝词汇批量＋语法批量＋假名 5，可改“全部加入”）；
+   预览页把闭包分为“本路线内 N 项 / 其他路线 M 项 / 不在任何路线 K 项”，后两类标出所在路线名或“目录项”。
+   这些前置在它们所属路线中自然显示为 added/started（4.2）。
+D5 路线构建时的前置标注：小节 depends_on 仍由条目硬前置聚合；若前置项不在本路线，小节记 external_prerequisites
+   （身份列表），页面显示“前置在：<路线名>”或“前置不在任何路线（添加时自动加入）”。
+   核心主线覆盖全部目录项，external_prerequisites 恒为空，输出不变。
+D6 前置资格全局：independent_ready_ids 来自事件表；在任一路线取得的真实无辅助成功解锁所有路线中的后继，不写任何
+   路线状态。后来遗忘/暂停不撤销（03 第 5 节不变）。
+D7 库停用导致的前置缺失：沿用 08 第 9.2 节——已 ready 的前置保持 ready；否则后继 blocked，原因“前置所在的库已停用”；
+   该项所在的路线若也来自该库，整条路线按 10.2 处理。
+D8 同一项在不同路线中的“能力侧重”不改变依赖：能力是 learning_unit 维度，由设置与追加能力决定；路线规格首版不含
+   能力字段（12 Q5）。
+
+6 路线来源、规格与构建
+6.1 三类来源
+- 核心主线（I→保留）：由现有 build_study_path 用核心 singleton 配置构建；route_id=route:kanamemory.core:main；
+  覆盖有效目录中全部学习项与假名（含扩展库 contribution 进来的项，与今天一致）。
+- 库路线（P）：扩展库（或核心库自身）在教学分层新增命名空间 study_routes（合并策略 items_by_id，键为 route_id；
+  route_id 必须以本库 library_id 为前缀，否则预检拒绝）。一个库可带多条路线；路线只能引用有效目录中存在的身份〔R4b 注：此处“预检拒绝”按实现改为“预检警告、安装后忽略”——前缀不符或完整校验（validate_route_spec，含身份须在有效目录）失败的路线列入 PackPrecheck.route_errors，不阻塞安装；合并整条丢弃前缀不符者，RouteSet 跳过校验失败者，库行以 routes_ignored 显示；见第 13 节 R4b 与 08 第 16.6 节〕
+  （本库 provides 或 references 声明的项；缺失按 08 L4 语义：required 缺失→该条目 blocked_dependency 并在路线页显示）。
+- 个人目标路线（I，WP-R5 2026-11-08）：用户在添加页选择若干目标项后“保存为路线”，规格存 study_routes_v1.routes[route_id].spec
+  （route_id=route:local:<uuid>），内容＝目标身份列表＋可选分组；条目闭包在构建时由 build_dependency_plan 求出并
+  按 12 Q3 并入或只标 external。
+6.2 路线规格（study_routes 命名空间条目 / 个人路线 spec）
+  { route_id, title, description?, library_id, version,
+    stages: [ { id, title, optional?: bool,
+                units: [ { id?, title,
+                           sections: [ { id?, title, optional?: bool,
+                                         entries: [ "<content_id>" | "kana:<id>:<script>" | {id, kind: "reference"} … ],
+                                         after?: [ "<entry_id>" … ] } ] } ] } ],
+    build?: { kind: "filter", select: { tags?: [...], families?: [...], ids?: [...] } }   // 二选一：显式 stages，或由目录筛选自动分节
+  }
+  校验（纯规则 study_routes.validate_route_spec）：route_id 前缀、身份存在于有效目录、同一路线内条目身份不重复、
+  显式 stages 的 optional 标记合法、after 只引用本路线条目、总条目数上限（20000，与 validate_path_state 一致）。
+  build.kind="filter" 时用现有 build_study_path 的分组逻辑（_learning_route/_kana_route/coherence）在筛选出的子目录上
+  构建，使“JLPT N5 子集路线”之类不必手写小节。
+6.3 构建算法（纯规则 study_routes.build_route(spec, catalogue_view, kana_rows)）
+  1) 解析条目身份→条目记录（kind=learning/kana/reference，沿用 build_study_path 的条目字段）；
+  2) 条目硬前置＝目录 depends_on（入学期再按 effective_dependencies 重算，与今天一致）；
+  3) 小节 depends_on＝条目前置聚合（owner 在本路线内）；external_prerequisites＝owner 不在本路线的前置身份；
+  4) 排序：单元间、单元内按“硬前置先行 + 软顺序 after + 作者给定顺序”拓扑排序（复用 _topological/_merge_cyclic_units）；
+  5) 可选阶段/小节标记沿用 optional；
+  6) 输出与 build_study_path 同形的树（version、stages[...]），外加 route_id、library_id、external_prerequisites。
+6.4 小节与单元身份
+- 核心主线：保持现公式 section:<digest(stage|unit_key|topic|depth)>，使 study_path_v1.added_sections 与所有旧记录不变。
+- 其他路线：section:<digest(route_id|stage|unit|section_title|position)>、unit:<digest(route_id|stage|unit)>；
+  显式规格给了 id 时用 "<route_id>#<id>" 形式的稳定 id，升级库时作者可保持 id 不变。
+- 条目身份永远是项身份，不带路线前缀（否则进度无法共享）。
+
+7 持久化、备份、重置与迁移
+7.1 设置键
+- study_path_v1（不改）：reserved_entries、reference_read 继续作为项级选择；added_sections 继续作为核心主线的路线状态。
+- study_routes_v1（新，一条 JSON）：
+  { version: 1, active_route: "route:kanamemory.core:main",
+    routes: { "<route_id>": { added_sections: [...], enabled: true, source: "library"|"local", library_id,
+                             created_at_utc, spec?: {…个人路线规格…} } } }
+  校验函数 study_routes.validate_routes_state（形状、route_id 前缀、added_sections 去重与上限、active_route 存在或为核心）。
+  缺省（键不存在）＝只有核心主线、active_route 为核心主线：旧安装无需迁移。
+7.2 备份/恢复：progress_backup 导出携带 study_routes_v1 并校验形状（与 study_path_v1 同范式）；恢复时按原样写回；
+  路线所属库在本机不存在时，该路线状态保留、路线显示为“所属库未安装”（10.2），不拒绝恢复。
+7.3 learning_reset：与 study_path_v1 同样处理（一并删除）；个人路线 spec 是否保留见 12 Q6。
+7.4 写事务：路线状态写入沿用现有模式——add_sections/add_entries 在 LearningStore.enroll 的 _after_enroll 回调里
+  用同一连接写 app_setting（今天就是这样写 study_path_v1）；切换当前路线、启停路线用 StudyStore.set_setting。
+
+8 调度、首页与“继续学习”
+8.1 调度完全项级（不变）：LearningStore.current/counts、new_dispatch、first_teaching_dispatch、intro_batch、
+  practice_round、ensure_kana_queue 的提交半部，都不读路线。
+8.2 需要改为“全部已启用路线的并集”的读取点（今天只读唯一路线）：
+  - plan_kana_queue：候选 kana 条目＝并集中 kind=kana 且身份在 reserved_entries 的条目（按身份去重）。因 reserved_entries
+    本就是身份集合，等价写法是“reserved 中的 kana 身份 ∩ 有效目录中可练的假名”，与路线无关。
+  - kana_advancement_targets：同上。
+  - explicit_learning_start.candidates、example_store 的 reserved 判定：已按身份读 study_path_v1，不变。
+  - continue_study_path 的完成/等待页“下一小节”：取当前路线；若当前路线已无下一小节而其他路线有，
+    完成页列出“其他路线的下一小节”（最多 3 条）。
+8.3 首页
+  - 主按钮“继续学习/开始下一小节/查看学习路线”逻辑不变，但 next_section 与“主线初学完成 x/y 节”取当前路线，
+    文案改为“<路线短名> 初学完成 x/y 节”（核心主线短名“主线”，旧文案逐字不变）。
+  - has_work 中的 path["in_progress_sections"] 改为所有已启用路线的并集（避免“B 路线进行中”却显示“开始今天的学习”）。
+  - 次级区增加一行“其他路线：<路线名> 进行中 N 节 / 下一小节 <标题>”（仅当存在非当前路线且有进行中或可开始小节）。
+8.4 当前路线的切换：路线页顶部路线选择（列表＋“设为当前”）；切换只写 study_routes_v1.active_route，不影响队列。
+
+9 页面
+- 学习路线页（show_study_path）变为路线列表+当前路线树：列表项显示标题、来源库、进度（初学完成/已加入/进行中）、
+  “设为当前”；进入路线后沿用阶段→单元→小节→条目页，所有页面参数加 route_id（旧书签/返回栈中无 route_id 的按核心主线）。
+- 小节页：显示 external_prerequisites（“前置在：…”）；加入时的预览按 D4 分类显示。
+- 添加页（show_study_path_add）：选择树按当前路线；顶部可切换路线；保存为个人路线（WP-R5）。
+- 内容库页：库条目增加“本库提供的路线 N 条”。
+- 文案：不出现“同步进度”之类字样——没有同步这件事；用“同一进度，不同路线”。
+
+10 与可导入学习库（08）的衔接
+10.1 命名空间：新增 study_routes（items_by_id，键 route_id，前缀校验）；study_path_catalog 的 STAGES 等 singleton 规则不变
+  （它们只描述核心主线）。扩展库仍可按 contribution 向核心主线追加 WORD_TOPICS 等（现行为不变）。
+10.2 库停用/移除：该库路线从 RouteSet 消失；study_routes_v1 中其状态保留并标记“所属库已停用/未安装”（只读行），
+  当前路线若是它则回退为核心主线（读取时回退并在路线页提示，不写入）；其中的项按 08 第 7 节成为孤儿或保持可用
+  （若项由其他库提供）。再启用即恢复。
+10.3 升级：路线规格随库版本变化，小节 id 以规格 id 为准（6.4）；added_sections 中已不存在的小节 id 保留不删，
+  页面统计忽略（与核心主线今天对不存在 id 的处理一致）。
+10.4 预检：库预检页列出“本库路线 N 条、引用目录外身份 M 项（required/optional）”。
+
+11 风险
+R1 两条路线覆盖同一批项时，用户可能误以为是“两份进度”；靠文案（“同一进度”）与路线页的“在其他路线中已学 N 项”提示。
+R2 核心主线输出必须逐字节不变：构建路径重构要以黄金对照守住（小节 id、顺序、条目字段、首页文案）。
+R3 reserved_entries 继续是全局集合：从 B 加入的条目会让 A 中同身份条目显示 added，这是设计意图，但旧测试可能假设
+   “未在 A 加入则为 new”。
+R4 并集读取点漏改会让非核心路线中加入的假名不进队列：以表征测试覆盖 8.2 每个读取点。
+R5 个人路线闭包很大时的首学积压：沿用 dependency_frontier 分批。
+R6 route_id 冲突：库前缀强制 + 预检拒绝；个人路线用 local 前缀。
+
+12 开放问题（需用户决定）
+Q1 首页是否同时显示多条路线的“下一小节”（建议：只显示当前路线 + 一行“其他路线”摘要）。
+Q2 核心主线是否允许被隐藏/停用（建议：不允许，它是全部目录项的兜底视图）。
+Q3 个人路线的硬前置：构建时并入路线（显示为“自动加入的前置”单元）还是只标 external（建议：并入，单独成“前置”单元）。
+Q4 是否在诊断/事件中记录“来源路线”（建议：不记；进度表与事件表零变化，只在 UI 流转中传 route_id）。
+Q5 路线是否可声明能力侧重（如只练识别）（建议：首版不做，归入 P-02 假名同能力归一之后再议）。
+Q6 learning_reset 是否保留个人路线规格（建议：保留规格、清空 added_sections，与“删除学习数据不删设备配置”一致）。
+Q7 库路线是否允许引用不在本库 provides/references 中的核心项（建议：允许引用核心库任何项，但须在 references 中声明为 optional 以便预检）。
+
+13 实现方案（每个 WP 一个 Opus 子代理，严格文件所有权；不提交、不 push，由指挥会话按显式列表提交；
+    测试用 .venv/Scripts/python.exe，--basetemp 放 .test_runs/routes/<wp>/<轮次>/tmp；不碰 data/、resources/、research/）
+WP-R1 纯规则与构建（行为零变化）
+  所有权：新建 study_routes.py（规格/状态校验、route_id 规则、build_route、external_prerequisites、软顺序排序）；
+  study_path_catalog.py（把 build_study_path 内部拆为“条目记录生成”“分节与排序”两段供 build_route 复用；
+  核心主线仍走原函数签名）；tests/test_study_routes.py。
+  验收：核心主线 build_study_path 输出（全部小节 id、顺序、条目字段、363 小节摘要）与改前逐字节相等（黄金对照，
+  证据 .test_runs/routes/r1）；合成规格路线的构建、排序、external 标注、成环拒绝、身份缺失拒绝有测试。
+  完成（2026-11-08）：[I] 新纯规则 study_routes（CORE_ROUTE_ID/ROUTES_SETTING、route_id/parse_route_id/local_route_id、validate_route_spec、validate_routes_state/default_routes_state、build_route 显式与 filter 两种构建、external_prerequisites、软顺序成环忽略并记 diagnostics、annotate_core_route）；study_path_catalog.build_study_path 拆为 study_path_records 与 assemble_study_path，核心主线黄金对照逐字节相等（363 小节，.test_runs/routes/r1/compare.txt）；tests/test_study_routes.py。Q1–Q7 按建议值；未接入服务/页面（WP-R2 起）。
+WP-R2 路线集与服务
+  所有权：study_path.py（StudyPathService → 持有 RouteSet；overview/section/plan_next/add_sections/add_entries/
+  reference_* 加 route_id 参数，默认核心主线；_entry_states 在 read_operation 内一次计算共用；plan_kana_queue/
+  kana_advancement_targets 改为并集）；study_routes_v1 的读写（validate/默认/写入，放 study_routes.py）；
+  progress_backup.py（新键校验）；learning_reset.py；tests/test_study_path_routes.py。
+  验收：只有核心主线时 overview/next_section/add_sections 结果与改前逐项相等，派题与到期逐项不变（复用 wp7a 探针）；
+  两路线场景：A 加入→B 显示 added；A 完成→B completed；A 取得前置成功→B 后继不再 blocked；B 的闭包含 A 的项时
+  预览分类正确；备份往返含 study_routes_v1；reset 行为按 Q6。
+  完成（2026-11-08）：[I] study_routes 追加 RouteSet/build_route_set（核心主线在前、其余按 route_id；库路线取 EffectiveCatalogue.study_routes()，个人路线取 study_routes_v1 中 source=local 的 spec；校验失败跳过并记 RouteSet.diagnostics 与 content_library/read 诊断；已构建树按 token+规格+目录摘要进程内复用）与 study_routes_v1 纯变换（routes_state/route_row/with_route_sections/with_active_route/reset_routes_state）；StudyPathService 全部公开方法加可选 route_id（缺省核心主线，返回结构不变），_entry_states 拆为 _state_context（项级输入，read_operation 内一次）+_entry_status，各路线投影共用；非核心路线 added_sections 写 study_routes_v1（与 study_path_v1、enroll 同一事务），reserved_entries/reference_read 仍在 study_path_v1；显式 route_id 时 add_*/preview 结果带 closure_by_route 与 closure_entry_ids_by_route（D4，未接 dependency_frontier，入学数量语义不变）；plan_kana_queue/kana_advancement_targets/kana_catalogue 为已启用路线并集；新增 routes_overview/active_route_id/set_active_route/set_route_enabled/route_state/entry_owners/route_set，停用库的路线状态保留、当前路线读取侧回退核心主线；progress_backup 校验 study_routes_v1；learning_reset 按 Q6 清空各路线 added_sections 并回到核心主线、保留 local spec 与 enabled（无行时删键）。只有核心主线时服务黄金对照与 wp7a 探针（表哈希/到期/派题）逐项相同（.test_runs/routes/r2）；tests/test_study_path_routes.py。
+WP-R3 运行时与页面
+  所有权：study_path_runtime.py（refresh_study_home 的当前路线、并集 in_progress、其他路线摘要；continue 完成页的
+  其他路线下一小节）、study_path_ui.py（路线列表、route_id 贯穿各页、external 显示、切换当前路线）、
+  study_path_selection.py（按路线）、app.py 的 _add_study_sections 签名、content_library_ui.py 的“本库路线 N 条”行；
+  tests/test_study_path_ui*.py、首页测试。
+  验收：只有核心主线时首页文案逐字不变（黄金对照首页文本）；fake UI 覆盖切换路线、从 B 加入、完成页其他路线入口。
+  完成（2026-11-08）：[I] study_path_runtime：refresh_study_home 取当前路线（active_route_id）的 next_section 与计数，统计行“<路线短名> 初学完成 x/y 节”（核心主线短名“主线”，旧文案逐字不变），has_work 并入其他已启用路线的进行中小节，次级区最多 2 行“其他路线：<标题> 进行中 N 节 / 下一小节 <标题>”（点进该路线页，不改当前路线）；study_path_service 缓存键加入 study_routes_v1 中各行的 enabled 与个人路线 spec（routes_service_key；active_route/added_sections 变化不重建）；continue 完成页取当前路线的下一小节，当前路线无下一小节时列“其他路线的下一小节”（最多 3 条）；app.py 的本批完成/等待复习页经 current_route_next 取当前路线。study_path_ui：show_study_path 顶部路线列表（仅有其他路线或已存路线行时；标题、来源库 library_titles、progress_text、“所属库已停用”只读行、查看/设为当前、非核心路线启用开关，Q2 核心主线无开关），下方为所查看路线的阶段树；show_study_stage/unit/section/reference、mark_study_reference_read、show_study_path_add、_add_study_sections、add_next_study_sections 贯穿可选 route_id（缺省核心主线；路线页与添加页缺省当前路线），核心主线调用服务时不传 route_id；小节页显示 external_prerequisites（“前置在：<路线>（N 项）”/“前置不在任何路线（添加时自动加入）”）；添加页按路线建树、顶部“改看<路线>”只切换本页路线，非核心路线显示 closure_by_route 文案“本路线内 N 项 · 其他路线 M 项（其中主线 M 项…）· 目录项 K 项”，路线外前置在前置列表中按全目录标题显示；StudyPathSelection.route_id。只有核心主线时首页三处文本、路线/阶段/单元/小节/添加页文本在合成与真实目录下与 HEAD 逐字相同（.test_runs/routes/r3）；tests/test_study_routes_ui.py。“保存为路线”留给 WP-R5；learning_ui.learning_next_content_controls 仍取核心主线（不在本 WP 所有权）。
+WP-R4 内容库接入
+  所有权：content_library_merge.py（study_routes 命名空间 items_by_id + 前缀校验）、content_library_rules.py（预检
+  统计路线数/目录外引用）、content_pack.py（RouteSet 随 EffectiveCatalogue 构建/缓存/清理）、tools/package_library_pack.py
+  （--route 从 JSON 规格写入 study_routes；测试扩展库附带一条路线）、content_library_service.py（library_status 与
+  10.2 的回退）；tests/test_content_library_routes.py。
+  验收：装/停用带路线的合成扩展库的往返：路线出现/消失、added_sections 保留、当前路线回退；核心库结果逐项不变。
+  R4a 完成（2026-11-08）：study_routes 命名空间（items_by_id，载荷 {routes:{route_id:规格}}，前缀 route:<library_id>: 不符整条忽略并记 MergeReport.refused_entries/EffectiveCatalogue.refused_routes 与诊断，不抛）、预检路线统计与目录外身份分类（rules.route_spec_problems 形状前检）、打包工具 --route/--sample-route 与 manifest provides.routes、libraries() route_count、内容库页“本库路线 N 条”；RouteSet 构建、停用回退与 added_sections 往返留给 R4b。证据 .test_runs/routes/r4a；详见 08 第 16.6 节。
+  R4b 完成（2026-11-08）：[I] content_pack.clear_cache 同时调用 study_routes.clear_route_cache（R2 未解决问题 2），有效目录重建后已构建路线树不再复用、注册表变化（停用/启用）使 token 变化并重建；安装预检在 route_spec_problems 形状前检后对每条路线做 study_routes.validate_route_spec 完整校验（catalogue_ids=已装有效目录 ∪ 本库 provides，kana_identities 取假名表，ContentLibraryService(kana_identities=) 注入，内容库页从 repo.kana_list() 提供；未注入时把路线自身的假名条目视为已知），失败者列入 route_errors（警告级，不阻塞，安装后忽略；6.1 已加注）；libraries() 行增 routes_ignored 与 routes_ignored_reasons（合并拒绝的前缀不符者 + 当前有效目录下完整校验失败者，即 RouteSet 会跳过的路线），库列表显示“已忽略路线 N 条”与原因；打包工具为缺 library_id/version 的手写规格补本库 ID 与 1。端到端测试：--rewrite-ids --sample-route 合成库经服务安装→重启重建目录→routes_overview 出现该路线→加入一节并设为当前→停用重启后只剩只读行、added_sections 保留、当前路线读取侧回退→再启用恢复，全程（注册表键除外）表哈希只在加入一步变化。test_engineering_read_work 的 BASELINE 漂移定位到 498920b（概览新增 unavailable_added 键），与资源/内容包 v2 重建及路线提交无关，已按测试注释重算摘要（SQL 上限不变）。只有核心库时合同哈希与 R4a 逐项相同。证据 .test_runs/routes/r4b；详见 08 第 16.6 节。
+WP-R5 个人目标路线（可后置）
+  所有权：study_routes.py（local 规格）、study_path_ui.py 添加页“保存为路线”、study_path.py（创建/删除个人路线）。
+  验收：从选择创建路线→闭包按 Q3 处理→加入与学习→删除路线不影响进度。
+  完成（2026-11-08）：[I] study_routes 追加纯规则 personal_route_spec（route:local:<uuid4 hex 或传入 key>、显式 stages：目标项按 study_path_records 的单元键/主题分组、深度按路线内硬前置重算以免同单元小节成环；build_dependency_plan 在条目记录上求硬前置闭包，目标集合外的前置单独成更早的“前置”阶段（Q3），需要目标项的前置留在“目标”阶段；version 为服务传入的创建时刻 UTC 戳（纯规则不读时钟，未传为 1）；经 validate_route_spec(library_id="local")，条目数受 MAX_ROUTE_ENTRIES 约束）、personal_route_title（≤60 字）、renamed_route_spec、with_personal_route/with_route_spec/without_route（删除当前路线时 active_route 回核心主线）；pure_imports 增 datetime/uuid/.learning_dependencies。StudyPathService 增 create_personal_route（先 build_route 试建再经 StudyStore.set_setting 写 study_routes_v1.routes[route_id]={added_sections:[],enabled:true,source:"local",library_id:"local",created_at_utc,spec}，RouteSet 置空重建，返回 route_id）、delete_personal_route（只删该行，study_path_v1 与进度表不动）、rename_personal_route；routes_overview 中无效个人路线的只读行用规格标题。study_path_ui 添加页底部“保存为路线”（有选择时可用，内嵌标题输入，创建后打开该路线页并提示“已创建路线，同一进度，不同路线”，不切换当前路线、不加入学习）；路线列表个人路线行“删除路线”→内嵌二次确认（“只删路线，不删进度…”）。learning_ui.learning_next_content_controls 经 current_route_next 取当前路线的下一小节，当前路线无下一小节时列“其他路线的下一小节”（最多 3 条），与 continue 完成页一致；核心主线为当前路线时调用与文案不变。只有核心主线时服务黄金对照逐字节相同；页面黄金对照仅添加页多出“保存为路线”按钮，其余逐字相同（.test_runs/routes/r5）；tests/test_personal_routes.py（依赖打包假名资源，按私有处理）。Q3/Q6 按建议值。
+顺序与并行：R1 → R2 → (R3 ∥ R4) → R5。R1、R2 串行是因为共用 study_path_catalog/study_path；R3 与 R4 文件不重叠。
+每个 WP 结束跑 check_python；新模块入 tools/public_source_files.txt 与 tools/architecture_policy.json；文档 07 加 I 段，
+本文第 13 节逐 WP 标 I。
+
+14 测试策略
+- 黄金对照（必须）：核心主线树、首页文案、派题/到期/全部表哈希在“只有核心主线”下逐项不变。
+- 表征测试：8.2 每个并集读取点在“kana 只在路线 B 加入”时仍进队列/仍出现在 advancement targets。
+- 跨路线矩阵（4.2）逐行有测试；D1–D7 各有测试（尤其 D3 软顺序不阻塞、D4 闭包分类、D6 全局资格）。
+- 备份：含 study_routes_v1 的往返；旧备份无该键照常恢复。
+- 原生（有界、QA 包、合成数据）：装一条扩展路线→切换当前路线→从该路线加入→学习→回核心主线看到状态→停用库→回退。
+
+15 与现有文档的关系
+- 02 第四节“学习路线”在实现后改写为多路线描述；03 不变（调度项级）；07 增加 I 段；08 第 6.2 节 singleton 说明
+  指向本文第 10.1 节（study_routes 为 items_by_id），第 9 节依赖层次不变，本文第 5 节只是在其上明确“路线不改依赖”。
+- 05 待实现清单建议新增 P-08 “平行学习路线”，指向本文。

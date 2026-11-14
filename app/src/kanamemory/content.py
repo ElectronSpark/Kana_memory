@@ -55,7 +55,11 @@ class ContentRepository:
             raise FileNotFoundError(f"Content database not found: {self.path}")
         self._db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
         self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA query_only = ON")
+        # query_only: the content database is never written. temp_store: Android gives SQLite no
+        # writable temp directory, so a sort that outgrows the page cache must stay in memory, or
+        # the query fails with "disk I/O error" (0.34.0 native retest, D1).
+        for setting in ("query_only = ON", "temp_store = MEMORY"):
+            self._db.execute("PRAGMA " + setting)
         self._practice_word_candidates_cache = {}
         self._kana_records_cache = None
         self._kana_context_symbols_cache = {}
@@ -288,16 +292,29 @@ class ContentRepository:
         return {"total": page["total"], "rows": [self.get_example(r["id"]) for r in page["rows"]]}
 
     def kana_words(self, kana_id: str, limit: int = 20) -> list[dict]:
-        rows = self._db.execute("SELECT w.*,kw.reading AS matched_reading,kw.match_kind AS kana_match_kind FROM kana_word kw JOIN word w ON w.id=kw.word_id WHERE kw.kana_id=? ORDER BY CASE kw.match_kind WHEN 'whole_token' THEN 0 ELSE 1 END,kw.teaching_rank,w.rank,w.id", (kana_id,))
-        found, results = set(), []
-        for row in rows:
-            if row["id"] in found:
+        """The first words of a kana in teaching order, one row per word (its best-ranked match).
+
+        The order is decided on the narrow link rows; only the chosen words are
+        read in full. Sorting whole word rows (several MB for a common kana)
+        made SQLite spill to a temporary file, which Android cannot create.
+        """
+        count = max(1, min(100, int(limit)))
+        db = self._db
+        links = db.execute(
+            "SELECT kw.word_id,kw.reading,kw.match_kind FROM kana_word kw JOIN word w ON w.id=kw.word_id "
+            "WHERE kw.kana_id=? ORDER BY CASE kw.match_kind WHEN 'whole_token' THEN 0 ELSE 1 END,"
+            "kw.teaching_rank,w.rank,w.id", (kana_id,))
+        found, chosen = set(), []
+        for word_id, reading, match_kind in links:
+            if word_id in found:
                 continue
-            found.add(row["id"])
-            results.append(self._record(row))
-            if len(results) >= max(1, min(100, int(limit))):
+            found.add(word_id)
+            chosen.append((word_id, reading, match_kind))
+            if len(chosen) >= count:
                 break
-        return results
+        return [self._record(db.execute(
+            "SELECT w.*,? AS matched_reading,? AS kana_match_kind FROM word w WHERE w.id=?",
+            (reading, match_kind, word_id)).fetchone()) for word_id, reading, match_kind in chosen]
 
     def practice_words(self, include_research: bool = False) -> list[dict]:
         """Research words require a separate, explicit caller opt-in."""

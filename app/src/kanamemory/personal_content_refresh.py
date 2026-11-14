@@ -19,7 +19,8 @@ def refresh_return(app, previous):
     elif name == 'word_detail' and identity:
         callback = lambda: app.show_word_detail(identity)
     elif name == 'learning_detail' and identity:
-        item = next((r for r in app.learning_items_available() if r['id'] == identity), None)
+        from copy import deepcopy
+        item = deepcopy(next((r for r in app.learning_items_available(views=True) if r['id'] == identity), None))
         if item: callback = lambda: app.show_learning_detail(item)
     elif name in {'item_examples', 'example_library', 'lexical_example_library'}:
         field, method = {'item_examples': ('_item_examples_state', '_render_item_examples'),

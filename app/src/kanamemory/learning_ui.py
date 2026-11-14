@@ -15,14 +15,15 @@ import re
 from .navigation import page_view
 from .answer_autoplay import autoplay_answer
 from .answer_speech import clean_utterance, completed_cloze_utterance, pronunciation_utterance
-from .answer_result_ui import answer_text
-from .learning_content import learning_items, get_learning_item, learning_item_from_word
+from .answer_result_ui import answer_text, shown_answer, shown_explanation
+from .learning_content import learning_items, learning_item_views, get_learning_item, learning_item_from_word
 from .learning_questions import (build_learning_question, question_kinds, grade_learning_answer, TEXT_KINDS,
                                  PRONUNCIATION_KINDS, KIND_ABILITIES, LISTENING_KINDS, OPT_IN_LISTENING_KINDS,
-                                 AUDIO_WORD_KIND, READING_CHOICE_KIND, SOUND_PREFERENCE_VERSION,
+                                 AUDIO_WORD_KIND, READING_CHOICE_KIND, CONTEXT_CHOICE_KIND,
+                                 PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION,
                                  audio_ready_kinds, stored_enabled_kinds)
 from .question_instruction_ui import instruction_widgets
-from .question_support import clean_prompt_preferences, build_prompt_block, prompt_audio_text, prompt_support, accent_caption, learning_text_role, _plain_prompt_parts
+from .question_support import clean_prompt_preferences, build_prompt_block, prompt_audio_text, prompt_support, accent_caption, learning_text_role, _plain_prompt_parts, option_labels
 from .typography import configure_text_role, configure_study_ranges
 from .example_ui import ExampleUIMixin
 from .structured_lesson_ui import teaching_block, original_notes, block_widget
@@ -31,12 +32,23 @@ from .ai_ui import AIUIMixin
 from .learning_pitch_ui import LearningPitchUIMixin, answer_diagram
 from .pitch_practice import is_pitch_question, answer_label as pitch_answer_label, editor_draft as pitch_editor_draft
 from .new_dispatch import study_path_available
+from .intro_batch_ui import IntroBatchUIMixin, INTRO_BATCH_PAGES
+from .content_library_ui import ContentLibraryUIMixin
 from . import ui_components as u
 
-LEARNING_ACTIVE = {"learning_familiarity", "learning_intro", "learning_prerequisite", "learning_guide", "learning_question", "learning_feedback", "study_reference"}
+LEARNING_BUSY_STATUS = "草稿暂未保存（数据库正忙），继续输入或提交时会重试。"
+
+LEARNING_ACTIVE = {"learning_familiarity", "learning_intro", "learning_prerequisite", "learning_guide", "learning_question", "learning_feedback", "study_reference"} | INTRO_BATCH_PAGES
 LEARNING_PAGES = LEARNING_ACTIVE | {"learning_wait", "learning_done"}
 LEARNING_PREFS = "learning_preferences_v1"
 PROMPT_PREFS = "prompt_display_v1"
+# The orientation screen (design 12 UI1) and the settings button that opens it.
+STUDY_ORIENTATION_TITLE = "学习取向"
+# One queue pass spends at most this long exchanging withdrawn tasks (always at least one): a learner may
+# have dozens queued, each exchange plans a task for its lesson, and the pass runs on the main thread when a
+# round starts. The rest follow at later passes, the soonest answerable first, and one that is reached before
+# its turn is exchanged when it would be shown (LearningUIMixin._replace_withdrawn_questions).
+WITHDRAWN_PASS_SECONDS = 0.5
 EXAM_COMMON_CATEGORY = "考试与常用补充"
 EXAM_COMMON_TRACK = "exam-common-20261025"
 KIND_LABELS = {
@@ -46,44 +58,117 @@ KIND_LABELS = {
     "grammar_transform": "活用与转换", "grammar_reorder": "句子重组", "targeted_correction": "找错并修正",
     "reading_comprehension": "短篇理解", "listening_comprehension": "短句听力", "controlled_sentence_production": "受控造句",
     "pronunciation_rule": "读音规则辨析", "pronunciation_application": "读音规则应用",
-    AUDIO_WORD_KIND: "听词选词", READING_CHOICE_KIND: "看词选读音",
+    AUDIO_WORD_KIND: "听词选词", READING_CHOICE_KIND: "看词选读音", CONTEXT_CHOICE_KIND: "读句选词",
 }
 KIND_GROUPS = {
     "理解与辨析": {"vocab_meaning", "vocab_zh_ja_contrast", "grammar_meaning", "reading_comprehension"},
     "读法与词汇提取": {"vocab_reading", READING_CHOICE_KIND, "vocab_recall", "vocab_orthography", "vocab_usage"},
     "听词选词": {AUDIO_WORD_KIND},
+    "读句选词（无中文）": {CONTEXT_CHOICE_KIND},
     "语法应用": {"grammar_cloze", "grammar_transform", "grammar_reorder", "targeted_correction", "controlled_sentence_production"},
     "听力理解": OPT_IN_LISTENING_KINDS,
     "读音规则": set(PRONUNCIATION_KINDS),
 }
 
 
-class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, ExampleUIMixin):
-    def _learning_prompt_block(self, question, preferences=None, *, size=20):
-        return build_prompt_block(self, question, preferences, size=size)
+ALL_LIBRARIES = "全部库"
 
-    def _learning_context_support(self, question):
-        """Show only locally reviewed background help, never raw hint fields."""
+
+_SELF_GLOSS = re.compile(r"(?P<word>[^（）：:]+)（(?P<reading>[^（）]+)）[：:]\s*(?P<gloss>.+?)[。．.]?")
+
+
+def without_self_gloss(text):
+    """'X（读音）：X' whose gloss only repeats the headword -> 'X（读音）'.
+
+    A display rule for the feedback explanation: other lines, and a gloss
+    that differs from the headword, are returned unchanged.
+    """
+    lines = []
+    for line in str(text or "").splitlines():
+        match = _SELF_GLOSS.fullmatch(line.strip())
+        if match and match["gloss"].strip() == match["word"].strip():
+            line = f"{match['word'].strip()}（{match['reading']}）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, ExampleUIMixin,
+                      ContentLibraryUIMixin):
+    def _learning_prompt_block(self, question, preferences=None, *, size=20, known_ids=None):
+        return build_prompt_block(self, question, preferences, size=size, known_ids=known_ids)
+
+    def _learning_context_support(self, question, known=None):
+        """Show only locally reviewed background help, never raw hint fields.
+
+        known: the page's one course_planning.known_ids read; read here when the caller has none.
+        """
         from .question_support import learning_question_display
         from .learning_dependencies import independent_ready_ids
         display = learning_question_display(question)
         children = []
         if display.get("context_hint"):
             children.append(u.label(display["context_hint"], size=13, color=u.MUTED))
+        hints, ready = [], None
         if display.get("background_glosses"):
-            known = independent_ready_ids(self.learning_store)
-            hints = [hint for hint in display["background_glosses"] if hint.get("target_id") not in known]
-            if hints:
-                parts, ranges, offset = [], [], 0
-                for surface, meaning in dict.fromkeys((hint["surface"], hint["meaning"]) for hint in hints):
-                    part = surface + "：" + meaning
-                    parts.append(part)
-                    ranges.append((offset, offset + len(surface)))
-                    offset += len(part) + 3
-                note = u.label(" · ".join(parts), size=13, color=u.MUTED)
-                configure_study_ranges(note, ranges)
-                children.append(note)
+            ready = independent_ready_ids(self.learning_store)
+            hints = [hint for hint in display["background_glosses"] if hint.get("target_id") not in ready]
+        # Design 11 D5 (1T): an unmet declared word (not yet introduced) is glossed from its lesson,
+        # unless an earlier successful review already made it familiar (the same rule as above).
+        from .question_support import shared_requirements, unmet_requirement_glosses
+        if known is None:
+            from .course_planning import known_ids
+            known = known_ids(self.store.queries)
+        # One lookup of the question's template for the word glosses and the rule hints below.
+        requires = shared_requirements(question)
+        unmet = unmet_requirement_glosses(question, known, requires=requires)
+        if unmet:
+            ready = independent_ready_ids(self.learning_store) if ready is None else ready
+            spans = [(old["start"], old["end"]) for old in hints
+                     if type(old.get("start")) is int and type(old.get("end")) is int]
+            unmet = [hint for hint in unmet if hint["target_id"] not in ready
+                     and not any(start < hint["end"] and hint["start"] < end for start, end in spans)]
+            hints = sorted([*hints, *unmet], key=lambda hint: hint.get("start", 0))
+        if hints:
+            parts, ranges, offset = [], [], 0
+            for surface, meaning in dict.fromkeys((hint["surface"], hint["meaning"]) for hint in hints):
+                part = surface + "：" + meaning
+                parts.append(part)
+                ranges.append((offset, offset + len(surface)))
+                offset += len(part) + 3
+            note = u.label(" · ".join(parts), size=13, color=u.MUTED)
+            configure_study_ranges(note, ranges)
+            children.append(note)
+        children.extend(self._unmet_rule_hint_rows(question, known, requires))
         return children
+
+    def _unmet_rule_hint_rows(self, question, known, requires=None):
+        """One collapsed row per rule the question shows before its lesson (design 11 section 5, D8).
+
+        Opening a row shows the rule lesson's short text in place; nothing is saved
+        and it is not counted as help on the target.
+        """
+        from .question_support import unmet_rule_hints
+        return [self._unmet_rule_hint_row(hint) for hint in unmet_rule_hints(question, known, requires=requires)]
+
+    @staticmethod
+    def _unmet_rule_hint_row(hint):
+        title = "还没学的规则：" + hint["title"]
+        body = u.col()
+        opened = False
+
+        def toggle(widget=None, **kwargs):
+            nonlocal opened
+            opened = not opened
+            body.clear()
+            if opened:
+                body.add(*(u.label(line, size=13, color=u.MUTED) for line in hint["lines"]))
+            trigger.text = title + (" ▾" if opened else " ▸")
+
+        trigger = u.button(title + " ▸", toggle, compact=True, multiline=True,
+                           font_size=12, color=u.MUTED, margin_bottom=2)
+        row = u.col(trigger, body, margin_bottom=4)
+        row._unmet_rule_hint = hint["id"]
+        return row
 
     def _ensure_kana_introduction_checkpoint(self, question):
         """Persist a just-created queue before teaching can return from show_question.
@@ -225,7 +310,9 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if delay <= 0 and not getattr(self, "_leave_confirmation_active", False):
             self.check_learning_wait()
         else:
-            self._review_wait_handle = self.loop.call_later(
+            from .draft_debounce import call_later_awake
+            # Armed from native-callback chains too: wake Toga Android's loop.
+            self._review_wait_handle = call_later_awake(self.loop,
                 max(1, min(60, delay)), self.tick_learning_wait, token, due)
 
     def continue_added_learning(self, widget=None, **kwargs):
@@ -269,14 +356,28 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         enabled = stored_enabled_kinds(self.store.get_setting(LEARNING_PREFS, {}))
         return [k for k in KIND_LABELS if k in enabled]
 
-    def learning_items_available(self):
-        items = {item["id"]: item for item in learning_items()}
+    def learning_items_available(self, *, family=None, views=False):
+        """Catalogue, enrolled and retained AI items, resolved; with ``family`` only that family's, in the same order.
+
+        Catalogue rows of other families are then never copied: with a large
+        library that copy, not the page, was most of a library render (N8UI).
+        ``views``: for a page that only reads (the library list), catalogue
+        rows are learning_item_views (their question templates are neither
+        copied nor, for an extension library, decoded); deepcopy(row) is the
+        plain item, which is what the list hands to its handlers.
+        """
+        keep = lambda item: family is None or item.get("family") == family  # noqa: E731
+        listed = learning_item_views if views else learning_items
+        items = {item["id"]: item for item in (listed() if family is None else listed(family))}
         catalogue = set(items)
         for item in self.learning_store.list_items():
-            items.setdefault(item["id"], item)
+            if keep(item):
+                items.setdefault(item["id"], item)
         from .ai_materials import AIMaterialStore
-        for item in AIMaterialStore(self.store, list(items.values())).retained_items():
-            items.setdefault(item["id"], item)
+        # retained_items() reads only the store; known items would be a full copy of the catalogue for nothing.
+        for item in AIMaterialStore(self.store).retained_items():
+            if keep(item):
+                items.setdefault(item["id"], item)
         from .kana_rule_evidence import teaching_overlay
         from .personal_content_versions import resolve as personal_version, teaching_source
         # Catalogue rows are already reviewed, independent snapshots: copying
@@ -442,31 +543,60 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         show_romaji_tool(self, u)
 
     @page_view()
-    def show_learning_library(self, widget=None, *, family="grammar", offset=0, query="", category="全部主题", **kwargs):
+    def show_learning_library(self, widget=None, *, family="grammar", offset=0, query="", category="全部主题",
+                              library=ALL_LIBRARIES, **kwargs):
+        from .content_availability import AVAILABLE, state_text
+        from .content_library_rules import CORE_LIBRARY_ID
+        from .content_library_service import library_titles
         self._library_family = family
+        # 08 section 5.1: one availability read for this page (no SQL here).
+        availability = self.learning_store.availability()
+        titles = library_titles(self.store)
+
+        def library_label(item):
+            if item["id"].startswith("local:"):
+                return "个人材料"
+            provider = availability.catalogue.provider(item["id"])
+            if provider is None and availability.available(item["id"]):
+                provider = CORE_LIBRARY_ID
+            return titles.get(provider, "不可用的库") if provider else "不可用的库"
         # Two columns remain readable at enlarged system font sizes.
         children = [u.row(
             u.button("假名", self.show_kana, flex=1, compact=True),
             u.button("单词", lambda w: self.show_learning_library(family="word"), flex=1, compact=True)),
             u.row(u.button("语法", lambda w: self.show_learning_library(family="grammar"), flex=1, compact=True),
                   u.button("读音规则", lambda w: self.show_learning_library(family="pronunciation"), flex=1, compact=True))]
-        all_items = [item for item in self.learning_items_available()
+        all_items = [item for item in self.learning_items_available(family=None if family == "pronunciation" else family,
+                                                                    views=True)
                      if (item.get("domain") == "pronunciation" if family == "pronunciation" else
                          item["family"] == family and item.get("domain") != "pronunciation")]
+        states = {item["id"]: availability.state_of(item["id"], {"dictionary_only": item.get("dictionary_only") is True})
+                  for item in all_items}
+        # Library tags/filter appear once more than one library is involved.
+        multiple = len(titles) > 1 or any(state != AVAILABLE for state in states.values())
+        labels = {item["id"]: library_label(item) for item in all_items} if multiple else {}
+        library_names = [ALL_LIBRARIES, *dict.fromkeys(labels.values())]
+        library = library if library in library_names else ALL_LIBRARIES
         tracks = [EXAM_COMMON_CATEGORY] if any(item.get("curriculum_track") == EXAM_COMMON_TRACK for item in all_items) else []
         categories = ["全部主题", *tracks, *dict.fromkeys(item.get("category", "基础") for item in all_items)]
         category = category if category in categories else "全部主题"
         self.learning_library_query = u.toga.TextInput(value=query, placeholder="搜索形式、读法或中文说明", style=u.Pack(margin_bottom=6))
         self.learning_library_category = u.selection(items=categories, value=category, style=u.Pack(margin_bottom=8))
+        self.learning_library_owner = (u.selection(items=library_names, value=library, style=u.Pack(margin_bottom=8))
+                                       if multiple else None)
+
         def filter_library(widget=None):
             self.show_learning_library(family=family, query=self.learning_library_query.value or "",
-                                       category=self.learning_library_category.value)
+                                       category=self.learning_library_category.value,
+                                       library=self.learning_library_owner.value if self.learning_library_owner else ALL_LIBRARIES)
         self.learning_library_category.on_change = filter_library
         self.learning_library_query.on_confirm = filter_library
+        if self.learning_library_owner is not None:
+            self.learning_library_owner.on_change = filter_library
         # Android EditText keeps a large intrinsic minimum width. A sibling
         # button in that row can be pushed completely off-screen, even at 100%.
         children.extend([self.learning_library_query, u.button("搜索", filter_library, compact=True),
-                         self.learning_library_category])
+                         self.learning_library_category, *([self.learning_library_owner] if multiple else [])])
         if family == "word":
             children.append(u.button("查找全部词库", self.show_words))
         children.append(u.button("例句库", self.show_example_library, compact=True))
@@ -474,16 +604,21 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         needle = query.strip().casefold()
         items = [item for item in all_items if (category == "全部主题" or item.get("category", "基础") == category
                  or category == EXAM_COMMON_CATEGORY and item.get("curriculum_track") == EXAM_COMMON_TRACK)
-                 and (not needle or needle in " ".join(str(item.get(k, "")) for k in ("title", "reading", "meaning", "category")).casefold())]
+                 and (not needle or needle in " ".join(str(item.get(k, "")) for k in ("title", "reading", "meaning", "category")).casefold())
+                 and (library == ALL_LIBRARIES or labels.get(item["id"]) == library)]
+        # Unavailable content is listed after the joinable items, never mixed in.
+        unavailable = [item for item in items if states[item["id"]] != AVAILABLE]
+        items = [item for item in items if states[item["id"]] == AVAILABLE]
         if category == EXAM_COMMON_CATEGORY:
             # Editorial study priority, not a fabricated corpus frequency. This
             # only orders the library; saved queues and FSRS dates stay intact.
             items.sort(key=lambda item: item.get("priority", 3))
         enrolled_ids = {item["id"] for item in self.learning_store.list_items()}
-        children.append(u.label(f"共 {len(items)} 项 · 已加入 {sum(item['id'] in enrolled_ids for item in items)} 项", size=13, color=u.MUTED))
+        children.append(u.label(f"共 {len(items)} 项 · 已加入 {sum(item['id'] in enrolled_ids for item in items)} 项"
+                                + (f" · 不可用 {len(unavailable)} 项" if unavailable else ""), size=13, color=u.MUTED))
         next_item = next((item for item in items if item["id"] not in enrolled_ids), None)
         if next_item:
-            children.append(u.button("学习下一项", lambda w: self.enroll_learning(next_item), primary=True))
+            children.append(u.button("学习下一项", lambda w: self.enroll_learning(deepcopy(next_item)), primary=True))
         offset = max(0, min(offset, ((len(items) - 1) // 12) * 12)) if items else 0
         children[-1]._feedback_fragment = {"kind": "learning_library_page", "family": family,
             "query": query, "category": category, "offset": offset,
@@ -491,17 +626,29 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         for item in items[offset:offset + 12]:
             state = self.learning_store.get_item(item["id"])
             status = "尚未加入" if not state else {"intro": "初次学习", "guide": "跟着做", "bridge": "待独立练习", "check": "学习中", "done": "已加入复习"}.get(state.get("stage"), "学习中")
-            entry = u.button(item["title"] + "\n" + item.get("meaning", item.get("instruction", {}).get("summary", "")) + " · " + status,
-                lambda w, item=item: self.show_learning_detail(item), multiline=True)
+            entry = u.button(item["title"] + "\n" + item.get("meaning", item.get("instruction", {}).get("summary", "")) + " · " + status
+                             + (" · 所属库：" + labels[item["id"]] if multiple else ""),
+                lambda w, item=item: self.show_learning_detail(deepcopy(item)), multiline=True)
+            # The rows of this render are this page's own objects and the handlers above hand out copies, so the
+            # row itself is the render-time snapshot; feedback_context copies fragments when a report is made.
             entry._feedback_fragment = {"kind": "learning_library_entry", "target_id": item["id"],
-                "item_snapshot": deepcopy(item), "displayed_status": status}
+                "item_snapshot": item, "displayed_status": status}
             if item["family"] == "word" and item["title"]:
                 configure_study_ranges(entry, [(0, len(item["title"]))])
             children.append(entry)
         if offset:
-            children.append(u.button("上一页", lambda w: self.show_learning_library(family=family, offset=offset - 12, query=query, category=category)))
+            children.append(u.button("上一页", lambda w: self.show_learning_library(family=family, offset=offset - 12, query=query, category=category, library=library)))
         if offset + 12 < len(items):
-            children.append(u.button("下一页", lambda w: self.show_learning_library(family=family, offset=offset + 12, query=query, category=category)))
+            children.append(u.button("下一页", lambda w: self.show_learning_library(family=family, offset=offset + 12, query=query, category=category, library=library)))
+        if unavailable:
+            children.append(u.label(f"暂不可用 {len(unavailable)} 项（学习记录保留，不能加入或练习）", size=13, bold=True))
+            for item in unavailable[:50]:
+                status = state_text(states[item["id"]])
+                entry = u.label(item.get("title", item["id"]) + " · " + status
+                                + (" · 所属库：" + labels[item["id"]] if multiple else ""), size=13, color=u.MUTED)
+                entry._feedback_fragment = {"kind": "learning_library_entry", "target_id": item["id"],
+                                            "displayed_status": status}
+                children.append(entry)
         self.screen("learning_library", "学习库", *children)
         self.retention_checks().expose_many([{'id':item['id'],'abilities':['understanding']}
             for item in items[offset:offset + 12]],'summary')
@@ -509,7 +656,10 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
     @page_view(detail=True)
     def show_learning_detail(self, item, *, answer_context=None):
         if isinstance(item, str):
-            item = self.learning_store.get_item(item) or next((entry for entry in self.learning_items_available() if entry["id"] == item), None) or get_learning_item(item)
+            # The one lesson asked for is copied (deepcopy of a view is the plain lesson), not the whole catalogue.
+            item = (self.learning_store.get_item(item)
+                    or deepcopy(next((entry for entry in self.learning_items_available(views=True) if entry["id"] == item), None))
+                    or get_learning_item(item))
         self._learning_detail_item = item
         from .assessment_policy import teaching_allowed
         verified_teaching = teaching_allowed(item, store=self.store)
@@ -522,7 +672,10 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if item.get("reading"):
             children.append(u.row(u.label(self.learning_reading_label(item), size=19, flex=1, text_role="study"),
                 *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))])))
-        children.extend([teaching_block(u, item, speak=self.speak_text), self.example_cards(item)])
+        # The same known set as the batch card (design 11 section 5, D3): shared
+        # examples whose other references are not yet introduced stay hidden.
+        children.extend([teaching_block(u, item, speak=self.speak_text),
+                         self.example_cards(item, known_ids=self._intro_batch_known_ids())])
         if not verified_teaching:
             notice = ("学习材料尚不完整。" if item.get("instruction_status") == "instruction_missing"
                       else "待核验草稿 · 可预览，暂不作为正式教案。")
@@ -576,7 +729,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
     @page_view(detail=True)
     def show_learning_dependencies(self, item):
         from .learning_dependencies import build_dependency_plan
-        plan = build_dependency_plan([item["id"]], self.learning_items_available(), self.learning_store,
+        plan = build_dependency_plan([item["id"]], self.learning_items_available(views=True), self.learning_store,
                                      allow_unresolved=True)
         children = [u.label("先理解这些内容，再学习「" + item["title"] + "」。", size=17)]
         for prerequisite in plan["items"]:
@@ -590,6 +743,11 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
 
     def enroll_learning(self, item):
         from .assessment_policy import teaching_allowed
+        refusal = self.learning_store.availability().refusal(
+            item["id"], {"dictionary_only": item.get("dictionary_only") is True})
+        if refusal:
+            self.alert(refusal)
+            return
         if not teaching_allowed(item, store=self.store) and item.get("instruction_status") != "instruction_missing":
             self.alert("材料仍待内容核验；已保留的内容和原有进度不会删除。")
             return
@@ -604,7 +762,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                 u.button("开启读音规则并学习", lambda w: self.enable_pronunciation_learning(item), primary=True),
                 u.button("题型设置", self.show_learning_settings), u.button("稍后再学", self.leave_learning))
             return
-        plan = self.learning_store.enroll_with_prerequisites([item], self.learning_items_available())
+        plan = self.learning_store.enroll_with_prerequisites([item], self.learning_items_available(views=True))
         from .practice_round import restart
         restart(self.store, lane="main")
         if getattr(self, "_learning_detail_item", {}).get("id") == item["id"]:
@@ -643,17 +801,75 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             queries=self.store.queries, learning_store=self.learning_store,
             system_japanese_input=system_japanese_enabled(self.store))
 
-    def _queue_learning_questions(self, item):
+    def _queue_learning_questions(self, item, exposure_tables=None, *, early_ability=None):
+        """``exposure_tables``: learning_store.exposure_tables() of a pass over several lessons.
+
+        ``early_ability``: the ability of ``item`` an early answer of extra practice just rated (design 12
+        K13). Inside a sealed round only that unit's missing question is queued (it keeps the unit among the
+        states extra practice reads; the sealed round's frozen order does not serve it before the next
+        round); outside one the call is unchanged.
+        """
         from .practice_round import sealed
-        if sealed(self.store):
+        inside = sealed(self.store)
+        if inside and early_ability is None:
             return
         for state, plan in self._learning_question_plans(item):
+            if inside and plan.get("ability") != early_ability:
+                continue
             if "answer" in plan:
                 q = plan
             else:
                 q = build_learning_question(item, plan["kind"], variant=plan["variant"])
                 q["id"] = plan["id"]
-            self.learning_store.append_questions([q])
+            if exposure_tables is None:
+                self.learning_store.append_questions([q])
+            else:
+                self.learning_store.append_questions([q], exposure_tables=exposure_tables)
+
+    def _replace_withdrawn_questions(self, question_id=None):
+        """Exchange queued tasks of a form the app no longer asks (2026-11-12: hear a word, pick its kana
+        spelling) for current tasks; returns how many were exchanged.
+
+        Each unanswered one goes through the replacement record, exactly as a blocked task does: the old
+        row is kept with a receipt and the new question takes its place and its earliest time. One that
+        cannot be exchanged now (no eligible task yet, an open check, a waiting prerequisite) stays queued
+        and is tried again at the next pass.
+
+        Without question_id: the queue pass of an unsealed round, bounded by WITHDRAWN_PASS_SECONDS (a
+        sealed round queues nothing, so the pass does nothing there). With question_id: that one task,
+        which is about to be shown — also inside a sealed round, like the replacement of a blocked task.
+        """
+        if question_id is None:
+            from .practice_round import sealed
+            if sealed(self.store):
+                return 0
+            question_ids = self.learning_store.withdrawn_pending_ids()
+        else:
+            question_ids = [question_id]
+        if not question_ids:
+            return 0
+        from time import monotonic
+        from .learning_replacement import LearningReplacementStore
+        service = LearningReplacementStore(self.learning_store)
+        deadline, done = monotonic() + WITHDRAWN_PASS_SECONDS, 0
+        for current in question_ids:
+            try:
+                service.commit(service.prepare_question(current, withdrawn=True))
+                done += 1
+            except (ValueError, KeyError):
+                pass
+            if monotonic() >= deadline:
+                break
+        return done
+
+    def _queue_missing_learning_questions(self):
+        """Queue a question for every lesson direction that has none; the exposure records are read once."""
+        self._replace_withdrawn_questions()
+        tables = None
+        for item in self.learning_store.items_needing_questions():
+            if tables is None:
+                tables = self.learning_store.exposure_tables()
+            self._queue_learning_questions(item, tables)
 
     @page_view()
     def show_learning_settings(self, widget=None, **kwargs):
@@ -669,15 +885,83 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             value=system_japanese_enabled(self.store),
             on_change=lambda w: self.store.set_setting(SETTING, {
                 "system_japanese": self.learning_system_input.value is True}))
+        from .intro_batch import SIZE_RANGES
+        sizes = self.learning_store.intro_batch_sizes()
+        def size_picker(family):
+            low, high = SIZE_RANGES[family]
+            return u.selection(items=[str(n) for n in range(low, high + 1)], value=str(sizes[family]),
+                               on_change=lambda w: self.change_intro_batch_sizes())
+        # Applies to the next batch; an open batch keeps its saved entries.
+        self.intro_batch_word_size = size_picker("word")
+        self.intro_batch_grammar_size = size_picker("grammar")
         self.screen("learning_settings", "学习安排", self.heading("学习题型"), *controls,
             self.learning_system_input,
+            u.label("每批新词汇数", bold=True), self.intro_batch_word_size,
+            u.label("每批新语法数", bold=True), self.intro_batch_grammar_size,
             u.button("继续学习", self.continue_added_learning, primary=True),
             u.button("加入新内容", self.show_study_path_add),
-            u.button("假名练习设置", self.show_practice_setup))
+            u.button("假名练习设置", self.show_practice_setup),
+            u.button(STUDY_ORIENTATION_TITLE, lambda w: self.show_study_orientation(w)))
+
+    @page_view()
+    def show_study_orientation(self, widget=None, *, then=None, **kwargs):
+        """The 学习取向 screen (design 12 UI1, D1, D2); ``then``: what to do after 确定 (default: back).
+
+        Models from the presenter (with the focus part, UI6), page from
+        arrangement/ui; this method only hands the widgets to screen().
+        Going back writes nothing.
+        """
+        from .arrangement.ui.orientation_page import orientation_page
+        from .domain import _utc
+        from .study_path_runtime import StudyPathRuntimeMixin
+        presenter = StudyPathRuntimeMixin.study_arrangement(self).presenter
+        model = presenter.orientation_model(_utc(None))
+        self.screen("study_orientation", STUDY_ORIENTATION_TITLE, *orientation_page(
+            model, focus=presenter.focus_model(),
+            on_confirm=lambda orientation, depth, focus: self._confirm_study_orientation(
+                orientation, depth, then, focus=focus)))
+
+    def _confirm_study_orientation(self, orientation, depth, then, *, focus=None):
+        """确定 on the orientation screen: the depth (unless kept), the focus, the orientation, then ``then`` or back.
+
+        The focus goes through the focus service's change(), which writes and
+        rearranges the current round once only when it differs from the
+        stored one. The orientation is written last, so an interrupted
+        confirm leaves it never chosen. The applied practice preferences are
+        adopted as a backup restore reloads them.
+        """
+        if self.page != "study_orientation":
+            return
+        from .study_path_runtime import StudyPathRuntimeMixin
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self)
+        preferences = arrangement.preferences
+        if depth is not None:
+            self._practice_preferences = preferences.apply_kana_depth(depth)
+        if focus is not None:
+            arrangement.focus.change(focus)
+        preferences.set_orientation(orientation)
+        if then is not None:
+            then()
+            return
+        retained = self.back_stack.pages[-1] if self.back_stack.pages else None
+        if retained is not None and retained.name == "practice_setup":
+            # The kept practice-setup page shows the old switches and would save
+            # them again on return: open it afresh in its place instead.
+            self.back_stack.pop()
+            self._view_key = None
+            self.show_practice_setup()
+            return
+        self.go_back()
+
+    def change_intro_batch_sizes(self):
+        word, grammar = self.intro_batch_word_size.value, self.intro_batch_grammar_size.value
+        if word is None or grammar is None:
+            return
+        self.learning_store.set_intro_batch_sizes({"version": 1, "word": int(word), "grammar": int(grammar)})
 
     def change_learning_kinds(self):
         enabled = [kind for title, kinds in KIND_GROUPS.items() if self.learning_group_switches[title].value for kind in sorted(kinds)]
-        self.store.set_setting(LEARNING_PREFS, {"enabled": enabled, SOUND_PREFERENCE_VERSION: 1})
+        self.store.set_setting(LEARNING_PREFS, {"enabled": enabled, SOUND_PREFERENCE_VERSION: PREFERENCE_VERSION})
 
     @page_view()
     def show_settings_hub(self, widget=None, **kwargs):
@@ -686,6 +970,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             u.button("练习方式", self.show_learning_settings), u.button("显示", self.show_prompt_settings),
             u.button("语音与手写", self.show_settings),
             u.button("学习数据", self.show_learning_data),
+            u.button("内容库", self.show_content_libraries),
             u.button("反馈记录", self.show_feedback_manager),
             u.button("AI 服务", self.show_ai_service_settings),
             u.button("关于与资料", self.show_notices),
@@ -761,14 +1046,18 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
 
     @page_view(replace=True)
     def continue_learning(self, widget=None, **kwargs):
-        from .practice_round import begin, seal, mark_finished
+        from .practice_round import begin, seal, mark_finished, sealed
         begin(self.store, restart_finished=widget is not None)
+        # Sealed before this action: the queueing below adds nothing.
+        sealed_before = sealed(self.store)
         enabled = self.learning_preferences()["enabled"]
         if AUDIO_WORD_KIND in enabled:
-            self.learning_store.admit_word_listening()
+            self.learning_store.admit_word_listening(enabled_kinds=enabled)
         self.learning_store.ensure_prerequisites()
-        for item in self.learning_store.items_needing_questions():
-            self._queue_learning_questions(item)
+        # A sealed round queues nothing (_queue_learning_questions returns at once), so the
+        # read of the lessons that lack a question is skipped on every later page of the round.
+        if not sealed_before:
+            self._queue_missing_learning_questions()
         from .new_dispatch import enabled as fair_enabled
         selected = kwargs.get("_selected_current")
         if selected and selected.get('question'):
@@ -786,16 +1075,54 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             frozen_guide = checkpoint.get("guide_question", {})
             if frozen_guide.get("practice") and frozen_guide.get("kind") not in enabled:
                 selected = None
-        current = selected or self.learning_store.current(enabled, fair_new=fair_enabled(self))
+        # _projection: continue_study_path's read context for this same action
+        # (reused only while nothing was written); standalone calls read live.
+        projection = kwargs.get("_projection")
+        shared = {} if projection is None else {"projection": projection}
+        skipped = frozenset(getattr(self, "_guide_skipped_ids", None) or ())
+        if skipped and selected and selected.get("type") == "instruction" and selected_id in skipped:
+            selected = None
+        current = selected or self.learning_store.current(enabled, fair_new=fair_enabled(self),
+                                                          **({"skip_teaching_ids": skipped} if skipped else {}), **shared)
+        # A withdrawn task form is never shown while a current task can take its place: one the queue pass
+        # has not reached (its time budget, a round sealed earlier) is exchanged here. One that cannot be
+        # exchanged is shown as it was stored.
+        from .learning_questions import withdrawn_task
+        for _ in range(8):
+            if not (current and current.get("type") == "question" and withdrawn_task(current.get("question"))
+                    and self._replace_withdrawn_questions(current["question"]["id"])):
+                break
+            projection, shared = None, {}  # the exchange wrote: the shared read context is no longer current
+            current = self.learning_store.current(enabled, fair_new=fair_enabled(self),
+                                                  **({"skip_teaching_ids": skipped} if skipped else {}))
         seal(self.store)
         self._learning_current = current
+        if current and current['type'] == 'content_blocked' and current.get('reason') == 'library_disabled':
+            count = current.get('counts', {}).get('library_unavailable', 0)
+            libraries = ([u.button('查看内容库', self.show_content_libraries)]
+                         if callable(getattr(self, 'show_content_libraries', None)) else [])
+            self.screen('learning_wait', '所属内容库已停用',
+                u.label(f'剩下的 {count} 项课程所属的内容库已停用、缺失或已被取代，暂不出题。'),
+                u.label('学习记录、草稿和复习时间均已保留；重新启用该库后即可继续。', color=u.MUTED),
+                *libraries, *self.learning_next_content_controls(), u.button('回到今日', self.leave_learning))
+            return
         if current and current['type'] == 'content_blocked':
             self.screen('learning_wait', '材料待核', u.label('相关说明已更新，部分旧题仍需核对。'),
                 u.label('原题、草稿和复习时间均已保留。', color=u.MUTED),
                 *self._learning_replacement_controls(current['question_ids']),
                 *self.learning_next_content_controls(), u.button('回到今日', self.leave_learning))
             return
-        if not current and self.learning_store.counts(enabled)["disabled"]:
+        # 四之二: an open batch resumes from its saved cursor; an untouched
+        # original word/grammar head opens a new batch instead of the picker.
+        if self.route_intro_batch(current, enabled):
+            return
+        # N12: course work a sealed round could not queue is not "题型已关闭";
+        # end the round like an empty course lane (the next round queues it).
+        left_out = getattr(self, "_sealed_round_left_out", None)
+        if (sealed_before and current and current.get("type") == "disabled" and callable(left_out)
+                and left_out(current, projection)):
+            current = self._learning_current = None
+        elif not current and self.learning_store.counts(enabled, **shared)["disabled"]:
             self._show_learning_paused("未完成题目已保留，重新开启对应题型后可继续。")
             return
         if not current or current.get("type") in {"empty", "done"}:
@@ -812,9 +1139,11 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if current["type"] == "waiting":
             due = current.get("due_at_utc")
             when = self._learning_due_label(due) if due else "当前题型没有可答题目。"
+            from .extra_practice_runtime import extra_button_rows
             self.screen("learning_wait", "稍后继续", u.label(when, size=20),
                 u.label("到期后自动继续，也可以先离开。", color=u.MUTED),
                 u.button("检查并继续", self.check_learning_wait, primary=True), *self.learning_next_content_controls(),
+                *extra_button_rows(self),
                 u.button("题型设置", self.show_learning_settings), u.button("回到今日", self.leave_learning))
             self.arm_learning_wait(due)
             return
@@ -828,6 +1157,12 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             else:
                 children.append(u.label("前置内容的练习暂不可用，请检查题型或暂停设置。", color=u.MUTED))
                 children.append(u.button("学习设置", self.show_learning_settings))
+            # Design 12 Q3 (breadth first): a prerequisite already taught is met, not waiting.
+            from .learning_dependencies import TAUGHT
+            taught = [entry["title"] for entry in (current.get("dependency_status") or {}).get("dependencies", ())
+                      if entry.get("status") == TAUGHT]
+            if taught:
+                children.append(u.label("已学过、可以接着往后学的前置：" + "、".join(taught), size=14, color=u.MUTED))
             def skip_prerequisites(widget):
                 self.learning_store.acknowledge_prerequisites(item["id"], instruction_scope=item.get("instruction_scope"))
                 self.continue_added_learning()
@@ -850,16 +1185,31 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         # route service; the native app always supplies this service.
         if not study_path_available(self) or not callable(getattr(self, "study_path_service", None)):
             return [u.button("加入新内容", self.show_learning_library, primary=True)]
-        overview = self.study_path_service().overview()
-        controls = []
+        # Design 10 section 8.2: the current route's next section, as on the
+        # continue finished page; the core route keeps its pre-route call.
+        from .study_path_runtime import current_route_next
+        from .study_path_display import other_route_rows, route_kwargs
+        service = self.study_path_service()
+        overview, *current = current_route_next(service)
+        route = route_kwargs(current[0] if current else None)
+        controls = list(self.intro_batch_review_hint())
         available = getattr(self, "study_path_can_continue", None)
         can_continue = callable(available) and available()
         if can_continue:
             controls.append(u.button("继续已加入的学习", self.continue_study_path, primary=True))
         if overview.get("next_section"):
             controls.append(u.button("继续下一节",
-                lambda w, identity=overview["next_section"]["id"]: self._add_study_sections((identity,)), primary=not can_continue))
+                lambda w, identity=overview["next_section"]["id"]: self._add_study_sections((identity,), **route),
+                primary=not can_continue))
             controls.append(u.label(overview["next_section"]["title"], size=13, color=u.MUTED))
+        else:
+            others = [row for row in other_route_rows(service, route.get("route_id")) if row.get("next_section")][:3]
+            if others:
+                controls.append(u.label("其他路线的下一小节", size=13, bold=True))
+            for row in others:
+                controls.append(u.button(row["title"] + " · " + row["next_section"]["title"],
+                    lambda w, sid=row["next_section"]["id"], rid=row["route_id"]:
+                        self._add_study_sections((sid,), **route_kwargs(rid)), multiline=True))
         controls.append(u.button("添加内容", self.show_study_path_add))
         controls.append(u.button("查看学习路线", self.show_study_path, compact=True))
         return controls
@@ -929,17 +1279,20 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                         for caption, value in [('初学', 'new'), ('有印象', 'some'), ('已熟悉', 'familiar')])
         self.screen("learning_familiarity", "开始前", *children)
 
-    def _learning_guide_controls(self, question, draft):
+    def _learning_guide_controls(self, question, draft, known_ids=None):
         """Use the independent task's controls while keeping all work exposure-only.
 
         The question and each edit are checkpointed before UI state changes.
         Rebuilding or revisiting a guide must not select another demonstration.
+        known_ids adds display-only kana to the options (option_labels: all of
+        them or none); drafts and answers keep the raw options.
         """
         context = {"question": question, "draft": deepcopy(draft or {}),
                    "introduction_id": self._learning_item.get("introduction_id"),
                    "buttons": [], "locked": False}
         self._learning_guide_context = context
         mode = question.get("input_mode", "choice")
+        labels = option_labels(question, known_ids) if mode in {"choice", "reorder"} else {}
         status = u.label("", size=12, color=u.MUTED)
         context["status"] = status
 
@@ -952,7 +1305,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         def render():
             value = context["draft"]
             if mode == "reorder":
-                text = "".join(value.get("parts", []))
+                text = "".join(labels.get(part, part) for part in value.get("parts", []))
                 context["composition"].text = text or "点击词块组成句子"
                 configure_text_role(context["composition"], text_role="study" if text else "ui")
                 for index, control in enumerate(context["choices"]):
@@ -986,21 +1339,21 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if mode == 'multi_cloze':
             from .multi_cloze_ui import controls as cloze_controls, prompt_view
             context['prompt'] = prompt_view(self, u, question, context['draft'],
-                clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})))
+                clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), known_ids=known_ids)
 
             def submit_cloze_guide(answer):
                 self.answer_learning_guide(answer, draft=context['draft'], question_id=question['id'])
                 return True if context['locked'] else False if context['status'].text else None
 
             controls = [cloze_controls(self, u, question, context['draft'], save,
-                submit_cloze_guide, active, prompt=context['prompt'])]
+                submit_cloze_guide, active, prompt=context['prompt'], known_ids=known_ids)]
         elif mode == "choice":
             controls = []
             for choice in question.get("choices", []):
                 def choose(widget=None, answer=choice):
                     if active():
                         self.answer_learning_guide(answer, draft={**context["draft"], "answer": answer}, question_id=question["id"])
-                controls.append(u.button(choice, choose, multiline=True,
+                controls.append(u.button(labels.get(choice, choice), choose, multiline=True,
                     text_role=learning_text_role(question, "choice")))
             context["buttons"] = controls
         elif mode == "reorder":
@@ -1013,7 +1366,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                     used = [*context["draft"].get("used", []), i]
                     parts = [question["choices"][n] for n in used]
                     save({"answer": "".join(parts), "parts": parts, "used": used})
-                context["choices"].append(u.button(choice, append, multiline=True, text_role="study"))
+                context["choices"].append(u.button(labels.get(choice, choice), append, multiline=True, text_role="study"))
 
             def undo(widget=None):
                 if active():
@@ -1055,6 +1408,46 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             u.button("继续其他学习", self.continue_added_learning, primary=True),
             u.button("练习设置", self.show_learning_settings, compact=True),
             u.button("回到今日", self.show_home))
+
+    def _show_learning_guide_unavailable(self, item):
+        """No guided example can be built: say why and offer a way forward."""
+        content_id, scope = item["id"], item.get("instruction_scope")
+
+        def practice(widget):
+            from .new_dispatch import enabled
+            if self.page != "learning_wait" or self._page_token != page[0]:
+                return
+            try:
+                # The ordinary guide -> bridge transition: no rating, no
+                # review event; independent practice follows after its delay.
+                self.learning_store.advance_instruction(content_id, "bridge", fair_new=enabled(self),
+                                                        instruction_scope=scope)
+            except (ValueError, KeyError) as exc:
+                status.text = "暂未保存：" + str(exc)
+                return
+            self.continue_added_learning()
+
+        def skip(widget):
+            if self.page != "learning_wait" or self._page_token != page[0]:
+                return
+            skipped = getattr(self, "_guide_skipped_ids", None)
+            if not isinstance(skipped, set):
+                skipped = self._guide_skipped_ids = set()
+            # Process-local: after a restart this item is offered again.
+            skipped.add(content_id)
+            self.continue_added_learning()
+
+        status, page = u.label("", size=13, color=u.MUTED), [None]
+        self.screen("learning_wait", "引导例题暂不可用",
+            u.label(item.get("title", ""), size=21, bold=True,
+                    text_role="study" if item.get("family") == "word" else "ui"),
+            u.label("这一项的引导例题暂不可用（旧例题已停用），可直接开始练习，或跳到下一项。", size=16),
+            u.label("直接开始练习不会记为已掌握，之后仍按独立作答结果安排复习。", size=13, color=u.MUTED),
+            status,
+            u.button("直接开始练习", practice, primary=True),
+            u.button("跳到下一项", skip),
+            u.button("回到今日", self.leave_learning))
+        page[0] = self._page_token
 
     def _learning_guide_demonstration(self, question, checkpoint):
         """Fade the second example's model without turning teaching into SRS."""
@@ -1116,6 +1509,27 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         stage = item.get("stage", "intro")
         familiarity = item.get("checkpoint", {}).get("initial_familiarity")
         enrolled = bool(item.get("introduction_id") and item.get("units"))
+        from . import intro_batch
+        if (enrolled and item.get("instruction_scope") and stage == "intro" and not familiarity
+                and self.learning_store.is_batch_route(item["id"])):
+            # A later ability of a batch item: no full intro, no picker.
+            self.open_batch_ability(item)
+            return
+        batch_checkpoint = item.get("checkpoint", {})
+        if (enrolled and not item.get("instruction_scope")
+                and (stage == "intro" and not familiarity
+                     or stage == "guide" and intro_batch.ITEM_KEY in batch_checkpoint)
+                and batch_checkpoint.get(intro_batch.ROUTE_KEY) == intro_batch.ROUTE
+                and any(entry["content_id"] == item["id"]
+                        for entry in (self.learning_store.intro_batch() or {}).get("entries", ()))):
+            # A batch item is never asked familiarity and its quiz is never
+            # the single-item guide: the open batch owns both.
+            self.show_intro_batch()
+            return
+        # Batch items always have initial_familiarity once their card is done,
+        # so they never reach the picker below. A failed "我已经会了" check
+        # (route full, diagnostic_state needs_teaching, stage intro again)
+        # deliberately falls back to this ordinary intro -> guide route.
         if enrolled and stage == "intro" and not familiarity:
             self.show_learning_familiarity(item)
             return
@@ -1146,7 +1560,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if unfamiliar:
                 guide_kinds = unfamiliar
             checkpoint = item.get("checkpoint", {})
-            known = {item["id"], *self.store.queries.instruction_ready_ids()}
+            from .course_planning import known_ids
+            known = {item["id"], *known_ids(self.store.queries)}
             sequence = self.learning_store.guided_sequence(item, guide_kinds, known_background_ids=known)
             if sequence and "guide_sequence" not in checkpoint:
                 item = self.learning_store.advance_instruction(item["id"], "guide", state={
@@ -1162,6 +1577,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if any(raw.get("input_mode") == "pitch_fill" for raw in
                    item.get("question_templates", {}).get("pronunciation_application", [])):
                 guide_kind = "pronunciation_application"
+            candidates = []
             if "familiar" in levels.values():
                 candidates = [kind for kind in guide_kinds
                     if levels.get(KIND_ABILITIES[kind]) in {"new", "some"}
@@ -1173,7 +1589,17 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if (guide_kind not in guide_kinds and guide_kinds
                     and not any(key in checkpoint for key in ("guide_question", "guide_answer", "guide_draft"))):
                 guide_kind = next((kind for kind in guide_kinds if kind not in LISTENING_KINDS), guide_kinds[0])
-            q = self.learning_store.guided_question(item, guide_kind, variant=1)
+            # Same preference order; a kind whose only example is retired
+            # (no background-ready replacement) yields None: try the next.
+            q = None
+            for kind in dict.fromkeys([guide_kind, *candidates,
+                                       *(k for k in guide_kinds if k not in LISTENING_KINDS)]):
+                q = self.learning_store.guided_question(item, kind, variant=1)
+                if q is not None:
+                    break
+            if q is None:
+                self._show_learning_guide_unavailable(item)
+                return
             self._learning_guide = q
             self._learning_guide_result = u.col()
             if q["kind"] not in enabled:
@@ -1184,12 +1610,14 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                 item = self.learning_store.advance_instruction(item["id"], "guide", state={
                     "guide_question": deepcopy(q), "guide_draft": {}}, instruction_scope=self._learning_item.get("instruction_scope"))
                 self._learning_item, checkpoint = item, item["checkpoint"]
+            # known (read above for the guided sequence) also decides the kana of unlearned words.
+            labels = option_labels(q, known)
             choices = ([self.learning_pitch_controls(q, checkpoint.get("guide_draft") or {}, guided=True)]
                 if is_pitch_question(q) else
-                self._learning_guide_controls(q, checkpoint.get("guide_draft") or {}) if practice or q.get('input_mode') == 'multi_cloze' else
-                [u.button(choice, lambda w, answer=choice, expected=q: self.answer_learning_guide(answer, expected_question=expected),
+                self._learning_guide_controls(q, checkpoint.get("guide_draft") or {}, known) if practice or q.get('input_mode') == 'multi_cloze' else
+                [u.button(labels.get(choice, choice), lambda w, answer=choice, expected=q: self.answer_learning_guide(answer, expected_question=expected),
                           multiline=True, text_role=learning_text_role(q, "choice")) for choice in q.get("choices", [])])
-            task = instruction_widgets(u, q)
+            task = instruction_widgets(u, q, known)
             if is_pitch_question(q):
                 task = [u.label(q["task"].replace("并分开助词", ""), size=17)]
             stimulus = []
@@ -1202,12 +1630,12 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                 stimulus.append(speaker)
             reference = self._shared_learning_guide_reference(item, q) if shared_intro else []
             guide_prompt = (self._learning_guide_context['prompt'] if q.get('input_mode') == 'multi_cloze'
-                            else self._learning_prompt_block(q, size=20))
+                            else self._learning_prompt_block(q, size=20, known_ids=known))
             if practice:
                 demonstration = self._learning_guide_demonstration(q, checkpoint)
                 self.screen("learning_guide", "跟着做", *stimulus, *([guide_prompt] if guide_prompt is not None else []),
                     *task,
-                    *self._learning_context_support(q),
+                    *self._learning_context_support(q, known),
                     demonstration, *choices, self._learning_guide_result, *reference, *self._learning_guide_archive(checkpoint))
             else:
                 self.screen("learning_guide", "跟着做",
@@ -1240,7 +1668,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         has_practice = any(raw.get("practice") for variants in (practice_templates(item) or {}).values() for raw in variants)
         children.append(u.button("跟着练习" if has_practice else "跟着做一题", self.start_learning_guide, primary=True))
         if not compact or focused:
-            children.append(self.example_cards(item))
+            children.append(self.example_cards(item, known_ids=self._intro_batch_known_ids()))
         if focused:
             explanation = u.col()
             def toggle_explanation(widget):
@@ -1371,6 +1799,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                         control.enabled = False
                 self._learning_guide_result.add(u.button("继续",
                     lambda w, expected=self._learning_guide: self.finish_learning_guide(expected_question=expected), primary=True))
+            else:
+                self._learning_guide_result.add(*self._learning_guide_pass_controls())
             self._reveal_learning_guide_result()
             return
         speaker = self._learning_answer_speaker(self._learning_guide, guided=True)
@@ -1380,15 +1810,18 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                 context["locked"] = True
                 for control in context["buttons"]:
                     control.enabled = False
-            answer = u.label(self._learning_guide.get("feedback", ""), flex=1 if speaker else 0)
+            # Result of a guided question: its Japanese carries kana like every result (design 11 §7 rule 9).
+            answer = u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", "")),
+                             flex=1 if speaker else 0)
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
                 u.button("继续", lambda w, expected=self._learning_guide:
                     self.finish_learning_guide(expected_question=expected), primary=True))
         else:
-            answer = u.label(answer_text(self._learning_guide), bold=True, flex=1 if speaker else 0,
+            answer = u.label(shown_answer(self._learning_guide), bold=True, flex=1 if speaker else 0,
                 text_role=learning_text_role(self._learning_guide, "answer"))
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
-                u.label(self._learning_guide.get("feedback", "")))
+                u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", ""))),
+                *self._learning_guide_pass_controls())
         # The result is already attached to the visible guide. Its introduction
         # identity survives rebuilding this page, so returning cannot replay it.
         if self.page == "learning_guide":
@@ -1398,7 +1831,44 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if self._learning_guide.get("practice"):
             self._reveal_learning_guide_result()
 
-    def finish_learning_guide(self, widget=None, *, question_id=None, expected_question=None, **kwargs):
+    def _learning_guide_pass_caption(self):
+        """Design 12 Q1: the "seen, go on" caption after a recorded wrong answer, or None.
+
+        gates.guide_may_continue decides (breadth first only); the store checks
+        again for a replaced guide and for each step of a guided sequence.
+        """
+        from .arrangement.rules.gates import guide_may_continue
+        if not guide_may_continue(self.learning_store.arrangement_orientation(), answered_wrong=True):
+            return None
+        saved = self.learning_store.instruction_item(self._learning_item["id"], self._learning_item.get("instruction_scope")) or {}
+        checkpoint = saved.get("checkpoint", {})
+        if (saved.get("stage") != "guide" or checkpoint.get("guide_answer") is None or checkpoint.get("guide_correct") is True
+                or (checkpoint.get("guide_question") or {}).get("id") != self._learning_guide.get("id")):
+            return None
+        sequence = checkpoint.get("guide_sequence") or []
+        if sequence and checkpoint.get("guide_index", 0) < len(sequence) - 1:
+            return "这一步看过了，下一步"
+        return "看过了，继续"
+
+    def _learning_guide_pass_controls(self):
+        caption = self._learning_guide_pass_caption()
+        if caption is None:
+            return []
+        return [u.button(caption, lambda w, expected=self._learning_guide: self.pass_learning_guide(expected_question=expected))]
+
+    def pass_learning_guide(self, widget=None, *, expected_question=None, **kwargs):
+        """Go on after a wrong guide answer, as a correct one does, with the 'bridge' checkpoint."""
+        if (self.page != "learning_guide"
+                or expected_question is not None and self._learning_guide is not expected_question):
+            return
+        if self._learning_guide_pass_caption() is None:
+            # The answer or the orientation changed since the result was drawn.
+            self.show_learning_instruction(self.learning_store.instruction_item(
+                self._learning_item["id"], self._learning_item.get("instruction_scope")))
+            return
+        self.finish_learning_guide(expected_question=expected_question, passed=True)
+
+    def finish_learning_guide(self, widget=None, *, question_id=None, expected_question=None, passed=False, **kwargs):
         from .new_dispatch import enabled
         if (self.page != "learning_guide" or (question_id is not None and self._learning_guide["id"] != question_id)
                 or expected_question is not None and self._learning_guide is not expected_question):
@@ -1409,7 +1879,9 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if not advanced["finished"]:
                 self.show_learning_instruction(advanced["item"])
                 return
-        self.learning_store.advance_instruction(self._learning_item["id"], "guide_correct", fair_new=enabled(self), instruction_scope=self._learning_item.get("instruction_scope"))
+        # A passed guide moves on like a correct one; its checkpoint keeps guide_correct false.
+        self.learning_store.advance_instruction(self._learning_item["id"], "bridge" if passed else "guide_correct",
+                                                fair_new=enabled(self), instruction_scope=self._learning_item.get("instruction_scope"))
         if study_path_available(self):
             self.continue_study_path(_checkpoint_saved=True)
         else:
@@ -1418,6 +1890,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
     def show_learning_question(self, current):
         q = current["question"]
         self._learning_question = q
+        # Each question starts without an answer field; answer_controls sets one.
+        self._learning_input = None
         self._learning_question_state = dict(current.get("draft") or {})
         if (current.get("result") or {}).get("outcome") == "cancelled":
             # Resume an explicit skip interrupted between submit/finalize;
@@ -1432,14 +1906,21 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         self._learning_answer = self._learning_question_state.get("answer", "")
         parts = self._learning_question_state.get("parts", [])
         self._learning_parts = list(parts)
-        actions = [u.button("显示答案", self.reveal_learning_answer, compact=True, font_size=12, flex=1),
-                   u.button("再看讲解", self.learning_hint, compact=True, font_size=12, flex=1)]
+        # Secondary help follows the answering area: hint, card, AI, and
+        # "show answer" last, so active recall starts from the task itself.
+        actions = [u.button("再看讲解", self.learning_hint, compact=True, font_size=12, flex=1)]
+        batch_hints, batch_actions = self.intro_batch_question_help(current)
+        actions.extend(batch_actions)
         actions.append(u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(
             source="learning", question_id=qid), compact=True, font_size=12, flex=1))
-        if prompt_audio_text(q):
-            actions.append(u.speaker_button(self.play_learning_audio, "朗读题干"))
+        actions.append(u.button("显示答案", self.reveal_learning_answer, compact=True, font_size=12, flex=1))
+        prompt_speaker = ([u.speaker_button(self.play_learning_audio, "朗读题干")]
+                          if prompt_audio_text(q) else [])
+        # One read per question: unmet-word glosses and the kana of unlearned words share it.
+        from .course_planning import known_ids
+        known = known_ids(self.store.queries)
         task = ([u.label(q["task"].replace("并分开助词", ""), size=13, color=u.MUTED)] if is_pitch_question(q)
-                else instruction_widgets(u, q))
+                else instruction_widgets(u, q, known))
         children = []
         prompt = None
         if q.get("audio_text"):
@@ -1448,20 +1929,22 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if q.get('input_mode') == 'multi_cloze':
                 from .multi_cloze_ui import prompt_view
                 prompt = prompt_view(self, u, q, self._learning_question_state,
-                    clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})))
+                    clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), known_ids=known)
             else:
-                prompt = self._learning_prompt_block(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), size=20)
+                prompt = self._learning_prompt_block(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), size=20, known_ids=known)
             children.append(prompt)
+        # The submit path records the plan of the prompt this page drew (none: the plain plan as before).
+        self._learning_prompt_known = (q, known if prompt is not None else None)
         # The Japanese utterance or listening stimulus owns the first position.
-        # Keep indispensable context and one short response cue,
-        # with stable secondary help above the answer controls, never beside
-        # Submit where "show answer" could be mistaken for submitting a draft.
-        children.append(u.col(*task,
-                              u.row(*actions)))
+        # Keep indispensable context and one short response cue above the
+        # answer controls; the help row is appended after them (see below).
+        children.append(u.col(*batch_hints, *task, *([u.row(*prompt_speaker)] if prompt_speaker else [])))
         if q.get("gloss"):
             children.append(u.label(q["gloss"], size=12, color=u.MUTED))
-        children.extend(self._learning_context_support(q))
+        children.extend(self._learning_context_support(q, known))
         mode = q.get("input_mode", "choice")
+        # Display only: buttons may carry kana (all options or none), callbacks and drafts keep the raw option.
+        labels = option_labels(q, known) if mode in {"choice", "reorder"} and not is_pitch_question(q) else {}
         if is_pitch_question(q):
             children.append(self.learning_pitch_controls(q, self._learning_question_state))
         elif mode == 'multi_cloze':
@@ -1477,22 +1960,23 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
 
             children.append(cloze_controls(self, u, q, self._learning_question_state, save_cloze,
                 submit_cloze,
-                lambda: self.page == 'learning_question' and self._learning_question is q, prompt=prompt))
+                lambda: self.page == 'learning_question' and self._learning_question is q, prompt=prompt,
+                known_ids=known))
         elif mode == "choice":
             choices = q.get("choices", [])
-            children.extend(u.button(choice, lambda w, answer=choice, qid=q["id"]: self.submit_learning_answer(answer, question_id=qid), multiline=True,
+            children.extend(u.button(labels.get(choice, choice), lambda w, answer=choice, qid=q["id"]: self.submit_learning_answer(answer, question_id=qid), multiline=True,
                                      text_role=learning_text_role(q, "choice")) for choice in choices)
         elif mode == "reorder":
-            self._learning_composition = u.label("".join(parts) or "点击词块组成句子", size=20,
+            self._learning_composition = u.label("".join(labels.get(part, part) for part in parts) or "点击词块组成句子", size=20,
                                                  text_role="study" if parts else "ui")
             children.append(self._learning_composition)
             # Duplicate blocks are identified by position, not just text.
             used = list(self._learning_question_state.get("used", []))
             self._learning_used = used
-            context = {"question": q, "buttons": []}
+            context = {"question": q, "buttons": [], "labels": labels}
             self._learning_blocks_context = context
             for index, choice in enumerate(q.get("choices", [])):
-                b = u.button(choice, lambda w, i=index, question=q: self.add_learning_part(i, expected_question=question), multiline=True, text_role="study")
+                b = u.button(labels.get(choice, choice), lambda w, i=index, question=q: self.add_learning_part(i, expected_question=question), multiline=True, text_role="study")
                 b.enabled = index not in used
                 context["buttons"].append(b)
                 children.append(b)
@@ -1518,6 +2002,9 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                     u.button("作答设置", self.show_learning_settings, compact=True)])
         self._learning_status = u.label("", size=12, color=u.MUTED)
         children.append(self._learning_status)
+        # Its own row below Submit and the status line, never beside Submit,
+        # so "show answer" cannot be mistaken for submitting a draft.
+        children.append(u.row(*actions))
         if q.get('replacement_of'):
             old = self.learning_store.get_question(q['replacement_of'])
             if old:
@@ -1528,10 +2015,68 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             self._learning_question_state['presented'] = True
 
     def save_learning_input(self, widget=None, **kwargs):
+        """Keep the in-memory draft current; persist it at most 0.25 s later.
+
+        The same draft is written as before (save_draft), only coalesced.
+        flush_learning_draft forces it before submit/reveal/hint, navigation,
+        exit and backgrounding.
+        """
         if self.page != "learning_question":
             return
         self._learning_question_state["answer"] = self._learning_input.value
-        self.learning_store.save_draft(self._learning_question["id"], self._learning_question_state)
+        draft = self._learning_draft_debouncer()
+        if draft is None:
+            return self._persist_learning_draft(self._learning_question["id"], self._learning_question_state)
+        draft.accept(self._learning_question["id"], deepcopy(self._learning_question_state))
+
+    def _learning_draft_debouncer(self):
+        draft = getattr(self, "_learning_draft", None)
+        if draft is None:
+            loop = getattr(self, "loop", None)
+            if loop is None or not callable(getattr(loop, "call_later", None)):
+                return None  # No event loop: persist synchronously.
+            from .draft_debounce import DraftDebouncer, loop_scheduler
+            draft = self._learning_draft = DraftDebouncer(loop_scheduler(loop), self.flush_learning_draft)
+        return draft
+
+    def flush_learning_draft(self):
+        """Synchronously persist a pending course-input draft.
+
+        None: nothing pending; False: the write failed and a status says so.
+        """
+        draft = getattr(self, "_learning_draft", None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        question_id, snapshot = pending
+        current = getattr(self, "_learning_question", None) or {}
+        if self.page == "learning_question" and current.get("id") == question_id:
+            # Live state also carries flags saved by other paths (audio_ok...).
+            state = self._learning_question_state
+        else:
+            state = snapshot  # The last on-screen draft of a page already left.
+        return self._persist_learning_draft(question_id, state)
+
+    def _persist_learning_draft(self, question_id, state):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+
+        def busy():
+            status = getattr(self, "_learning_status", None)
+            if status is not None and self.page == "learning_question":
+                status.text = LEARNING_BUSY_STATUS
+        # A lock timeout requeues this draft, so a later forced flush (leave,
+        # background, exit) still writes it even without another keystroke.
+        saved = persist_with_lock_notice(lambda: self.learning_store.save_draft(question_id, state),
+            record=lambda exc: record_error("learning_draft", "save", exc),
+            debouncer=getattr(self, "_learning_draft", None), key=question_id, value=deepcopy(state),
+            notice=busy)
+        if saved is False:
+            return False
+        status = getattr(self, "_learning_status", None)
+        if status is not None and getattr(status, "text", None) == LEARNING_BUSY_STATUS:
+            status.text = ""
+        return saved
 
     def skip_unavailable_learning_input(self, question_id):
         if self.page != "learning_question" or self._learning_question["id"] != question_id:
@@ -1571,7 +2116,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         self._learning_question_state = saved["draft"]
         self._learning_parts = list(saved["draft"].get("parts", []))
         self._learning_used = list(saved["draft"].get("used", []))
-        self._learning_composition.text = "".join(self._learning_parts) or "点击词块组成句子"
+        labels = context.get("labels", {})
+        self._learning_composition.text = "".join(labels.get(part, part) for part in self._learning_parts) or "点击词块组成句子"
         configure_text_role(self._learning_composition, "study" if self._learning_parts else "ui")
         for position, control in enumerate(context["buttons"]):
             control.enabled = position not in self._learning_used
@@ -1613,7 +2159,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                     return
                 self._learning_audio_ok = True
                 self._learning_question_state.update(audio_ok=True)
-        self.loop.create_task(play())
+        from .draft_debounce import create_task_awake
+        create_task_awake(self.loop, play())  # Started from a native button callback.
 
     def _learning_instruction_example(self, instruction):
         text = instruction.get("example", "")
@@ -1622,7 +2169,12 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             return self.annotated_sentence(text, size=20, audio=True)
         return u.label(text, size=20, text_role=role)
 
-    def learning_hint(self, widget=None, **kwargs):
+    def learning_hint(self, widget=None, *, card=False, **kwargs):
+        """Teaching reference during a question; opening it marks the draft assisted.
+
+        card=True shows the batch 说明卡 body instead (四之二 item 6); the
+        assisted rule is the same.
+        """
         q = self._learning_question
         item = self.learning_store.get_item(q["target_id"])
         if self._unverified_learning_reference(item, "返回题目"):
@@ -1631,6 +2183,10 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             self._learning_question_state = pitch_editor_draft(q, self._learning_question_state)
         self._learning_question_state["assisted"] = True
         self.learning_store.save_draft(q["id"], self._learning_question_state)
+        if card:
+            self.screen("learning_prerequisite", "说明卡", *self._intro_card_body(item),
+                u.button("返回题目", self.continue_learning, primary=True))
+            return
         instruction = item["instruction"]
         self.screen("learning_prerequisite", "回看讲解", teaching_block(u, item, speak=self.speak_text),
             self._learning_instruction_example(instruction),
@@ -1661,6 +2217,8 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if self.page != "learning_question" or (question_id is not None and question_id != self._learning_question["id"]):
             return
         q = self._learning_question
+        # The typed draft reaches storage before the answer is graded.
+        LearningUIMixin.flush_learning_draft(self)
         from .answer_input_ui import prepare_submission
         ready, answer = prepare_submission(q, answer, self._learning_status, revealed=revealed,
             field=getattr(self, "_learning_input", None))
@@ -1680,10 +2238,25 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         outcome = "revealed" if revealed else result["status"]
         if q.get("audio_text") and not self._learning_audio_ok:
             outcome = "device_failure"
-        plan = prompt_support(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})))
-        saved = self.learning_store.submit(q["id"], str(answer), None if outcome in {"unresolved", "device_failure"} else result["status"] == "correct",
-            assisted=bool(self._learning_question_state.get("assisted")), outcome=outcome,
-            presentation={"prompt_furigana_visible": plan["furigana_visible"], "prompt_accent_visible": plan["accent_visible"], "audio_used": self._learning_audio_ok})
+        shown, known = getattr(self, "_learning_prompt_known", (None, None))
+        plan = prompt_support(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})),
+                              known if shown is q else None)
+        # Design 12 K13: only the course question extra practice handed out is submitted with the early permit.
+        from .extra_practice_runtime import early_submit
+        try:
+            saved = self.learning_store.submit(q["id"], str(answer), None if outcome in {"unresolved", "device_failure"} else result["status"] == "correct",
+                assisted=bool(self._learning_question_state.get("assisted")), outcome=outcome,
+                presentation={"prompt_furigana_visible": plan["furigana_visible"], "prompt_accent_visible": plan["accent_visible"], "audio_used": self._learning_audio_ok},
+                **early_submit(self, q["id"]))
+        except Exception as exc:
+            from .draft_debounce import is_database_locked
+            if not is_database_locked(exc):
+                raise
+            # Rolled back: nothing was graded. The same press can be retried.
+            from .diagnostic_events import record_error
+            record_error("learning_submit", "save", exc)
+            self._learning_status.text = "数据库正忙，答案尚未提交，请稍后再点提交。"
+            return
         self.show_learning_feedback(saved)
 
     def _reveal_learning_guide_result(self):
@@ -1706,11 +2279,12 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             top = result.layout.absolute_content_top - scroll.content.layout.absolute_content_top
             scroll.vertical_position = max(0, int(top) - 8)
 
-        self.loop.create_task(reveal())
+        from .draft_debounce import create_task_awake
+        create_task_awake(self.loop, reveal())  # Started from a native button callback.
 
     def show_learning_feedback(self, result):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import entered_answer_row, distinct_explanation
+        from .answer_result_ui import asked_text, entered_answer_row, distinct_explanation
         q = self._learning_question
         originally_unresolved = result.get("outcome") == "unresolved"
         from .assessment_policy import settlement_decision
@@ -1734,9 +2308,11 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         accepted_sequence = bool(correct and entered and q.get("pitch_practice", {}).get("version") in (2, 3))
         compare_reading = (q.get("kind") == "vocab_reading" and correct is False
                            and bool(entered) and not assisted and entered != q["answer"])
+        # After the answer every Japanese word shown here carries its kana (design 11 section 7, rule 9);
+        # the comparisons below keep using the plain strings.
         answer = (answer_diagram(self, q, answer=entered) if accepted_sequence else
                   answer_diagram(self, q, reveal=True) if is_pitch_question(q) else
-                  u.label(answer_text(q), size=20, flex=1 if speaker else 0,
+                  u.label(shown_answer(q), size=20, flex=1 if speaker else 0,
                           text_role=learning_text_role(q, "answer")))
         if compare_reading:
             from .spelling_display import build_spelling_comparison
@@ -1744,6 +2320,10 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
                 text_role=learning_text_role(q, "answer"), size=20, reserved_width=48 if speaker else 0)
         children = [build_answer_feedback(result, structure_error=structure_error),
                     u.row(answer, speaker) if speaker else answer]
+        explanation = without_self_gloss(distinct_explanation(q.get("feedback"), answer_text(q)))
+        asked = None if is_pitch_question(q) else asked_text(q, explanation)
+        if asked:
+            children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, "prompt")))
         if result.get("diagnostic_needs_teaching"):
             children.append(u.label("先补学这项内容，再安排独立练习。", size=14, color=u.MUTED))
         entered = result.get("answered_text", result.get("answer", ""))
@@ -1751,26 +2331,25 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
             if is_pitch_question(q):
                 entered = pitch_answer_label(q, entered)
             else:
-                entered = answer_text(q, entered)
+                entered = shown_answer(q, entered)
             children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, "answer")))
-        explanation = distinct_explanation(q.get("feedback"), answer_text(q))
         if is_pitch_question(q) and not correct and entered:
             diagnosis = grade_learning_answer(q, result.get("answered_text", result.get("answer", ""))).get("message", "")
             if diagnosis and diagnosis != explanation:
                 children.append(u.label(diagnosis, size=13, color=u.MUTED))
         if explanation and explanation != str(q["answer"]).strip():
-            children.append(u.label(explanation))
+            children.append(u.label(shown_explanation(q, explanation)))
         from .personal_content_notes_ui import append_notes
         append_notes(self, u, children, 'question', q, page='learning_feedback')
         children.append(u.row(u.col(flex=1), u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(
             source="learning", question_id=qid, after_answer=True), compact=True, width=72, font_size=12),
             u.button("详细", lambda w: self.learning_feedback_detail(), compact=True, width=72, font_size=12)))
         if result.get("outcome") in {"unresolved", "device_failure", "invalid"}:
-            from .assessment_policy import assessment_message
+            from .assessment_policy import unresolved_message
             message = ("句末词块后还有内容；本次不调整单词复习。" if q.get("family") == "word"
                        else "句末词块后还有内容；本次不调整复习。") if structure_error else (
                 "本次不调整读音复习。" if result.get("error_category") == "spelling"
-                else assessment_message(result.get("assessment")))
+                else unresolved_message(result))
             children.append(u.label(message, size=13, color=u.MUTED))
         if correct and not assisted and result.get("outcome") == "correct":
             children.extend([u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
@@ -1887,8 +2466,19 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         if self.page != "learning_feedback" or (question_id is not None and question_id != q["id"]):
             return
         from .new_dispatch import enabled
-        self.learning_store.finalize(q["id"], {"again": 1, "hard": 2, "good": 3, "easy": 4}[rating], fair_new=enabled(self))
-        self._queue_learning_questions(self.learning_store.get_item(q["target_id"]))
+        try:
+            self.learning_store.finalize(q["id"], {"again": 1, "hard": 2, "good": 3, "easy": 4}[rating], fair_new=enabled(self))
+        except Exception as exc:
+            from .draft_debounce import is_database_locked
+            if not is_database_locked(exc):
+                raise
+            # The busy timeout aborted the write transaction; the rating can be retried.
+            from .diagnostic_events import record_error
+            record_error("learning_submit", "commit", exc)
+            self.alert("数据库正忙，评级尚未保存。请稍后再点一次。")
+            return
+        from .extra_practice_runtime import early_queue
+        self._queue_learning_questions(self.learning_store.get_item(q["target_id"]), **early_queue(self, q))
         if study_path_available(self):
             self.continue_study_path(_checkpoint_saved=True)
         else:
@@ -1915,7 +2505,7 @@ class LearningUIMixin(LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, Example
         token = self._page_token
         async def confirm():
             try:
-                confirmed = await self.main_window.dialog(u.toga.ConfirmDialog("返回今日？", "进度、草稿和复习时间会保留。"))
+                confirmed = await self.main_window.dialog(u.toga.ConfirmDialog("返回今日？", "已作答的题与草稿都会保留。"))
                 if confirmed and token == self._page_token:
                     self.leave_learning()
             finally:

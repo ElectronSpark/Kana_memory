@@ -21,6 +21,7 @@ import pytest
 from support.app_fixtures import question_app
 from support.app_fixtures import setup_app
 from support.fake_ui import text_of
+from support.study_home_support import open_home
 from datetime import timedelta
 from datetime import timezone
 
@@ -108,8 +109,7 @@ def press(app, text):
 
 
 def home(app):
-    app.page = "home"
-    app.show_home()
+    open_home(app)
 
 
 def kana_id(app, symbol):

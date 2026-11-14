@@ -115,16 +115,15 @@ def commit(versions, prepared):
 
 
 def held(store, identity, kind='lesson'):
-    from .personal_content_versions import head_key
-    return store.get_setting(hold_key(head_key(identity, kind)), None)
+    from .personal_content_versions import head_key, setting
+    return setting(store, hold_key(head_key(identity, kind)))
 
 
 def hold_requirements(store):
     result, groups = {}, {}
     if store is None or not getattr(store, '_db', None): return result, groups
-    from .personal_content_versions import PREFIX as ADOPT, HEAD, head_key
-    for key, raw in store._db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (HOLD + '*',)):
-        identity = json.loads(raw)
+    from .personal_content_versions import PREFIX as ADOPT, HEAD, head_key, setting_rows
+    for key, identity in setting_rows(store, HOLD).items():
         if not identity: continue
         head = HEAD + key.removeprefix(HOLD); seen = set()
         while identity:

@@ -48,7 +48,23 @@ def clear_learning_data(store) -> dict:
         create_indexes(db)
         db.execute('DELETE FROM semantic_error_seen')
         db.execute('DELETE FROM semantic_error_pattern')
-        for key in (CONTENT_CONTROLS_SETTING, "new_dispatch_v1", "explicit_learning_start_v1", "practice_queue_kinds", "kana_introductions_v1", "kana_ability_bridges_v1", "study_path_v1", "kana_context_words_v1", "kana_rule_probes_v1", "ai_practice_v1", "ai_question_preview_v1", "ai_tutor_v1"):
+        # study_routes_v1 (design 10, 12 Q6): every route's added_sections and the
+        # current route are learning state; personal route specs and enabled
+        # flags are kept. An unreadable value is removed like study_path_v1.
+        from .study_routes import ROUTES_SETTING, reset_routes_state
+        routes_row = db.execute("SELECT value_json FROM app_setting WHERE key=?", (ROUTES_SETTING,)).fetchone()
+        if routes_row is not None:
+            try:
+                kept = reset_routes_state(json.loads(routes_row[0]))
+            except ValueError:
+                kept = None
+            if kept is None:
+                db.execute("DELETE FROM app_setting WHERE key=?", (ROUTES_SETTING,))
+                deleted_settings.append(ROUTES_SETTING)
+            else:
+                db.execute("UPDATE app_setting SET value_json=? WHERE key=?",
+                           (json.dumps(kept, ensure_ascii=False, allow_nan=False), ROUTES_SETTING))
+        for key in (CONTENT_CONTROLS_SETTING, "new_dispatch_v1", "explicit_learning_start_v1", "intro_batch_v1", "practice_queue_kinds", "kana_introductions_v1", "kana_ability_bridges_v1", "study_path_v1", "kana_context_words_v1", "kana_rule_probes_v1", "ai_practice_v1", "ai_question_preview_v1", "ai_tutor_v1"):
             if db.execute("DELETE FROM app_setting WHERE key=?", (key,)).rowcount:
                 deleted_settings.append(key)
         from .ai_ui_state import AI_FORM_SETTING, reset_ai_form_request_history

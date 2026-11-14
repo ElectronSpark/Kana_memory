@@ -1,7 +1,7 @@
 [tool.briefcase]
 project_name = "Kana Memory"
 bundle = "org.example.demo"
-version = "0.30.7"
+version = "0.35.0"
 url = "https://example.org/kana-memory"
 license = "MIT"
 author = "Kana Memory personal project"
@@ -22,6 +22,9 @@ min_os_version = "26"
 target_os_version = "36"
 android_abis = ["arm64-v8a", "x86_64"]
 base_theme = "Theme.MaterialComponents.Light.NoActionBar"
+# One MainActivity per task; launcher/share intents reach it via onNewIntent. configChanges is
+# hard-coded by the template, so environment/run_app.ps1 adds assetsPaths after generation.
+android_manifest_activity_attrs_extra_content = 'android:launchMode="singleTask"'
 android_manifest_extra_content = '''
 <queries>
     <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>

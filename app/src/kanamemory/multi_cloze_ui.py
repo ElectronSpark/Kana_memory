@@ -6,11 +6,14 @@ import kanamemory.multi_cloze as cloze
 from .cloze_presentation import choice_display, draft_prompt_plan
 
 
-def prompt_view(app, u, question, draft, preferences=None, *, size=20):
-    """A retained sentence view; only saved edits may replace its blank markers."""
+def prompt_view(app, u, question, draft, preferences=None, *, size=20, known_ids=None):
+    """A retained sentence view; only saved edits may replace its blank markers.
+
+    known_ids: see question_support.prompt_support (kana for unlearned words of the sentence).
+    """
     from .question_support import prompt_support, render_prompt_plan
 
-    base = prompt_support(question, preferences)
+    base = prompt_support(question, preferences, known_ids)
     holder = u.col()
     holder._feedback_fragment = {'kind': 'multi_cloze_prompt', 'question_id': question.get('id')}
 
@@ -46,8 +49,15 @@ def _style(widget, **values):
             setattr(widget.style, key, value)
 
 
-def controls(app, u, question, draft, on_change, on_submit, is_active, *, prompt=None):
-    """Persist before display; callbacks are inert after leaving or submitting."""
+def controls(app, u, question, draft, on_change, on_submit, is_active, *, prompt=None, known_ids=None):
+    """Persist before display; callbacks are inert after leaving or submitting.
+
+    With known_ids the word-bank buttons of every gap show inline kana when the
+    bank holds a word the learner has not learned (question_support.option_labels:
+    all words or none); a button still selects the raw value.
+    """
+    from .question_support import option_labels
+
     spec = cloze.specification(question)
     cloze.validate_draft(question, draft)
     state = {**deepcopy(draft), **(cloze.initial_draft(question) if cloze.STATE_KEY not in draft else {})}
@@ -144,13 +154,15 @@ def controls(app, u, question, draft, on_change, on_submit, is_active, *, prompt
         display = choice_display(slot['choices'])
         # A shortened choice only makes sense alongside its in-sentence context.
         labels = display['choices'] if prompt is not None else [{'label': value, 'value': value} for value in slot['choices']]
-        for item in labels:
-            button = u.button(item['label'], lambda w=None, i=identity, v=item['value']: choose_value(i, v),
+        kana = option_labels(question, known_ids, {item['value']: item['label'] for item in labels})
+        captions = [kana.get(item['value'], item['label']) for item in labels]
+        for item, caption in zip(labels, captions):
+            button = u.button(caption, lambda w=None, i=identity, v=item['value']: choose_value(i, v),
                               flex=1, multiline=True, text_role="study")
             button.enabled = not context["locked"]
             choices.append(button)
         context["choices"] = choices
-        count = _columns(app, u, [item['label'] for item in labels])
+        count = _columns(app, u, captions)
         for start in range(0, len(choices), count):
             choices_box.add(u.row(*choices[start:start + count]))
         context["clear"].enabled = bool(values) and not context["locked"]

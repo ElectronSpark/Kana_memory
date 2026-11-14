@@ -8,6 +8,7 @@ from copy import deepcopy
 from .feedback_bindings import field_value
 from .material_workflow import digest
 from .retention_ai import _hash
+from .word_sound_questions import is_kana_variant
 
 KEY = 'content_dependencies'
 FACTORY = 'learning-fields-v1'
@@ -36,7 +37,12 @@ copied from a lesson just because the strings happen to be equal.
             add('meaning', 'answer', 'accepted_answers', 'choices', 'options')
         if kind in {'vocab_meaning', 'vocab_reading', 'vocab_zh_ja_contrast'}: add('title', 'prompt')
         if kind == 'vocab_audio_meaning': add('reading', 'audio_text')
-        if kind == 'vocab_audio_word':
+        if kind == 'vocab_audio_word' and is_kana_variant(question.get('variant')):
+            # Kana-spelling variant: the answer and its near-miss options come from the
+            # reading; a kana title is itself the answer.
+            add('reading', 'audio_text', 'answer', 'accepted_answers', 'choices', 'options')
+            if question['answer'] == item['title']: add('title', 'answer', 'accepted_answers', 'choices', 'options')
+        elif kind == 'vocab_audio_word':
             add('reading', 'audio_text'); add('title', 'answer', 'accepted_answers', 'choices', 'options')
         if kind == 'vocab_reading_choice':
             add('title', 'prompt'); add('reading', 'answer', 'accepted_answers', 'choices', 'options')

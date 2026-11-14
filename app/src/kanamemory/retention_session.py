@@ -250,29 +250,24 @@ def formal_ready(learning, entry, now, *, settling=False):
     q = entry['question']; uid = unit_id(q)
     unit = learning._db.execute('SELECT * FROM learning_unit WHERE unit_id=?', (uid,)).fetchone()
     content = learning.ability_instruction_row(q['target_id'], q['ability'])
-    if (unit is None or content is None or unit['suspended'] or not unit['instruction_ready']
+    if (not learning.answer_ready(unit, content, q['target_id'], q['id'], now)
             or entry['credit_revoked'] or not enabled_question(learning.store, q)
-            or handoff(learning.store, q['id']) is not None
-            or content['stage'] in {'intro', 'guide'} or learning.prerequisite_status(
-                q['target_id'], dict(content).get('instruction_scope'))['blocked']
-            or content['stage'] == 'bridge' and not learning._retrieval_ready(content, now)
             or latest_anchor(learning._db, uid) != entry['anchor_event_id']):
         return False
     previous = json.loads(unit['scheduler_state_json'] or '{}').get('last_review')
     if previous and _date(previous) > now:
         return False
+    # Design 12 E4: a unit formally rated less than 24 hours ago is only observed.
+    from .arrangement.assembly import practice_credit
+    credit = practice_credit(learning.store, learning)
+    if not credit.is_formal(credit.course(q['target_id'], q['ability'], now)):
+        return False
     if settling:
         return True  # First-answer independence was frozen before feedback.
-    from .learning_store import _ability_due
     pending = learning._db.execute('SELECT not_before_utc FROM learning_question WHERE question_id=?', (entry['course_question_id'],)).fetchone()
-    floor = pending[0] if pending else None
-    scheduled = _ability_due(unit, q)
     # Only the exact old scheduling floor is bypassed. A separate frozen floor
     # (for feedback, explicit pacing, etc.) remains an independence constraint.
-    if floor and scheduled and _date(floor) == _date(scheduled):
-        floor = None
-    detached = {**dict(unit), 'due_at_utc': None, 'probe_due_at_utc': None, 'not_before_utc': floor}
-    guard = learning.question_not_before(detached, {**q, 'not_before_utc': floor})
+    guard = learning.independence_wait(unit, q, pending[0] if pending else None)
     return not guard or _date(guard) <= now
 
 
@@ -398,9 +393,9 @@ class DiagnosticStore:
         from .material_eligibility import pretest_targets
         return {item['id']: item for item in pretest_targets(self.store, identity, repo=self.repo, examples=self.examples)}
 
-    def _candidates(self, cid, enabled, *, material_id=None, canonical_items=None):
+    def _candidates(self, cid, enabled, *, material_id=None, canonical_items=None, availability=None):
         from .retention_sources import current_item, trusted_question
-        from .learning_questions import SOUND_KINDS, build_learning_question, question_kinds
+        from .learning_questions import PRACTICE_ONLY_KINDS, build_learning_question, question_kinds
         from .answer_input import available, system_japanese_enabled
         item = ((canonical_items if canonical_items is not None else self._material_items(material_id)).get(cid)
                 if material_id else current_item(self.store, cid, repo=self.repo))
@@ -412,14 +407,22 @@ class DiagnosticStore:
                     and available(q, system_japanese=system_japanese_enabled(self.store))
                     and assessment_decision(item, q, purpose='check_only', enrolled=False, store=self.store)['assessment_eligible']]
         candidates = []
+        if not material_id and availability is None:
+            availability = self.learning.availability()  # 08 section 8.2
         from .learning_practice_policy import practice_candidates
         from .learning_dependencies import independent_ready_ids
-        # A check prefers choices, so the practice-only sound kinds would silently
-        # replace what it measures (typed reading, word sense).
-        kinds = [kind for kind in question_kinds(cid, item=item) if kind not in SOUND_KINDS]
+        # A check prefers choices, so the practice-only sound and context-choice
+        # kinds would silently replace what it measures (typed reading, word sense).
+        # Only enabled kinds reach the gate: its passes are chosen per ability
+        # (design 11 section 5, D3/D4), so a disabled kind's met template must
+        # not hide an enabled kind's fallback or relaxed one. A diagnostic of
+        # enrolled content keeps R1's relaxed tier, unlike a new-content check.
+        kinds = [kind for kind in question_kinds(cid, item=item)
+                 if kind not in PRACTICE_ONLY_KINDS and enabled_question(self.store, {'kind': kind}, enabled)]
         descriptors = list(practice_candidates(item, kinds,
             known_background_ids=independent_ready_ids(self.learning),
-            system_japanese=system_japanese_enabled(self.store)))
+            system_japanese=system_japanese_enabled(self.store),
+            availability=None if material_id else availability))
         for kind in kinds:
             if not enabled_question(self.store, {'kind': kind}, enabled): continue
             for variant in [d['variant'] for d in descriptors if d['kind'] == kind]:
@@ -433,6 +436,16 @@ class DiagnosticStore:
                         and assessment_decision(item, q, purpose='check_only', enrolled=False, store=self.store)['assessment_eligible']):
                     candidates.append(q)
         return sorted(candidates, key=lambda q: (q.get('input_mode', 'choice') != 'choice', bool(q.get('audio_text'))))
+
+    def _fits_enrolled_revision(self, cid, question):
+        """A new question joins an enrolled unit's queue only at the saved lesson's revision.
+
+        LearningStore refuses any other one. A check question is built from the
+        current lesson, so a lesson enrolled before its catalogue revision changed
+        has no eligible question; it must not fail the check of the other lessons.
+        """
+        saved = self.db.execute('SELECT revision FROM learning_content WHERE content_id=?', (cid,)).fetchone()
+        return saved is None or 'revision' not in question or str(question['revision']) == saved[0]
 
     def start(self, scope_ids, enabled_kinds, request_id, *, purpose='check_only', budget='quick', intent='active', exposed_units=(), now=None, _after_start=None, material_id=None, preferred_questions=None, _append_to=None):
         from .learning_dependencies import has_started_answer
@@ -475,8 +488,10 @@ class DiagnosticStore:
             if material_id:
                 episode['material_id'] = material_id
             material_items = self._material_items(material_id) if material_id else None
+            availability = None if material_id else self.learning.availability()
             for cid in scope_ids:
-                candidates = self._candidates(cid, enabled_kinds, material_id=material_id, canonical_items=material_items)
+                candidates = self._candidates(cid, enabled_kinds, material_id=material_id, canonical_items=material_items,
+                                              availability=availability)
                 selected = None; blocked = None
                 for q in candidates:
                     uid = unit_id(q)
@@ -498,6 +513,8 @@ class DiagnosticStore:
                                 or not assessment_decision(current_item, frozen, purpose='check_only', store=self.store)['assessment_eligible']):
                             continue
                         q = frozen
+                    elif unit and not self._fits_enrolled_revision(cid, q):
+                        continue
                     if preferred_questions and cid in preferred_questions and _proof(q) != preferred_questions[cid]:
                         continue
                     selected = (q, pending, unit); break

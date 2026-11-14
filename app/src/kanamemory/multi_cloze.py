@@ -122,7 +122,8 @@ def validate_snapshot(question):
     spec = specification(question)
     owner = next(slot for slot in spec["slots"] if slot["role"] == "primary")
     expected = canonical_answer(question)
-    allowed = (("grammar", "grammar_cloze", "application"), ("word", "vocab_usage", "use"))
+    allowed = (("grammar", "grammar_cloze", "application"), ("word", "vocab_usage", "use"),
+               ("word", "vocab_context_choice", "use"))
     if (str(question.get('target_id', '')).startswith('pronunciation:')
             and question.get('domain', 'pronunciation') == 'pronunciation'):
         allowed += (("grammar", "pronunciation_application", "application"),)

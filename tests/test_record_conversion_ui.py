@@ -185,7 +185,8 @@ def test_settings_entry_dispatches_conversion_without_adding_home_controls(conve
 def test_current_settings_hub_data_menu_opens_conversion(conversion_app, monkeypatch):
     app = conversion_app
     wire(app)
-    for name in ('show_prompt_settings', 'show_settings', 'show_feedback_manager', 'show_ai_service_settings'):
+    for name in ('show_prompt_settings', 'show_settings', 'show_feedback_manager', 'show_ai_service_settings',
+                 'show_content_libraries'):
         setattr(app, name, Mock())
     app.show_learning_data = MethodType(LearningUIMixin.show_learning_data, app)
     LearningUIMixin.show_settings_hub.__wrapped__(app)

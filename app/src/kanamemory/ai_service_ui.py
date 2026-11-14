@@ -10,6 +10,17 @@ from .navigation import page_view
 
 CONNECTION_SETTING = "ai_connection_v1"  # Preserve backup exclusion and settings identity.
 MODEL_PLACEHOLDER = "手动填写模型 ID"
+BUSY_STATUS = "数据库正忙，设置尚未保存，请稍后再点保存。"
+
+
+def _locked(error):
+    """A lock timeout on a settings write: recorded, shown as retryable."""
+    from .draft_debounce import is_database_locked
+    if not is_database_locked(error):
+        return False
+    from .diagnostic_events import record_error
+    record_error("ai_settings", "save", error)
+    return True
 
 
 class AIServiceUIMixin:
@@ -77,6 +88,10 @@ class AIServiceUIMixin:
             self.store.set_setting(SETTINGS, validate_settings(values))
         except (ValueError, AIServiceError) as exc:
             self._material_budget_status.text = str(exc); return
+        except Exception as exc:
+            if not _locked(exc):
+                raise
+            self._material_budget_status.text = BUSY_STATUS; return
         self._material_budget_status.text = '已保存，将用于新批次。'
 
     @page_view()
@@ -217,8 +232,8 @@ class AIServiceUIMixin:
             self.ai_connection_label.text = "已保存并验证本机读取。首次请求时会检查服务授权及模型支持。"
         except AIServiceError as exc:
             self.ai_connection_label.text = str(exc)
-        except Exception:
-            self.ai_connection_label.text = "配置未保存，请检查输入后重试。"
+        except Exception as exc:
+            self.ai_connection_label.text = BUSY_STATUS if _locked(exc) else "配置未保存，请检查输入后重试。"
 
     def _remove_ai_device_key(self, widget=None):
         self.ai_key_input.value = ""

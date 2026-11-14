@@ -107,7 +107,7 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
                 finishFromWorker(error == null ? IMPORT_READY : null, error);
             }, "KanaBackupImport").start();
         });
-        try { opener.launch(new String[]{"application/json", "text/plain", "application/octet-stream"}); }
+        try { opener.launch(new String[]{"application/json", "text/plain", "application/octet-stream", "application/zip"}); }
         catch (RuntimeException error) { complete(null, false, "无法打开选择文件窗口：" + error.getMessage()); }
     }
 

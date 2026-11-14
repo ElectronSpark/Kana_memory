@@ -28,6 +28,8 @@ CATEGORIES = ("unclear", "content", "audio", "layout", "bug", "other")
 MAX_NOTE_CHARS = 20_000
 MAX_CONTEXT_BYTES = 16 * 1024 * 1024
 MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
+# Below Android's 5 s input-dispatch ANR threshold; callers surface "busy, retry".
+SQLITE_BUSY_TIMEOUT_SECONDS = 2.5
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_TEXT_EXPORT_BYTES = 256 * 1024
@@ -190,6 +192,20 @@ def _fenced(text, language=""):
     return fence + language + "\n" + text + "\n" + fence
 
 
+def _enable_wal(db):
+    """Same durability choice as domain.enable_wal (09 Q1).
+
+    synchronous=NORMAL only when SQLite actually chose WAL (crash-consistent;
+    power loss may drop the last commit). Any other journal keeps FULL.
+    Temporary storage stays in memory (no SQLite temp directory on Android).
+    """
+    db.execute("PRAGMA temp_store=MEMORY")
+    mode = str(db.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    if mode == "wal":
+        db.execute("PRAGMA synchronous=NORMAL")
+    return mode
+
+
 class FeedbackStore:
     """One independent database file, never the progress.sqlite3 connection."""
 
@@ -198,7 +214,7 @@ class FeedbackStore:
         if self.path.name.casefold() == "progress.sqlite3":
             raise ValueError("反馈必须保存在独立的 feedback.sqlite3 中。")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(self.path, timeout=10)
+        self._db = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
         self._db.row_factory = sqlite3.Row
         try:
             names = {row[0] for row in self._db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
@@ -221,6 +237,10 @@ class FeedbackStore:
                         )""")
                     self._db.execute("CREATE INDEX feedback_status_created ON feedback_record(status, created_at DESC, id DESC)")
                     self._db.execute("INSERT INTO feedback_meta VALUES ('schema_version', ?)", (str(VERSION),))
+            # WAL only after the file is known to be ours: foreign or unsupported
+            # files must stay byte-identical. WAL lets the export worker read
+            # screenshots while the UI connection commits a note.
+            _enable_wal(self._db)
         except Exception:
             self._db.close()
             raise

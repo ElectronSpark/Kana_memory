@@ -402,7 +402,7 @@ def project_pack(store, pack):
     """One current inventory feeds all forward/reverse indexes and ranking."""
     from .personal_content_versions import resolve, changed_resources
     from .personal_content_compensation import held, holds
-    from .example_store import validate_pack
+    from .example_store import BUNDLED_LIMITS, validate_pack
     examples = {e['id']: deepcopy(e) for e in pack['examples']}
     refs = {r['id']: deepcopy(r) for r in pack['references']}
     retired = {}
@@ -441,4 +441,7 @@ def project_pack(store, pack):
     current_refs = [r for r in current_refs if r['example_id'] not in retired]
     current_examples = [resolve(store, e, kind='example') if ('example', e['id']) in changed else e
                         for e in examples.values() if e['id'] not in retired]
-    return validate_pack({**pack, 'examples': current_examples, 'references': current_refs}), retired
+    # `pack` is ExampleStore's unsaved bundled + learner view, so it is held to
+    # the bundled budget; each personal graph was validated as a learner pack.
+    return validate_pack({**pack, 'examples': current_examples, 'references': current_refs},
+                         limits=BUNDLED_LIMITS), retired

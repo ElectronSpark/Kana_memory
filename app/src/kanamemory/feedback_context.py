@@ -16,6 +16,8 @@ import json
 import re
 from pathlib import PurePath
 
+from .arrangement.services.preferences import KEYS as ARRANGEMENT_KEYS
+
 FORMAT = "kanamemory-feedback-context"
 VERSION = 1
 MAX_WIDGETS = 12000
@@ -37,7 +39,8 @@ _STYLE_FIELDS = ("font_family", "font_size", "font_weight", "font_style", "color
     "padding_left", "padding_right", "margin", "margin_top", "margin_bottom", "margin_left",
     "margin_right", "direction", "align_items", "text_align", "visibility", "display")
 _SETTING_KEYS = ("practice_preferences", "practice_queue_kinds", "word_drill_preferences",
-    "learning_preferences_v1", "prompt_display_v1", "pitch_display_v1", "answer_input_preferences_v1")
+    "learning_preferences_v1", "prompt_display_v1", "pitch_display_v1", "answer_input_preferences_v1",
+    "intro_batch_size_v1", *ARRANGEMENT_KEYS)
 _QUESTION_PAGES = frozenset({"question", "word_question", "ink_question", "feedback", "kana_introduction"})
 _SESSION_PAGES = _QUESTION_PAGES | {"session_wait", "session_done", "kana_intro_wait", "dependency_wait"}
 _LEARNING_QUESTION_PAGES = frozenset({"learning_question", "learning_feedback", "learning_feedback_detail"})
@@ -395,7 +398,7 @@ def _capture_content(c, app, page, key):
                     c.warn("content/learning_item", "content_read_failed", error_type=type(exc).__name__)
             result["learning_item"] = c.copy(item, "content/learning_item")
     title = c.attr(c.attr(app, "title_label", "content/page_title"), "text", "content/page_title", "") or c.attr(app, "title", "content/page_title", "")
-    if page in {"learning_familiarity", "learning_intro", "learning_guide"} or page == "learning_prerequisite" and title == "接续说明":
+    if page in {"learning_familiarity", "learning_intro", "learning_guide", "learning_card", "learning_batch_quiz"} or page == "learning_prerequisite" and title == "接续说明":
         item = c.attr(app, "_learning_item", "content/current_learning_item")
         if isinstance(item, Mapping):
             result["learning_item"] = c.copy(item, "content/current_learning_item")
@@ -647,6 +650,9 @@ def capture_feedback_context(app, *, overlay=None):
         result["recent_events"] = c.copy(events[-12:], "recent_events")
     from .diagnostic_events import error_events
     result["diagnostic_events"] = error_events()
+    # Code locations of errors that escaped a handler (this and earlier runs).
+    from .crash_events import unhandled_errors
+    result["unhandled_errors"] = unhandled_errors()
     if overlay is not None:
         result["overlay"] = c.copy(overlay, "overlay")
     result["completeness"] = {"complete": c.warning_count == 0, "warnings": c.warnings,

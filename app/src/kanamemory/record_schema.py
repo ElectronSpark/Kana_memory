@@ -10,9 +10,111 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from threading import Lock
 from uuid import uuid4
 
 VERSION = 1
+
+
+class LearnerConnection(sqlite3.Connection):
+    """A progress.sqlite3 connection that remembers its own verified schema facts.
+
+    ``schema_facts`` belongs to this one connection (and so to the one thread
+    that owns it). It holds only positive facts ("table X exists") learned
+    outside a transaction. App code never drops the tables it records; the one
+    rebuild (ensure_current's conversion) clears the facts. Negative probes are
+    never cached, so a later migration is always noticed.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.schema_facts = {}
+
+
+# Process-wide record of schema checks that already passed, keyed by component
+# and database file identity; the value is PRAGMA schema_version when the check
+# passed. Any DDL (a migration, an added table or index) bumps schema_version,
+# so the next connection re-verifies instead of trusting the old result.
+_VERIFIED: dict[tuple, int] = {}
+_VERIFIED_LOCK = Lock()
+_MAX_VERIFIED = 64
+
+
+def _file_identity(db):
+    facts = getattr(db, "schema_facts", None)
+    if facts is not None and "file" in facts:
+        return facts["file"]
+    filename = next((row[2] for row in db.execute("PRAGMA database_list") if row[1] == "main"), "")
+    if not filename:
+        return None  # :memory: or a temporary database: never cached.
+    try:
+        path = os.path.normcase(os.path.realpath(filename))
+        status = os.stat(path)
+    except OSError:
+        return None
+    identity = (path, status.st_dev, status.st_ino)
+    if facts is not None:
+        facts["file"] = identity
+    return identity
+
+
+def schema_key(db):
+    """(file identity, schema_version) for the process cache, or None if uncacheable."""
+    identity = _file_identity(db)
+    if identity is None:
+        return None
+    return identity, db.execute("PRAGMA main.schema_version").fetchone()[0]
+
+
+def schema_verified(component, key) -> bool:
+    if key is None:
+        return False
+    with _VERIFIED_LOCK:
+        return _VERIFIED.get((component, key[0])) == key[1]
+
+
+def mark_schema_verified(component, db) -> None:
+    """Record a passed check at the database's current schema_version."""
+    key = schema_key(db)
+    if key is None or db.in_transaction:
+        return
+    with _VERIFIED_LOCK:
+        _VERIFIED.pop((component, key[0]), None)
+        _VERIFIED[(component, key[0])] = key[1]
+        while len(_VERIFIED) > _MAX_VERIFIED:
+            _VERIFIED.pop(next(iter(_VERIFIED)))
+
+
+def forget_schema(db=None) -> None:
+    """Drop cached checks for one database (or all); also its connection facts."""
+    facts = getattr(db, "schema_facts", None)
+    if facts is not None:
+        identity = facts.get("file")
+        facts.clear()
+        if identity is not None:
+            facts["file"] = identity
+    identity = None if db is None else _file_identity(db)
+    with _VERIFIED_LOCK:
+        if db is None:
+            _VERIFIED.clear()
+        else:
+            for key in [key for key in _VERIFIED if key[1] == identity]:
+                del _VERIFIED[key]
+
+
+def object_present(db, name) -> bool:
+    """sqlite_master probe for an app-owned table/index, cached per connection.
+
+    Only a positive answer read outside a transaction is remembered (a rolled
+    back CREATE must not leave a stale fact). Plain connections always query.
+    """
+    facts = getattr(db, "schema_facts", None)
+    if facts is not None and facts.get(("object", name)):
+        return True
+    present = db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (name,)).fetchone() is not None
+    if present and facts is not None and not db.in_transaction:
+        facts[("object", name)] = True
+    return present
 TABLES = ("learner_record_meta", "app_setting", "study_session", "session_question",
           "study_card", "review_event", "practice_attempt", "session_checkpoint",
           "session_answer", "word_spelling_attempt")
@@ -188,6 +290,11 @@ def ensure_current(db, data_dir=None):
     """Initialize or upgrade once. Failure leaves the original schema intact."""
     if db.in_transaction:
         raise RuntimeError("Record initialization requires its own transaction")
+    # A file already verified at this exact schema_version (by any connection in
+    # this process) skips the three table_info probes; a migration bumps the
+    # version and forces a full re-check.
+    if schema_verified("record", schema_key(db)):
+        return {"converted": False, "schema_version": VERSION}
     meta = _columns(db, "learner_record_meta")
     columns = _columns(db, "study_session")
     if meta:
@@ -196,6 +303,7 @@ def ensure_current(db, data_dir=None):
             raise ValueError("不支持此学习记录版本，请使用对应版本的应用。")
         if columns != SESSION_COLUMNS or not _columns(db, "session_question"):
             raise ValueError("学习记录结构与版本标记不一致。")
+        mark_schema_verified("record", db)
         return {"converted": False, "schema_version": VERSION}
     if columns and columns != (*SESSION_COLUMNS, "question_snapshot_json"):
         raise ValueError("未知的学习记录结构，未进行转换。")
@@ -231,5 +339,9 @@ def ensure_current(db, data_dir=None):
         raise
     finally:
         db.execute("PRAGMA foreign_keys=" + str(original_fk))
+        # The conversion rebuilt study_session (or created the base tables):
+        # forget every cached fact about this file before trusting it again.
+        forget_schema(db)
+    mark_schema_verified("record", db)
     return {"converted": bool(columns), "schema_version": VERSION,
             "session_questions": count, "recovery_path": recovery}

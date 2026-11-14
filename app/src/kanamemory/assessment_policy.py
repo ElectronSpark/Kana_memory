@@ -35,6 +35,14 @@ MESSAGES = {
     "opportunity_consumed": "这次作答已记录；保留回答，不重复调整复习间隔。",
     "personal_content_changed": "相关说明已修订，这道旧题仍待核对；保留回答，不调整复习间隔。",
 }
+# Saved `unresolved_reason` codes from grading a non-strict text mismatch.
+UNRESOLVED_REASON_MESSAGES = {
+    "latin_in_kana": "请用假名作答。本题暂不计入复习。",
+    "particle_ha_typed_wa": "助词は请输入 ha（わ→は）。本题暂不计入复习。",
+    "particle_wo_typed_o": "助词を请输入 wo（お→を）。本题暂不计入复习。",
+    "particle_he_typed_e": "助词へ请输入 he（え→へ）。本题暂不计入复习。",
+    "other_form": "你的表达可能有其它合理写法。本题暂不计入复习，请与示例核对。",
+}
 
 
 def _ai_origin(item, question):
@@ -133,3 +141,12 @@ def settlement_decision(item, question, submitted, *, formal_check=False, store=
 
 def assessment_message(decision):
     return MESSAGES.get((decision or {}).get("reason"), "这题暂不计入复习。")
+
+
+def unresolved_message(result):
+    """Grading reason first, then the assessment reason, then the fallback."""
+    result = result or {}
+    reason = result.get("unresolved_reason") or (result.get("answer") or {}).get("unresolved_reason")
+    if reason in UNRESOLVED_REASON_MESSAGES:
+        return UNRESOLVED_REASON_MESSAGES[reason]
+    return assessment_message(result.get("assessment"))

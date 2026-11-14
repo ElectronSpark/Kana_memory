@@ -16,6 +16,9 @@ import random
 import re
 import unicodedata
 
+from .arrangement.model import Orientation
+from .arrangement.rules.background import BackgroundCandidate, select_background
+from .arrangement.services.preferences import ArrangementPreferences
 from .learning_questions import KIND_ABILITIES, KIND_LABELS, question_kinds
 
 SCOPE_FORMAT = "kanamemory-ai-scope"
@@ -74,19 +77,28 @@ def learning_scope_items(learning_store):
     The full checks below remain authoritative. A large enrolled curriculum
     may contain thousands of untouched explanations and only a few assessed
     lessons; their rich examples need not be decoded for every tutor turn.
+    Content of a disabled/missing library (the store's AvailabilityView,
+    design 08 section 8.2) is no target or background.
     """
-    rows = learning_store.store.queries.assessed_course_candidates()
+    rows = learning_store.store.queries.assessed_course_candidates(
+        exclude=learning_store.availability().unavailable_ids)
     return [learning_store.get_item(row[0]) for row in rows]
 
 
 def build_learning_scope(learning_store, enabled_kinds, *, target_ids=None, limit=24, now=None,
-                         supported_kinds=None, _items=None):
+                         supported_kinds=None, _items=None, scope_contents=None):
     """Export only selected semantic content and coarse capability labels.
 
     Targets have actually attempted independent assessment, including weak
     attempts. Background content needs current independent success. Enrollment and
     guided exposure alone qualify for neither. No exact dates/events/state are
     exported. ``limit=None`` is for local queue eligibility, not an API upload.
+    Under breadth first a capped background keeps places for due known content
+    (design 12 P1, arrangement.rules.background); the entries keep their shape.
+    ``scope_contents``: the learner's focus scope (content ids; design 12 H2),
+    None for none: the targets and the ordinary background order put the
+    items inside it first (stable); P1's places for due content are kept as
+    they are. Without it the result is exactly as before.
     """
     if limit is not None and (type(limit) is not int or not 1 <= limit <= 2000):
         raise ValueError("AI 范围数量不正确。")
@@ -153,12 +165,21 @@ def build_learning_scope(learning_store, enabled_kinds, *, target_ids=None, limi
                          and _normal(entry["title"]) == _normal(entry["reading"]))
             known = "understanding" in successful and ("reading" in successful or same_kana)
         if known:
-            backgrounds.append({**entry, "abilities": sorted(successful)})
+            backgrounds.append(BackgroundCandidate({**entry, "abilities": sorted(successful)},
+                                                   entry["familiarity"], any(d <= now for d in dues)))
     ordered = [row[-1] for row in sorted(targets, key=lambda row: row[:3])]
-    backgrounds.sort(key=lambda row: (-row["familiarity"], row["id"]))
+    backgrounds.sort(key=lambda row: (-row.familiarity, row.item["id"]))
+    if scope_contents is not None:
+        # Design 12 H2: inside the focus scope first; each part keeps its own order.
+        ordered.sort(key=lambda entry: entry["id"] not in scope_contents)
+        backgrounds.sort(key=lambda row: row.item["id"] not in scope_contents)
+    # Design 12 P1: only the capped request list may keep places for fading
+    # known content, and only under breadth first; the due flag never leaves here.
+    orientation = (Orientation.THOROUGH if limit is None
+                   else ArrangementPreferences(learning_store.store).orientation())
     return {"format": SCOPE_FORMAT, "version": 1,
             "targets": ordered if limit is None else ordered[:limit],
-            "background": backgrounds if limit is None else backgrounds[:limit]}
+            "background": select_background(orientation, backgrounds, limit)}
 
 
 def _scope_targets(scope):

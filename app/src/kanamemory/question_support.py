@@ -23,7 +23,7 @@ _MEANING_KINDS = frozenset({
     "reading_comprehension",
 })
 _BACKGROUND_KINDS = frozenset({
-    "vocab_usage", "grammar_cloze", "grammar_transform", "grammar_reorder",
+    "vocab_usage", "vocab_context_choice", "grammar_cloze", "grammar_transform", "grammar_reorder",
     "targeted_correction", "controlled_sentence_production",
 })
 _UNSAFE_ABILITIES = frozenset({
@@ -107,7 +107,7 @@ def background_support(prompt, target, raw, kind, *, explicit=(), bundled=False,
         from .sentence_annotations import sentence_annotation_plan
         plan = sentence_annotation_plan(prompt)
         if (plan.get('text') == prompt and plan.get('status') == 'precomputed'
-                and (kind in {'grammar_cloze', 'vocab_usage'} or plan.get('context_projection_sha256'))):
+                and (kind in {'grammar_cloze', 'vocab_usage', 'vocab_context_choice'} or plan.get('context_projection_sha256'))):
             candidates = plan.get("segments", [])
     protected = _protected_answer_forms(raw)
     if target.get("family") == "word":
@@ -219,9 +219,9 @@ def _legacy_learning_question_display(question):
 @lru_cache(maxsize=1)
 def _background_word_senses():
     """Exact curated lesson senses, not arbitrary first dictionary meanings."""
-    from .learning_content import learning_items
+    from .learning_content import learning_item_views
     indexed = {}
-    for item in learning_items("word"):
+    for item in learning_item_views("word"):
         key = (item.get("title"), item.get("reading"))
         if all(isinstance(value, str) and value for value in key) and item.get("meaning"):
             indexed.setdefault(key, []).append((item["id"], item["meaning"]))
@@ -369,6 +369,134 @@ def _practice_background_context(question):
         if not unsafe:
             results.append(dict(part))
     return {"background_glosses": sorted(results, key=lambda part: part["start"])} if results else {}
+
+
+def shared_requirements(question):
+    """A reader of a scheduled question's declared requirements that looks its template up once.
+
+    A page passes the same reader to unmet_requirement_glosses and unmet_rule_hints, so the
+    lesson's templates are prepared once for both (nothing is read until one of them asks).
+    It returns the frozenset of learning_questions.question_requires on the catalogue lesson,
+    or None without a lesson, a template or a valid entry.
+    """
+    cell = []
+
+    def read():
+        if not cell:
+            cell.append(_declared_requirements(question))
+        return cell[0]
+    return read
+
+
+def _declared_requirements(question):
+    from .learning_content import get_learning_item
+    from .learning_questions import question_requires
+    target_id = question.get("target_id") if isinstance(question, Mapping) else None
+    item = get_learning_item(target_id) if isinstance(target_id, str) else None
+    if item is None:
+        return None
+    try:
+        return question_requires(item, question) or frozenset()
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def unmet_requirement_glosses(question, known_ids, *, requires=None):
+    """Lesson glosses for the unmet declared words of a scheduled question.
+
+    Design 11 section 5 (D5, the 1T rule of the relaxed pass): a question served
+    with a requirement the learner has not been introduced to explains that word
+    from its own lesson sense (title, reading, curated meaning; a cognate whose
+    meaning repeats the written form shows its reading instead). Only course word
+    lessons named by the template's declared requirements and written literally
+    in the prompt qualify; grammar, kana and out-of-vocabulary items never do.
+    requires: an optional shared_requirements reader (one template lookup per page).
+    The same exclusions as reviewed background glosses apply: no target, gap,
+    answer-bearing, homophone or reading/listening/pitch task. Display only:
+    snapshots, drafts and grading are unchanged.
+    """
+    if (not isinstance(question, Mapping) or not isinstance(question.get("prompt"), str)
+            or question.get("kind") not in (_MEANING_KINDS | _BACKGROUND_KINDS)
+            or question.get("ability") in _UNSAFE_ABILITIES
+            or question.get("guided") or question.get("ai_generated") or question.get("tests_reading")
+            or question.get("tests_pitch") or question.get("requires_audio")
+            or question.get("audio_only") or question.get("has_hidden_transcript")
+            or question.get("domain") == "pronunciation"):
+        return []
+    from .learning_content import get_learning_item
+    target_id, prompt = question.get("target_id"), question["prompt"]
+    item = get_learning_item(target_id) if isinstance(target_id, str) else None
+    if item is None:
+        return []
+    requires = requires() if callable(requires) else _declared_requirements(question)
+    if requires is None:
+        return []
+    known = {value for value in (known_ids or ()) if isinstance(value, str)} | {target_id}
+    meta = question.get("practice") if isinstance(question.get("practice"), Mapping) else {}
+    targets = [span for span in meta.get("target_spans", ()) if isinstance(span, Mapping)
+               and type(span.get("start")) is int and type(span.get("end")) is int]
+    protected = [*_protected_answer_forms(question), item.get("title", "")]
+    protected.extend(span.get("quote", "") for span in targets
+                     if isinstance(span.get("quote"), str) and not _GAP.search(span["quote"]))
+    results = []
+    for cid in sorted(cid for cid in requires - known if cid.startswith("word:")):
+        lesson = get_learning_item(cid)
+        title, reading, meaning = ((lesson or {}).get(key) for key in ("title", "reading", "meaning"))
+        if not all(isinstance(value, str) and value for value in (title, reading, meaning)):
+            continue
+        start = prompt.find(title)
+        end = start + len(title)
+        if (start < 0 or _GAP.search(title)
+                or any(span["start"] < end and start < span["end"] for span in (*targets, *results))):
+            continue
+        normal = _hint_normal(title)
+        shown = meaning if _hint_normal(meaning) not in {"", normal} else reading
+        gloss, sound = _hint_normal(shown), _hint_sound(reading)
+        if not gloss or len(shown) > 80:
+            continue
+        if any((other := _hint_normal(value)) and (
+                normal in other or other in normal or gloss in other or other in gloss
+                or set(_KANJI.findall(normal)).intersection(_KANJI.findall(other))
+                or (sound and _hint_sound(value) and (sound in _hint_sound(value) or _hint_sound(value) in sound)))
+               for value in protected):
+            continue
+        results.append({"start": start, "end": end, "surface": title, "reading": reading,
+                        "meaning": shown, "target_id": cid})
+    return sorted(results, key=lambda part: part["start"])
+
+
+def unmet_rule_hints(question, known_ids, *, requires=None):
+    """Hints for the rule lessons a scheduled question needs and the learner has not been taught.
+
+    Design 11 section 5, D8: a question served in the opening with a simple rule
+    ahead of its lesson (early_rules), or by the relaxed pass, names each such
+    rule and gives its lesson's short rule text, for the page to show collapsed:
+    [{"id", "title", "lines"}], at most three, in the order of their ids. Only
+    declared requirements that are rule lessons (grammar family, pronunciation
+    rules included) with a rule text; never a word, kana or out-of-vocabulary
+    item, never the target, never a rule whose own form is the task's answer
+    (early_rules.asks_for). Guided, tutor and model-written questions get none.
+    It follows the known set at display time, not the opening: a waiting question
+    keeps its hint until the rule is learned. Display only: snapshots, drafts,
+    grading and evidence are unchanged, and opening a hint is not recorded as help.
+    requires: an optional shared_requirements reader (one template lookup per page).
+    """
+    if (not isinstance(question, Mapping) or question.get("guided") or question.get("ai_generated")
+            or question.get("tutor_practice")):
+        return []
+    from .early_rules import asks_for, rule_hint
+    from .learning_content import get_learning_item
+    target_id = question.get("target_id")
+    requires = requires() if callable(requires) else _declared_requirements(question)
+    if requires is None or not isinstance(target_id, str):
+        return []
+    known = {value for value in (known_ids or ()) if isinstance(value, str)} | {target_id}
+    hints = []
+    for cid in sorted(requires - known):
+        hint = rule_hint(cid)
+        if hint is not None and not asks_for(get_learning_item(cid) or {}, question):
+            hints.append(hint)
+    return hints[:3]
 
 
 def learning_question_display(question):
@@ -550,17 +678,37 @@ def _sentence_spans(question, support, spans):
     return tuple(sorted(merged, key=lambda part: part['start']))
 
 
-def prompt_support(question, preferences=None):
+def option_labels(question, known_ids, shown=None):
+    """Raw option -> button label with inline kana, when the options include an unlearned word.
+
+    question_readings rule 4 (all options are then labelled, or none); {} without known ids.
+    Display only: callbacks, drafts and submitted answers keep the raw option.
+    """
+    if known_ids is None:
+        return {}
+    from .question_readings import option_labels as labels
+    return labels(question, known_ids, shown)
+
+
+def prompt_support(question, preferences=None, known_ids=None):
     """Produce plain public spans plus only independently approved annotations.
 
     No source/technical captions are added to the visible prompt. Provenance
     stays in the frozen question record for the separate details view.
+    With known_ids (the learner's course_planning.known_ids) the kana of
+    question_readings joins the plan: every unlearned word of the prompt keeps
+    its reading whatever the furigana switch says. Without them the plan is
+    unchanged.
     """
     from .sentence_annotations import validated_accent_phrases
     settings = clean_prompt_preferences(preferences)
     question = question if isinstance(question, Mapping) else {}
     question = learning_question_display(question)
     text = question.get("prompt") if isinstance(question.get("prompt"), str) else ""
+    extra = ()
+    if known_ids is not None and text:
+        from .question_readings import prompt_readings
+        extra = prompt_readings(question, known_ids, furigana=settings["furigana"])
     result = {"prompt": text, "segments": [], "audio_text": _display_prompt_audio_text(question),
               "question_id": question.get("question_id", question.get("id")),
               "content_revision": _revision(question), "furigana_visible": False,
@@ -583,7 +731,10 @@ def prompt_support(question, preferences=None):
         valid_reading = (isinstance(reading, str) and bool(_KANA.fullmatch(reading))
                          and _source(span.get("reading_source_id")))
         safe_reading = (support.get("reading_safe") is True and span.get("reading_safe") is True)
-        visible_reading = (reading if settings["furigana"] and valid_reading and safe_reading
+        # question_readings rule 5: with the switch off (extra then lists unlearned words only), a
+        # reviewed reading still shows where it covers a word the learner has not learned.
+        wanted = settings["furigana"] or any(start < span["end"] and span["start"] < end for start, end, _ in extra)
+        visible_reading = (reading if wanted and valid_reading and safe_reading
                            and reading != span["surface"] else None)
         number = span.get("accent_number")
         # Unknown, booleans, negative and out-of-range values are not type 0.
@@ -604,6 +755,12 @@ def prompt_support(question, preferences=None):
                              "surface": span["surface"], "reading": visible_reading,
                              "accent_number": visible_number,
                              **({"accent_phrases": visible_phrases} if visible_phrases else {})})
+    if extra:
+        # Kana of question_readings fills only words no reviewed segment annotates; it never carries an accent.
+        added = [{"start": start, "end": end, "surface": text[start:end], "reading": reading, "accent_number": None}
+                 for start, end, reading in extra
+                 if not any(old["start"] < end and start < old["end"] for old in approved)]
+        approved = sorted([*approved, *added], key=lambda span: span["start"])
     offset = 0
     for span in approved:
         if span["start"] > offset:
@@ -712,11 +869,11 @@ def learning_text_role(question, field="prompt"):
             return "study"
         kinds = {"vocab_meaning", "vocab_reading", "vocab_usage", "vocab_zh_ja_contrast",
                  "grammar_meaning", "grammar_cloze", "reading_comprehension", "targeted_correction",
-                 "vocab_audio_word", "vocab_reading_choice"}
+                 "vocab_audio_word", "vocab_reading_choice", "vocab_context_choice"}
         return "study" if kind in kinds else "ui"
     if field in {"answer", "choice", "input"}:
         kinds = {"vocab_reading", "vocab_recall", "vocab_orthography", "vocab_usage",
-                 "vocab_audio_word", "vocab_reading_choice",
+                 "vocab_audio_word", "vocab_reading_choice", "vocab_context_choice",
                  "grammar_cloze", "grammar_transform", "grammar_reorder",
                  "targeted_correction", "controlled_sentence_production"}
         return "study" if kind in kinds else "ui"
@@ -744,15 +901,19 @@ def _plain_prompt_parts(question, prompt):
     return [(prompt, learning_text_role(question))]
 
 
-def build_prompt_block(app, question, preferences=None, *, size=20, available_width=None):
-    """Render safe annotations, then emphasize only exact public target text."""
+def build_prompt_block(app, question, preferences=None, *, size=20, available_width=None, known_ids=None):
+    """Render safe annotations, then emphasize only exact public target text.
+
+    known_ids: see prompt_support (kana for words the learner has not learned).
+    """
     from .question_presentation import question_presentation
 
     if 'prosody_cue' in question:
         from .prosody_cue_ui import cue_widget
         return cue_widget(question, width=available_width or 320)
 
-    block = _build_prompt_block(app, question, preferences, size=size, available_width=available_width)
+    block = _build_prompt_block(app, question, preferences, size=size, available_width=available_width,
+                                known_ids=known_ids)
     presentation = question_presentation(question)
     fragment = block._feedback_fragment
     fragment["instruction"] = presentation["instruction"]
@@ -810,7 +971,8 @@ def render_prompt_plan(app, question, plan, *, size=20, available_width=None):
     return _emphasize_prompt_block(block, plan['prompt'], plan.get('selected_spans', ()), selected=True)
 
 
-def _build_prompt_block(app, question, preferences=None, *, size=20, available_width=None, plan=None):
+def _build_prompt_block(app, question, preferences=None, *, size=20, available_width=None, plan=None,
+                        known_ids=None):
     """Native wrapping word cells: annotation above body, no hidden answer links.
 
     All sizes can grow with the system font setting, and no fixed height clips
@@ -820,7 +982,7 @@ def _build_prompt_block(app, question, preferences=None, *, size=20, available_w
     from .ui_components import label, col, row, INK, MUTED
     from .text_layout import font_scale
 
-    plan = prompt_support(question, preferences) if plan is None else plan
+    plan = prompt_support(question, preferences, known_ids) if plan is None else plan
     if not plan["furigana_visible"] and not plan["accent_visible"]:
         parts = _plain_prompt_parts(question, plan["prompt"])
         labels = [label(text, size=size, text_role=role, wrap=False) for text, role in parts]

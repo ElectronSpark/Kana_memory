@@ -112,6 +112,21 @@ def question_available(question, scope, enabled_kinds):
                 and KIND_ABILITIES.get(kind) in target.get("abilities", []))
 
 
+def practice_background_ready(question, ready_ids, target_id):
+    """The tutor's own admission rule for a reviewed practice context.
+
+    Its background must already be independently known. The selection's
+    relaxed tier (design 11 section 5, D4/D5, R1) keeps the formal course from
+    deadlocking; it does not widen this rule. The engine filters its local
+    candidates with the same check, so it never offers one the store refuses.
+    """
+    if "practice" not in question:
+        return True
+    from .learning_practice_policy import practice_metadata
+    meta = practice_metadata(question)
+    return meta is not None and set(meta["background_ids"]) <= set(ready_ids) | {target_id}
+
+
 def _question(question, source):
     if source == "ai":
         from .ai_questions import validate_ai_question_snapshot
@@ -403,11 +418,9 @@ class AITutorStore:
                 or learning.prerequisite_status(item["id"], dict(instruction).get('instruction_scope'))["blocked"]):
             return False
         prefs = self.store.get_setting("learning_preferences_v1", {})
-        from .learning_practice_policy import practice_metadata
         from .learning_dependencies import independent_ready_ids
-        meta = practice_metadata(question)
-        if ("practice" in question and (meta is None or not set(meta["background_ids"])
-                <= independent_ready_ids(learning) | {item["id"]})):
+        if "practice" in question and not practice_background_ready(
+                question, independent_ready_ids(learning), item["id"]):
             return False
         from .learning_questions import stored_enabled_kinds
         if isinstance(prefs, dict) and isinstance(prefs.get("enabled"), list) and question["kind"] not in stored_enabled_kinds(prefs):
@@ -553,9 +566,14 @@ class AITutorStore:
             anchor = self._formal_anchor(q)
             same_anchor = bool(anchor and (anchor["event_id"] == row["anchor_event_id"] if "anchor_event_id" in row
                 else _date(anchor["occurred_at_utc"]) <= _date(row["created_at_utc"])))
+            # 08 section 8.2: a target no enabled library serves never adds
+            # auxiliary evidence (checked last, only for otherwise trusted rows).
+            trusted = bool(row["source"] == "local" and same_anchor and qualified and trusted_question(self.store, q, item=item)
+                           and self.store.library_availability().available(
+                               q["target_id"], {"dictionary_only": (item or {}).get("dictionary_only") is True}))
             LearningEvidenceStore(self.store).record_attempt("tutor:" + row["id"], q, row["result"],
                 source="tutor", role="auxiliary", now=_date(row["result"]["submitted_at_utc"]),
-                trusted=row["source"] == "local" and same_anchor and qualified and trusted_question(self.store, q, item=item), adjust=True,
+                trusted=trusted, adjust=True,
                 opportunity_id=identity("tutor", row.get('opportunity_root', row["id"])), episode_id=state['session_id'])
             self._expose(state, q["target_id"], _date(row["result"]["submitted_at_utc"]))
             return row["result"]

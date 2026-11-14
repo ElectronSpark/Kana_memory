@@ -13,6 +13,7 @@ from support.fake_ui import text_of
 from support.review_wait_ui_support import ControlledLoop
 from support.review_wait_ui_support import clock
 from support.review_wait_ui_support import waiting_app
+from support.study_home_support import home_page
 from kanamemory.app import KanaMemory
 from kanamemory.practice_availability import summarize_queue_availability
 from kanamemory.domain import StudyStore
@@ -50,8 +51,10 @@ def timer_app(due):
     """Only the home refresh timer; the study-path home renders through refresh_home_actions."""
     store = Mock(spec=["stats"])
     store.stats.side_effect = AssertionError("The home timer must not scan review history")
-    return SimpleNamespace(page="home", _page_token=17, loop=ControlledLoop(), _review_wait_handle=None,
-                           _home_queue_due=due, refresh_home_actions=Mock(), store=store)
+    app = SimpleNamespace(page="home", _page_token=17, loop=ControlledLoop(), _review_wait_handle=None,
+                          refresh_home_actions=Mock(), store=store)
+    home_page(app).set_next_change(due)
+    return app
 
 
 def test_completed_round_home_reports_saved_wait_not_two_questions_to_answer(tmp_path, clock):
@@ -77,19 +80,19 @@ def test_mixed_queue_home_counts_only_ready_work_and_waiting_separately(tmp_path
 def test_home_timer_wakes_at_original_due_boundary_without_history_scan(clock):
     due = clock.now + timedelta(minutes=2)
     app = timer_app(due)
-    KanaMemory._arm_home_review_refresh(app)
-    initial = app._review_wait_handle
+    home_page(app).arm_timer()
+    initial = home_page(app).timer
     assert initial.delay is None
     initial.run()
-    assert app._review_wait_handle.delay == 60
+    assert home_page(app).timer.delay == 60
     clock.now = due - timedelta(microseconds=1)
-    app._review_wait_handle.run()
-    assert app._review_wait_handle.delay == pytest.approx(0.000001)
+    home_page(app).timer.run()
+    assert home_page(app).timer.delay == pytest.approx(0.000001)
     app.refresh_home_actions.assert_not_called()
     clock.now = due
-    app._review_wait_handle.run()
+    home_page(app).timer.run()
     app.refresh_home_actions.assert_called_once_with()
-    assert app._review_wait_handle is None
+    assert home_page(app).timer is None
     app.store.stats.assert_not_called()
 
 
@@ -97,24 +100,24 @@ def test_home_timer_wakes_at_original_due_boundary_without_history_scan(clock):
 def test_home_timer_cannot_refresh_a_different_or_replaced_page(clock, stale):
     due = clock.now + timedelta(seconds=20)
     app = timer_app(due)
-    KanaMemory._arm_home_review_refresh(app)
-    handle, token, count = app._review_wait_handle, app._page_token, len(app.loop.handles)
+    home_page(app).arm_timer()
+    handle, token, count = home_page(app).timer, app._page_token, len(app.loop.handles)
     if stale == "page":
         app.page = "kana_detail"
     else:
         app._page_token += 1
     clock.now = due
-    KanaMemory._tick_home_review(app, token)
+    home_page(app).tick(token)
     app.refresh_home_actions.assert_not_called()
-    assert len(app.loop.handles) == count and app._review_wait_handle is handle
+    assert len(app.loop.handles) == count and home_page(app).timer is handle
 
 
 def test_refresh_replaces_the_old_home_timer_instead_of_accumulating_callbacks(clock):
     app = timer_app(clock.now + timedelta(minutes=2))
-    KanaMemory._arm_home_review_refresh(app)
-    old = app._review_wait_handle
-    KanaMemory._arm_home_review_refresh(app)
-    assert old.cancelled and app._review_wait_handle is not old
+    home_page(app).arm_timer()
+    old = home_page(app).timer
+    home_page(app).arm_timer()
+    assert old.cancelled and home_page(app).timer is not old
     count = len(app.loop.handles)
     old.run()
     assert len(app.loop.handles) == count
@@ -178,7 +181,8 @@ def test_question_header_and_wait_screen_report_the_same_ready_waiting_split(wai
     rate(app.store, app.session_id, 1, clock.now)
     app.show_question()
     assert app.page == "question"
-    assert app.title_label.text == "练习 · 现在可答 1 题"
+    # The failed first answer queued a later repetition: position 2 of 3.
+    assert app.title_label.text == "本轮剩 1 题 · 第 2 / 3 题"
     rate(app.store, app.session_id, 4, clock.now)
     app.show_question()
     assert app.page == "session_wait"
@@ -188,10 +192,10 @@ def test_question_header_and_wait_screen_report_the_same_ready_waiting_split(wai
 def test_entering_another_page_cancels_home_due_callback(waiting_app, clock):
     app = waiting_app
     app.page = "home"
-    app._home_queue_due = clock.now + timedelta(minutes=1)
-    KanaMemory._arm_home_review_refresh(app)
-    handle = app._review_wait_handle
+    home_page(app).set_next_change(clock.now + timedelta(minutes=1))
+    home_page(app).arm_timer()
+    handle = home_page(app).timer
     app.screen("settings", "设置")
-    assert handle.cancelled and app._review_wait_handle is None
+    assert handle.cancelled and home_page(app).timer is None
     handle.run()
     assert app.page == "settings"

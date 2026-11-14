@@ -38,6 +38,7 @@ def calculate(path, inputs, **budget):
     db = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
     db.row_factory = sqlite3.Row
     try:
+        db.execute('PRAGMA temp_store=MEMORY')  # no SQLite temp directory on Android (see content.py)
         db.execute('BEGIN')
         return Inventory(db, inputs, **budget).run()
     finally: db.close()

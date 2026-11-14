@@ -307,6 +307,53 @@ function Assert-PublicContent {
     & $projectPython @arguments
     if ($LASTEXITCODE -ne 0) { throw 'Public content verification failed. Build the original demo pack in an empty resources directory.' }
 }
+function Set-KanaAndroidManifest {
+    # Idempotent patch of the Briefcase-generated AndroidManifest.xml (tests/test_build_environment.py runs it).
+    param([Parameter(Mandatory)][xml]$Manifest)
+    $androidNamespace = 'http://schemas.android.com/apk/res/android'
+    [void]$Manifest.manifest.application.SetAttribute('allowBackup', $androidNamespace, 'false')
+    [void]$Manifest.manifest.application.SetAttribute('fullBackupContent', $androidNamespace, 'false')
+    [void]$Manifest.manifest.application.SetAttribute('dataExtractionRules', $androidNamespace, '@xml/kana_data_extraction_rules')
+    $shareClass = 'org.example.kanamemory.KanaTextShareActivity'
+    $shareActivity = @($Manifest.manifest.application.ChildNodes | Where-Object {
+        $_.LocalName -eq 'activity' -and $_.GetAttribute('name', $androidNamespace) -eq $shareClass
+    })
+    if ($shareActivity.Count -eq 0) {
+        $share = $Manifest.CreateElement('activity')
+        [void]$share.SetAttribute('name', $androidNamespace, $shareClass)
+        [void]$share.SetAttribute('exported', $androidNamespace, 'true')
+        [void]$share.SetAttribute('theme', $androidNamespace, '@android:style/Theme.NoDisplay')
+        [void]$share.SetAttribute('excludeFromRecents', $androidNamespace, 'true')
+        [void]$share.SetAttribute('taskAffinity', $androidNamespace, '')
+        $shareFilter = $Manifest.CreateElement('intent-filter')
+        foreach ($shareSpec in @(@('action', 'name', 'android.intent.action.SEND'), @('category', 'name', 'android.intent.category.DEFAULT'), @('data', 'mimeType', 'text/plain'))) {
+            $shareElement = $Manifest.CreateElement($shareSpec[0])
+            [void]$shareElement.SetAttribute($shareSpec[1], $androidNamespace, $shareSpec[2])
+            [void]$shareFilter.AppendChild($shareElement)
+        }
+        [void]$share.AppendChild($shareFilter)
+        [void]$Manifest.manifest.application.AppendChild($share)
+    }
+    # G4/N5: boot-time overlay changes (navigation-bar mode etc.) arrive as CONFIG_ASSETS_PATHS
+    # (wm_relaunch_resume_activity ... 80000000) and relaunch MainActivity; Toga rebuilds the whole
+    # app on the second onCreate. Keep the template's tokens and add only assetsPaths.
+    # G4/N6: singleTask routes later launcher/share intents to the existing instance (onNewIntent)
+    # instead of stacking a new MainActivity; pyproject renders the same value on a fresh create.
+    $mainClass = 'org.beeware.android.MainActivity'
+    $main = @($Manifest.manifest.application.ChildNodes | Where-Object {
+        $_.LocalName -eq 'activity' -and $_.GetAttribute('name', $androidNamespace) -eq $mainClass
+    })
+    if ($main.Count -ne 1) { throw 'Generated manifest must declare exactly one MainActivity.' }
+    $tokens = [System.Collections.Generic.List[string]]::new()
+    foreach ($token in ($main[0].GetAttribute('configChanges', $androidNamespace) -split '\|')) {
+        if ($token -and -not $tokens.Contains($token)) { $tokens.Add($token) }
+    }
+    foreach ($token in @('orientation', 'screenSize', 'screenLayout', 'keyboardHidden', 'assetsPaths')) {
+        if (-not $tokens.Contains($token)) { $tokens.Add($token) }
+    }
+    [void]$main[0].SetAttribute('configChanges', $androidNamespace, ($tokens -join '|'))
+    [void]$main[0].SetAttribute('launchMode', $androidNamespace, 'singleTask')
+}
 if (-not (Test-Path -LiteralPath $projectPython)) { throw 'Project Python missing. Run the desktop bootstrap first.' }
 if (-not (Test-Path -LiteralPath (Join-Path $appSource 'pyproject.toml'))) { throw 'App pyproject.toml missing.' }
 & $projectPython -X utf8 $environmentTool --host
@@ -389,30 +436,7 @@ try {
             Copy-Item -LiteralPath (Join-Path $appSource 'native\res\xml') -Destination $targetRes -Recurse -Force
             $manifestFile = Join-Path $appBuild 'build\kanamemory\android\gradle\app\src\main\AndroidManifest.xml'
             [xml]$manifest = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8
-            $androidNamespace = 'http://schemas.android.com/apk/res/android'
-            [void]$manifest.manifest.application.SetAttribute('allowBackup', $androidNamespace, 'false')
-            [void]$manifest.manifest.application.SetAttribute('fullBackupContent', $androidNamespace, 'false')
-            [void]$manifest.manifest.application.SetAttribute('dataExtractionRules', $androidNamespace, '@xml/kana_data_extraction_rules')
-            $shareClass = 'org.example.kanamemory.KanaTextShareActivity'
-            $shareActivity = @($manifest.manifest.application.ChildNodes | Where-Object {
-                $_.LocalName -eq 'activity' -and $_.GetAttribute('name', $androidNamespace) -eq $shareClass
-            })
-            if ($shareActivity.Count -eq 0) {
-                $share = $manifest.CreateElement('activity')
-                [void]$share.SetAttribute('name', $androidNamespace, $shareClass)
-                [void]$share.SetAttribute('exported', $androidNamespace, 'true')
-                [void]$share.SetAttribute('theme', $androidNamespace, '@android:style/Theme.NoDisplay')
-                [void]$share.SetAttribute('excludeFromRecents', $androidNamespace, 'true')
-                [void]$share.SetAttribute('taskAffinity', $androidNamespace, '')
-                $shareFilter = $manifest.CreateElement('intent-filter')
-                foreach ($shareSpec in @(@('action', 'name', 'android.intent.action.SEND'), @('category', 'name', 'android.intent.category.DEFAULT'), @('data', 'mimeType', 'text/plain'))) {
-                    $shareElement = $manifest.CreateElement($shareSpec[0])
-                    [void]$shareElement.SetAttribute($shareSpec[1], $androidNamespace, $shareSpec[2])
-                    [void]$shareFilter.AppendChild($shareElement)
-                }
-                [void]$share.AppendChild($shareFilter)
-                [void]$manifest.manifest.application.AppendChild($share)
-            }
+            Set-KanaAndroidManifest -Manifest $manifest
             $manifest.Save($manifestFile)
         }
         switch ($Stage) {

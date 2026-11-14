@@ -5,7 +5,7 @@ from uuid import uuid4
 from .navigation import page_view
 from .retention_check import RetentionCheckStore
 from .question_instruction_ui import instruction_widgets
-from .question_support import build_prompt_block, learning_text_role, clean_prompt_preferences
+from .question_support import build_prompt_block, learning_text_role, clean_prompt_preferences, option_labels
 from .typography import configure_text_role
 from .retention_session_ui import DiagnosticUIMixin
 from . import ui_components as u
@@ -56,20 +56,23 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
     def start_retention_check(self,family):
         from .learning_content import get_learning_item
         from .learning_questions import build_learning_question
-        from .learning_practice_policy import practice_candidates
+        from .learning_practice_policy import not_relaxed, practice_candidates
         from .answer_input import system_japanese_enabled
         enabled=self.learning_preferences()['enabled'];targets=[]
         known=self.store.queries.instruction_ready_ids()
         system_japanese=system_japanese_enabled(self.store)
+        availability=self.learning_store.availability()
         enrolled={item['id'] for item in self.learning_store.list_items()}
         recent=self.retention_checks().recent_targets()
-        for item in self.learning_items_available():
+        for item in self.learning_items_available(views=True):  # read only; the lesson used is fetched below
             if item['family']!=family or item.get('domain')=='pronunciation' or item['id'] in enrolled or item['id'] in recent:
                 continue
             local=get_learning_item(item['id'])
             if local is None:continue
+            # A check never takes the relaxed tier (design 11 section 5, D4).
             for candidate in practice_candidates(local,enabled,
-                    known_background_ids=known,system_japanese=system_japanese):
+                    known_background_ids=known,system_japanese=system_japanese,availability=availability,
+                    admit=not_relaxed):
                 q=build_learning_question(local,candidate['kind'],variant=candidate['variant'])
                 if q.get('input_mode','choice') in ('choice','text','typing','free_text') and not q.get('audio_text'):
                     targets.append(item['id']);break
@@ -105,12 +108,16 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
                 u.button('练习设置',self.show_learning_settings),u.button('返回',self.show_retention_check_center));return
         context={'episode':episode_id,'row':row};self._retention_context=context
         if row['result'] is not None:return self.show_retention_check_result(context)
+        # One read per question: words the learner has not learned keep their kana (display only).
+        from .course_planning import known_ids
+        known=known_ids(self.store.queries)
         q=row['question'];children=[u.button('显示答案',lambda w:self.submit_retention_check(context,'',revealed=True),compact=True),
-            build_prompt_block(self,q,clean_prompt_preferences(self.store.get_setting('prompt_display_v1',{})))]
+            build_prompt_block(self,q,clean_prompt_preferences(self.store.get_setting('prompt_display_v1',{})),known_ids=known)]
         children[-1]._feedback_fragment.update({'kind':'retention_check','episode_id':episode_id,'entry':deepcopy(row),'purpose':'check_only'})
-        children.extend(instruction_widgets(u,q))
+        children.extend(instruction_widgets(u,q,known))
         if q.get('input_mode','choice')=='choice':
-            children.extend(u.button(answer,lambda w,a=answer:self.submit_retention_check(context,a),multiline=True) for answer in q.get('choices',[]))
+            labels=option_labels(q,known)
+            children.extend(u.button(labels.get(answer,answer),lambda w,a=answer:self.submit_retention_check(context,a),multiline=True) for answer in q.get('choices',[]))
         else:
             def save(widget=None,**kwargs):
                 if self.page=='retention_question' and self._retention_context is context:
@@ -147,16 +154,19 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
 
     def show_retention_check_result(self,context):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import entered_answer_row, distinct_explanation
+        from .answer_result_ui import asked_text, entered_answer_row, distinct_explanation, shown_answer, shown_explanation
         from .answer_autoplay import autoplay_answer
         row=context['row'];q=row['question'];result=row['result']
-        children=[build_answer_feedback(result),u.label(q['answer'],size=20,text_role=learning_text_role(q,'answer'))]
+        # After the answer every Japanese word of the result carries its kana (design 11 section 7, rule 9).
+        children=[build_answer_feedback(result),u.label(shown_answer(q),size=20,text_role=learning_text_role(q,'answer'))]
         text=self._learning_answer_audio_text(q)
         if text:children[-1]=u.row(children[-1],u.speaker_button(lambda w:self.speak_text(text)))
         if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer']:
-            children.append(entered_answer_row(u, result['answered_text'], text_role=learning_text_role(q, 'answer')))
+            children.append(entered_answer_row(u, shown_answer(q, result['answered_text']), text_role=learning_text_role(q, 'answer')))
         explanation = distinct_explanation(q.get('feedback'), q['answer'])
-        if explanation: children.append(u.label(explanation, size=15))
+        asked = asked_text(q, explanation)
+        if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
+        if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
         children.append(u.label('本次只作检查，不调整复习。' if not result['assisted'] else '这次使用了帮助，只记录练习。',size=12,color=u.MUTED))
         def advance(widget=None,**kwargs):
             if self.page!='retention_feedback' or self._retention_context is not context:return

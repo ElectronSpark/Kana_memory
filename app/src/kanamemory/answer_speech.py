@@ -22,6 +22,8 @@ _RUBY_WORD = re.compile(rf"([{_HAN}]+[{_KANA}]*)[（(]([{_KANA}]+)[）)]\Z")
 _RUBY_KANJI = re.compile(rf"([{_HAN}]+)[（(]([{_KANA}]+)[）)]")
 _PARTICLE_NOTE = re.compile(r"(?<=[はへを])[（(](?:wa|e|o|wo)[）)]")
 _JAPANESE = re.compile(rf"[{_KANA}{_HAN}0-9０-９{re.escape(_PUNCTUATION)}]+\Z")
+# Speaker label of a dialogue line (A：…, B：…): a display mark, never spoken.
+_SPEAKER = re.compile(r"^[ \t　]*[A-ZＡ-Ｚ][：:][ \t　]*", re.MULTILINE)
 _KANA_UTTERANCE = re.compile(rf"[{_KANA}{re.escape(_PUNCTUATION)}]+\Z")
 
 
@@ -34,6 +36,8 @@ def clean_utterance(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         return ""
     value = normalize("NFC", value).strip()
+    # A short dialogue is read line after line without its speaker labels.
+    value = _SPEAKER.sub("", value)
     # A missing answer must not become a plausible but incomplete sentence.
     if _GAP.search(value):
         return ""

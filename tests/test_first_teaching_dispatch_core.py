@@ -10,7 +10,7 @@ import pytest
 
 
 from kanamemory.domain import StudyStore, Question
-from kanamemory.learning_store import LearningStore
+from kanamemory.learning_store import LearningStore, UNRESOLVED_RETRY_SECONDS
 from kanamemory.first_teaching_dispatch import choose_protected, _teaching_state, _teaching_service
 from kanamemory.review_dispatch import stored_review_priority
 from kanamemory.kana_learning_intro import finish_introduction, should_introduce
@@ -421,13 +421,15 @@ def test_two_unscored_checks_spend_only_same_day_priority_and_recover_next_day(s
         assert not result['scheduled'] and result['rating'] is None
         assert learning.finalize(q['id'],now=at+timedelta(seconds=2))==result
         assert len(learning.history(cid))==index+1
-        at+=timedelta(seconds=66)
+        # 0.32.1: an unresolved check waits UNRESOLVED_RETRY_SECONDS before it may recur; other outcomes keep the 60 s pause.
+        at+=timedelta(seconds=(UNRESOLVED_RETRY_SECONDS if outcome=='unresolved' else 60)+6)
         learning.append_questions(question(cid,qid=f'technical-retry-{index}'),now=at)
     k=normal(store,sid,now=at)
     before=rows(store)
     assert pick(store,learning,k,now=at) is None
     assert rows(store)==before
-    assert learning.current(['grammar_meaning'],now=at)['type']=='question'
+    # A second consecutive unresolved check waits for the next local day (0.32.1), so nothing is current yet.
+    assert learning.current(['grammar_meaning'],now=at)['type']==('waiting' if outcome=='unresolved' else 'question')
     unit=learning.get_unit(cid,'understanding')
     for key in ('due_at_utc','review_count','scheduler_state_json'):
         assert unit[key]==original_unit[key]

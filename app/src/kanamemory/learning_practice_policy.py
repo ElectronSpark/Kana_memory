@@ -51,13 +51,25 @@ def question_scaffold(question):
 def _fingerprint(question):
     def normalized(value):
         return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
-    fields = (question.get("kind"), question.get("input_mode", "choice"),
+    kind = question.get("kind")
+    fields = (kind, question.get("input_mode", "choice"),
               normalized(question.get("prompt")), normalized(question.get("task")),
               normalized(question.get("answer")))
-    if question.get("kind") in {"vocab_audio_word", "vocab_reading_choice"}:
+    if kind in {"vocab_audio_word", "vocab_reading_choice"}:
         # These share a stimulus by design; their options are the variation.
         fields = (*fields, sorted(normalized(choice) for choice in question.get("choices", ())))
+    elif question.get("audio_text") and kind in _heard_stimulus_kinds():
+        # Heard-meaning tasks share prompt and task: what is read aloud is the stimulus.
+        # Every other kind, and a question without audio text, keeps its former digest
+        # (history matching depends on it).
+        fields = (*fields, normalized(question["audio_text"]))
     return sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()
+
+
+def _heard_stimulus_kinds():
+    """Registry kinds that need audio (LISTENING_KINDS); the heard-word task is told apart by its options."""
+    from .learning_questions import LISTENING_KINDS
+    return LISTENING_KINDS
 
 
 def _descriptor(question):
@@ -68,22 +80,101 @@ def _descriptor(question):
             "context": meta["context_id"] if meta else "legacy:" + fingerprint}
 
 
-def _candidate_questions(item, ability, kinds, state):
+def question_context(question):
+    """The context a guided/formal question practises (author id, else its content)."""
+    return _descriptor(question)["context"]
+
+
+def not_relaxed(descriptor, template=None):
+    """admit filter for paths that never take the relaxed tier (design 11 section 5, D4).
+
+    A check-only trial of new content (retention_check) measures the target
+    alone, so an item x ability whose only templates have unmet requirements
+    is skipped there, as before R1.
+    """
+    return not descriptor.get("relaxed")
+
+
+def _candidate_questions(item, ability, kinds, state, admit=None, templates=None, shared=False):
+    """Enabled, available, dependency-safe descriptors for one item x ability.
+
+    Dependency gate (design 11 section 5, D3/D4): a template whose declared
+    requirements (learning_questions.template_requires: reviewed background
+    ids plus the question_dependencies entry) are all in the known set is a
+    gated candidate. Templates declaring nothing are fallback candidates and
+    are offered when no gated template qualifies, so an ability never
+    starves on a bare word variant; a thin gated pass (fewer than two distinct
+    stimuli, or a kind with fewer than two) is topped up with them (that kind's)
+    after the gated ones, each carrying
+    "top_up": True, so the learner does not repeat one task (guided paths skip
+    top-ups and keep their own order). When neither pass yields anything, one
+    allowed-field content_gap diagnostic is recorded and a third, relaxed pass
+    (design 11 section 5, D4/D5, R1) keeps the item x ability from deadlocking:
+    the templates with the fewest unmet requirements (one unmet = the 1T rule,
+    else the smallest count available), each descriptor carrying
+    "relaxed": <unmet count>. Selection only: evidence, assistance, snapshots
+    and history are unchanged. Guided exposure paths (guides, the intro quiz)
+    skip relaxed candidates and keep their own fallbacks. Nothing is served
+    only when the item x ability has no usable template at all. Missing
+    knowledge is not inferred from enrollment.
+
+    Opening allowance (design 11 section 5, D8; early_rules): only when the
+    caller sets state["early_allowance"] to True (the formal course path), a
+    declared template whose unmet requirements are all rule lessons that may
+    appear early is servable while the learner is in the opening. It is
+    appended after everything the passes yield without it (met tasks and
+    top-ups, or the fallbacks), carrying "early_rules": [the unmet rule ids]
+    and never "relaxed"; when nothing is met it comes instead of the relaxed
+    pass. Callers that do not set the flag (guides, the intro quiz, checks,
+    the tutor) see the strict gate as before.
+
+    Generated sound kinds (WP-K2) take their variants from sound_variants: with
+    three or more known candidates their options are known words only (an
+    encoded variant number); with fewer, the reading-choice kind keeps its
+    bank variants (kana options) and the heard-word kind offers nothing yet
+    (its options are written words; it waits for three known ones). They
+    require nothing beyond their target, so the gate never removes them.
+
+    admit: optional caller rule, admit(descriptor, template) -> bool, where
+    template is the raw template (with its kind) and a relaxed descriptor
+    already carries "relaxed". It runs on every descriptor before a pass is
+    chosen, so a stricter caller still gets the next pass it can serve
+    instead of an empty one. A content_gap is recorded only when the content
+    itself has no met template, never because a caller refused one.
+
+    shared=True: ``templates`` is practice_templates(item), already built by
+    the caller for this very lesson (course_planning plans every ability of a
+    lesson from one table); it is read here, never changed.
+    """
     from . import learning_questions as questions
-    allowed = set(questions.question_kinds(item, ability=ability))
+    if shared:
+        allowed = set(questions.question_kinds(item, ability=ability, templates=templates))
+    else:
+        allowed = set(questions.question_kinds(item, ability=ability))
     enabled = list(dict.fromkeys(k for k in kinds if isinstance(k, str) and k in allowed))
     # The provider may append independently reviewed practice templates without
     # rewriting a stored lesson or moving its original variant indices.
-    provider = getattr(questions, "practice_templates", None)
-    templates = provider(item) if provider else item.get("question_templates")
+    if not shared:
+        provider = getattr(questions, "practice_templates", None)
+        templates = provider(item) if provider else item.get("question_templates")
     retired = questions.retired_practice_variants(item, templates)
     known = state.get("known_background_ids", ())
     known = {x for x in known if isinstance(x, str)} if isinstance(known, (list, tuple, set, frozenset)) else set()
     known.add(item["id"])
-    seen = set()
+    gated, early_gated, fallback, relaxed, missing = [], [], [], [], set()
+    met_any = False
+    seen = {True: set(), False: set()}
+    early_allowance = state.get("early_allowance") is True
     for kind in enabled:
         variants = templates.get(kind, []) if isinstance(templates, dict) else None
-        for variant in range(len(variants) if variants is not None else 4):
+        sound = dict(questions.sound_variants(item, kind, known)) if kind in questions.SOUND_KINDS else None
+        if sound is not None and not sound:
+            # No variant for this learner yet (sound_variants), or no sound task for this word at all: never
+            # the bank's unknown words instead, also for a lesson without a template table (variants is None).
+            continue
+        numbers = (list(sound) if sound and (variants is None or variants)
+                   else range(len(variants) if variants is not None else 4))
+        for variant in numbers:
             if (kind, variant) in retired:
                 continue
             if variants is None:
@@ -92,46 +183,130 @@ def _candidate_questions(item, ability, kinds, state):
                 except (ValueError, KeyError, TypeError):
                     continue
             else:
-                raw = variants[variant]
+                raw = sound[variant] if sound else variants[variant]
                 if not isinstance(raw, dict):
                     continue
+            # The dependency entry is keyed by the raw template as stored.
+            requires = questions.template_requires(item, kind, raw)
             raw = dict(raw, kind=kind)
             from .answer_input import available
             if not available(dict(raw, family=item.get("family"), domain=item.get("domain")),
                              system_japanese=state.get("system_japanese_input") is True):
                 continue
             meta = practice_metadata(raw)
-            if "practice" in raw and (meta is None or not set(meta["background_ids"]) <= known):
-                continue
+            if "practice" in raw and meta is None:
+                continue  # Malformed metadata is not a legacy escape hatch.
+            unmet = requires - known if requires is not None else frozenset()
+            missing |= unmet
             if not isinstance(raw.get("prompt"), str) or not isinstance(raw.get("answer"), str):
                 continue
             descriptor = _descriptor(raw)
-            if descriptor["fingerprint"] in seen:
+            declared = requires is not None
+            entry = {**descriptor, "kind": kind, "variant": variant,
+                     "input_mode": raw.get("input_mode", "choice"),
+                     "reviewed_practice": meta is not None, "fallback": not declared}
+            early = ()
+            if unmet and early_allowance:
+                from .early_rules import early_rules
+                early = early_rules(unmet, known, target=item, kind=kind, question=raw)
+            if early:
+                entry["early_rules"] = list(early)
+            elif unmet:
+                entry["relaxed"] = len(unmet)
+            else:
+                met_any = True
+            if admit is not None and not admit(entry, raw):
                 continue
-            seen.add(descriptor["fingerprint"])
-            yield {**descriptor, "kind": kind, "variant": variant,
-                   "input_mode": raw.get("input_mode", "choice"),
-                   "reviewed_practice": meta is not None}
+            if unmet and not early:
+                relaxed.append(entry)
+                continue
+            if early:
+                early_gated.append(entry)
+                continue
+            if descriptor["fingerprint"] in seen[declared]:
+                continue
+            seen[declared].add(descriptor["fingerprint"])
+            (gated if declared else fallback).append(entry)
+    # Opening allowance: purely additive. The passes below are computed from the fully met
+    # templates exactly as without it; a task that shows a not yet taught rule (with its
+    # hint) is appended after them and never hides, replaces or precedes a task that needs
+    # no hint (nor turns a requirement-free fallback into an unneeded top-up).
+    early_extra, early_seen = [], seen[True] | seen[False]
+    for entry in early_gated:
+        if entry["fingerprint"] not in early_seen:
+            early_seen = early_seen | {entry["fingerprint"]}
+            early_extra.append(entry)
+    if gated or fallback:
+        yield from gated
+        stimuli = {candidate["fingerprint"] for candidate in gated}
+        if not gated:
+            yield from fallback
+        else:
+            # Design 11 section 5, D4: a thin pass is topped up with requirement-free
+            # fallback tasks after the met ones: the whole pass when it has fewer than
+            # two tasks, else each kind whose met tasks are fewer than two (so one
+            # family is not pinned to a single example).
+            by_kind = defaultdict(set)
+            for candidate in gated:
+                by_kind[candidate["kind"]].add(candidate["fingerprint"])
+            thin = {kind for kind, prints in by_kind.items() if len(prints) < 2}
+            yield from ({**candidate, "top_up": True} for candidate in fallback
+                        if candidate["fingerprint"] not in stimuli
+                        and (len(stimuli) < 2 or candidate["kind"] in thin))
+        yield from early_extra
+        return
+    if missing and not met_any:
+        from .content_gaps import record_gap
+        record_gap(item["id"], ability, len(missing), enabled)
+    if early_extra:
+        # No fully met template: a simple rule with its hint is nearer than the relaxed pass.
+        yield from early_extra
+        return
+    if not relaxed:
+        return
+    # Fewest unmet first; duplicates are dropped only within that tier so a
+    # lower-count copy of a stimulus is never hidden by a higher-count one.
+    least = min(candidate["relaxed"] for candidate in relaxed)
+    tier = set()
+    for candidate in relaxed:
+        if candidate["relaxed"] == least and candidate["fingerprint"] not in tier:
+            tier.add(candidate["fingerprint"])
+            yield candidate
 
 
-def practice_candidates(item, kinds, *, known_background_ids=(), system_japanese=False):
-    """Public read-only descriptors shared by course, tutor and retention paths."""
+def practice_candidates(item, kinds, *, known_background_ids=(), system_japanese=False, availability=None,
+                        admit=None):
+    """Public read-only descriptors shared by course, tutor and retention paths.
+
+    admit: the optional caller rule of _candidate_questions (for example
+    not_relaxed); None keeps every pass.
+
+    availability: the caller's content_availability.AvailabilityView (design 08
+    section 8.2). Content it does not serve (disabled/missing library,
+    blocked dependency, retired) yields no candidate; None checks nothing.
+    """
+    if availability is not None and not availability.available(
+            item["id"], {"dictionary_only": item.get("dictionary_only") is True}):
+        return
     from .learning_questions import KIND_ABILITIES
     state = {"known_background_ids": known_background_ids,
              "system_japanese_input": system_japanese}
     for ability in dict.fromkeys(KIND_ABILITIES[k] for k in kinds if k in KIND_ABILITIES):
-        yield from _candidate_questions(item, ability, kinds, state)
+        yield from _candidate_questions(item, ability, kinds, state, **({} if admit is None else {"admit": admit}))
 
 
-def select_practice_plan(item, ability, kinds, state, history):
+def select_practice_plan(item, ability, kinds, state, history, *, templates=None, shared=False):
     """Choose one enabled, background-safe task, or None when none is available.
 
     History is oldest to newest, as returned by LearningStore.practice_history.
     The caller may add known_background_ids to the unit state. Missing knowledge
     is not inferred from enrollment; unknown extra targets remain excluded.
+    A row is recognised as a candidate's stimulus by _fingerprint: a heard-meaning
+    row needs its audio_text and a sound-kind row its choices for that.
+    shared / templates: see _candidate_questions.
     """
     state = state or {}
-    candidates = list(_candidate_questions(item, ability, kinds, state))
+    candidates = list(_candidate_questions(item, ability, kinds, state, templates=templates, shared=shared))
     if not candidates:
         return None
     bank_size = len(candidates)
@@ -217,6 +392,8 @@ def select_practice_plan(item, ability, kinds, state, history):
                 -int(targeted and candidate["family"] in errors),
                 family_count, min(4, contexts[candidate["context"]]),
                 min(4, fingerprints[candidate["fingerprint"]]),
+                # All else equal, a task without a not yet taught rule comes first (design 11, D8).
+                bool(candidate.get("early_rules")),
                 stage_gap, rotating_rank[index])
 
     chosen = min(enumerate(candidates), key=lambda pair: key(pair[1], pair[0]))[1]
@@ -336,7 +513,10 @@ def guided_practice_sequence(item, kinds, *, known_background_ids=(), system_jap
         for candidate in _candidate_questions(item, ability, allowed,
                                                {"known_background_ids": known_background_ids,
                                                 "system_japanese_input": system_japanese is True}):
-            if candidate["reviewed_practice"]:
+            # Guided exposure never shows unmet material (relaxed is for
+            # formal selection only; design 11 section 5, D4) and keeps its
+            # order without the formal top-up of a thin gated pass.
+            if candidate["reviewed_practice"] and not candidate.get("relaxed") and not candidate.get("top_up"):
                 choices.append(candidate)
     choices.sort(key=lambda candidate: (candidate["stage"], candidate["variant"]))
     if not choices:

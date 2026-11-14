@@ -21,9 +21,21 @@ OPERATIONS = frozenset({
     "feedback_sources", "feedback_delete",
     "diagnostic_time", "diagnostic_audio", "tutor_suggestions", "multi_cloze",
     "feedback_export",
+    # WP5: draft persistence and commit-time database-lock failures (WP1 call
+    # sites in app.py/learning_ui.py) and the background kana queue assembly.
+    "practice_draft", "practice_rating", "learning_draft", "learning_word_blocks",
+    "learning_submit", "learning_guide", "kana_queue_assembly",
+    # Content library registry reconciliation at startup (design 08 §5.6).
+    "content_library",
+    # WP7b: tutor/material reference draft and settings-page lock failures.
+    "tutor_draft", "material_reference_draft", "ai_settings", "material_selection",
+    # F2: debounced AI practice/form, mastery dialogue/scope and setup-page drafts.
+    "ai_practice_draft", "ai_form_draft", "retention_dialogue_draft", "retention_scope_draft",
+    "practice_setup_draft",
 })
 STAGES = frozenset({"play", "save", "commit", "sync", "refresh", "request", "read", "decode",
-                    "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal"})
+                    "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal",
+                    "submit"})
 ERROR_TYPES = frozenset({"Exception", "RuntimeError", "ValueError", "TypeError",
     "KeyError", "AttributeError", "OSError", "IOError", "PermissionError",
     "FileNotFoundError", "TimeoutError", "CancelledError", "OperationalError",

@@ -9,7 +9,7 @@ class RomajiComposer:
     def __init__(self, u, active, on_change, on_apply, *, script=None, convention="keyboard", caption="转换"):
         self.u, self.active, self.changed, self.apply = u, active, on_change, on_apply
         self.fixed_script, self.restoring = script, False
-        self.source_input = u.toga.TextInput(placeholder="输入罗马音，例如 gakkou", style=u.Pack(font_size=18, margin_bottom=6))
+        self.source_input = u.toga.TextInput(placeholder="输入罗马音，例如 a・ka・sa", style=u.Pack(font_size=18, margin_bottom=6))
         self.convention_picker = u.selection(items=list(CONVENTIONS),
             value=next(k for k, v in CONVENTIONS.items() if v == convention), style=u.Pack(flex=1))
         self.script_picker = u.selection(items=list(SCRIPTS), value="平假名", style=u.Pack(flex=1)) if script is None else None

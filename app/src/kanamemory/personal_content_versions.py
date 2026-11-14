@@ -38,6 +38,52 @@ def head_key(identity, kind='lesson'):
     return HEAD + digest([kind, identity])
 
 
+class SettingIndex:
+    """All head and hold keys, read once for one LearningStore.read_operation.
+
+    Keys are HEAD/HOLD + digest([kind, content_id]), so lookups by content
+    identity are dictionary hits. Built only by the read operation's projection
+    (same revision, outside transactions); write paths and transaction reads
+    never see it and keep reading each key live. Row order equals the live
+    GLOB queries, so derived lists keep their order too.
+    """
+    __slots__ = ('heads', 'holds')
+
+    def __init__(self, db):
+        from .personal_content_compensation import HOLD
+        self.heads = _glob(db, HEAD)
+        self.holds = _glob(db, HOLD)
+
+
+def _glob(db, prefix):
+    return {k: json.loads(v) for k, v in db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (prefix + '*',))}
+
+
+def _read_index(store):
+    read = getattr(store, '_learning_read', None)
+    return read.personal_settings() if read is not None else None
+
+
+def setting_rows(store, prefix):
+    """Head (HEAD) or hold (HOLD) settings as {key: value}, from the read projection when one is usable."""
+    from .personal_content_compensation import HOLD
+    if prefix not in {HEAD, HOLD}:
+        raise ValueError('Only head and hold settings are indexed')
+    index = _read_index(store)
+    if index is None:
+        return _glob(store._db, prefix)
+    return deepcopy(index.heads if prefix == HEAD else index.holds)
+
+
+def setting(store, key):
+    """One head/hold value (None when absent), exactly like store.get_setting(key, None)."""
+    from .personal_content_compensation import HOLD
+    index = _read_index(store) if key.startswith((HEAD, HOLD)) else None
+    if index is None:
+        return store.get_setting(key, None)
+    return deepcopy((index.heads if key.startswith(HEAD) else index.holds).get(key))
+
+
 def validate(value):
     if (not isinstance(value, dict) or set(value) - ({'nonce'} if value.get('version') in {2, 3, 4, 5} else set()) - ({'graph_review'} if value.get('version') == 5 else set()) != {'format', 'version', 'id', 'plan_id', 'plan_sha256',
             'group_id', 'support_id', 'support_sha256', 'generation', 'created_at', 'previous_heads', 'resources'}
@@ -90,12 +136,12 @@ def validate(value):
 
 
 def active_version(store, identity, kind='lesson'):
-    head = store.get_setting(head_key(identity, kind), None)
+    head = setting(store, head_key(identity, kind))
     if head is None: return None
     value = store.get_setting(PREFIX + head, None)
     if value is None: raise ValueError('个人内容缺少活动版本。')
     value = validate(value)
-    if value['id'] != head or any(store.get_setting(k, None) != head for k in value['previous_heads']):
+    if value['id'] != head or any(setting(store, k) != head for k in value['previous_heads']):
         raise ValueError('个人内容联动组不一致。')
     return value
 
@@ -222,7 +268,7 @@ def revised_fields(store, identity, kind='lesson'):
 def changed_resources(store):
     """Small active-head index, never scan examples or learner history."""
     if store is None or not getattr(store, '_db', None): return {}
-    heads = {k: json.loads(v) for k, v in store._db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (HEAD + '*',))}
+    heads = setting_rows(store, HEAD)
     from .personal_content_compensation import holds
     result = holds(store)
     for identity in set(heads.values()) - {None}:

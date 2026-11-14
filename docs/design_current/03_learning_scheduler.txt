@@ -7,6 +7,7 @@ KanaMemory 学习单位、证据、调度与续学合同
 不替代FSRS参数、记忆单位、评分幂等、辅助证据权重及AI/诊断独立所有权。
 实现与本轮验证范围：docs/practice_round_0300.txt；不得将下文历史V视为本轮全量验证。
 下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+文中提到的“设计 12”（学习安排：学习取向、时间份额、学习重点、加练与记分）是未公开的设计文档，不随公开源码发布；相关的页面与规则以本文、02–04、07 和代码为准。
 
 核对日期：2026-11-01
 
@@ -48,6 +49,9 @@ LearningStore.admit_word_listening每天最多追加8个单位（仅限至少复
 与中文同形同义的162个词（config/cognate_words_20261106.json）只从未来选题中减少映射题：
 vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还原基本形的题。
 听词选词、看词选读音只用于练习和Tutor，记忆检查与材料预测试不从中选题，检查的测量内容不变。
+读句选词vocab_context_choice属于use能力，默认开启，同样只用于练习和Tutor。题目只有日文，句中其他
+课程词、语法和每个选项词都是前置依赖（background_ids），全部已学才出题；多空题里其他词的空只算背景，
+不给那个词记复习证据。单空是recognition，多空是cued，沿用现有选题节奏。
 
 [I] “罗马音拼单词”及其反向逐假名选罗马音等辅助工具，走domain.WORD_SKILLS与word_spelling_attempt。其词本身不因此获得独立单词记忆卡。若用户另外将该词加入正式词汇课程，那是另一条明确入学/正式作答路径。章节、小节、示例、介绍步骤、队列题、条件错误模式都不是FSRS记忆单位。
 
@@ -68,6 +72,12 @@ vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还
 [I] 曝光冷却与FSRS分离：通常60秒，实际可答时间取原due/not_before与曝光冷却的较晚值。domain.feedback_wait_times按同一内容及字形共享反馈等待；learning_store._latest_due、question_not_before、effective_question_due给课程执行相应边界。冷却不写S/D、review_count或FSRS due；反复查询不重新起算。已冻结真实草稿/反馈按保护合同处理。
 
 [I] 日统计使用StudyStore._day_bounds的学习者当地午夜及真实时区/DST，不是固定UTC日，也不是Anki的凌晨4时。app_clock默认真实时钟，可显式安装FrozenClock用于隔离测试。倒退时间需明确检查点恢复；QA控制不要求改系统时间。测试入口的隔离与记录格式详见本套数据/验证文档及docs/learning_records_0282.txt。
+
+[I；2026-11-13，设计12 WP-E（E3、E4、K11）；合成存储与fake UI测试，原生未验] 没到期的作答算什么：全应用只有arrangement/rules/credit.classify一处判断，按作答时刻看这个排程状态（课程为内容×能力，假名为排程卡）。从未评过分、已到期、或学习/重学步已到时→正式评分（排好的工作永远照常评）；没到期而仍在学习/重学步里→只算练习；没到期、距上次正式评分满24小时→提前正式评分，写普通的正式记录，库按提前的程度折算增益、到期从作答时刻重新起算；不足24小时→只算练习。24小时是经过的小时数（与库的口径相同），不是日历日。只算练习的作答不写评分记录与作答行，不改S/D、状态、到期、复习次数与待答题，不是份额钟的事件，也不改首学服务计数、未评分计数、假名阶段与熟悉度；答对不加分，答错不按遗忘处理。课程的“到期”取LearningStore.scheduled_question_due（排程到期，含辅助调整与自由提取probe，取较早者）；反馈、导师、检查、教学曝光等独立性等待只推迟出题，不会使到期的单位变成没到期。这条判断只在三处被问：(1)假名多轮强化批次（practice_config.schedule_mode为reinforce或缺失）里不是单词题、也不是拼写改错题的作答，在结果页显示前问一次（services/queue_practice）；(2)加练（第7节末）；(3)掌握检查的正式结算（retention_session.formal_ready：24小时内正式评过的单位只作观察）。“继续学习”主线的假名题（spaced）、拼写改错题与单词题照旧评分，不问它。(1)(3)是对原行为的改动（设计12 K11）：原先多轮强化的每次作答都直接正式评分，掌握检查可以对24小时内评过的单位提前正式结算。
+
+[I；同上] 练习里答错的防抖（services/practice_sitting.PracticeSitting，只在内存，以一坐为单位，离开即忘）：单次答错不动排程，这一坐里隔几题再练；再练答对清掉记号；同一坐里同一状态连续第二次答错算“确认的答错”，经第3节现有的有界辅助调整把下次正式复习提前——LearningEvidenceStore.record_auxiliary写一行辅助证据（source为course或kana）与一行调整记录，课程与假名共用learning_evidence._apply_bounded_adjustment，步长0.10I、各来源合计上限0.25I不变，不加新的权重、取值或字段。只对评过分、不在学习步、尚未到期的状态，每个状态24小时内至多提前一次（读任何来源已生效的提前调整，StudyQueries.card_adjustment_moves）；答对从不推后；提前写入失败时这次仍只算练习。只算练习的假名队列作答在按“继续”时写一行exposure“见过”（权重0，事件号practice:<会话>:<位置>，同一事件号不重复），同字形各方向的60秒反馈等待从这一刻起算；本批结束页从这些行读出“只算练习N题”，不把它们算作跳过。练习牌组的作答同样只写一行“见过”，课程另登记课的反馈曝光时刻（LearningStore.record_practice_exposure），露出过答案的内容在现有间隔内不出正式题。
+
+[I；同上，K13] 课程的提前正式评分通道：LearningStore.submit(…, early=False)只在拒绝“该能力尚未到期”的那一处，对early=True且作答那一刻early_ready仍成立的提交放行。early_ready＝classify为提前正式评分，且独立性守卫LearningStore.independence_wait（除恰等于排程到期的那个not_before下限之外的下限，以及反馈、导师、检查、教学曝光的等待）不晚于此刻；掌握检查的formal_ready调用同一个守卫。LearningStore.early_head在单位此刻可以提前评分时给出它自己的第一道待答题：学过且未暂停、无保留检查占用与交接、这道题未作答且题型开着、不是只作观察的替换题、材料未被挡、内容可用、教学已完成、前置未挡，再加early_ready；其中与formal_ready共有的非守卫条件合为LearningStore.answer_ready。放行只给普通的第一次作答：在early_head之后才出现的替换题或交接照旧以“没到期”拒绝；暂停照旧拒绝；结算本来就按提交时刻评分。只有加练交出的那一道题传early=True（extra_practice_runtime.early_submit），其他提交的参数与原来相同。
 
 代码/测试定位：domain.py的record_review、feedback_wait_times、_day_bounds；learning_store.py的finalize、_ability_due；tests/test_app_clock.py、test_initial_familiarity.py、test_kana_initial_familiarity.py、test_learning_store.py、test_learning_resume_priority.py。
 
@@ -111,6 +121,16 @@ vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还
 
 [I] 假名domain中的适应性阶段也参考同字形相关方向的独立成功与延迟证据，辅助词拼写为低权重线索；这只改变题型服务。各具体方向的正式卡仍分立，不能从此推导“手写已因选择题成功自动熟练”。
 
+[I] 未评分冷却（2026-11-08，F5-B）：课程题终结为unresolved时retry_not_before_utc=终结时间+UNRESOLVED_RETRY_SECONDS（4小时）；同一能力单元上一条事件也是unresolved时取max(+4小时, store时区的次日0点)。device_failure/invalid与初次诊断转回教学仍为+60秒。只是队列下限，不写FSRS、不改due_at_utc；备份校验接受事件时间+60秒至+36小时（旧记录+60秒照常合法）。评分结果新增可选unresolved_reason（latin_in_kana、particle_ha_typed_wa/particle_wo_typed_o/particle_he_typed_e、other_form），submit由冻结快照重新判出后存入作答记录，finalize一并写入事件，反馈页优先显示其文案。
+
+[I；2026-11-13，设计12 WP-B4（Q1–Q3、Q5）；合成存储与fake UI测试，原生未验] 学习取向为“广度优先”时（设置键study_orientation_v1，缺失按“扎实”，扎实即上文逐项不变），三处关卡不以答对为放行条件；判断都是arrangement/rules/gates的纯函数，由拥有各关卡的现有模块带着取向调用：
+  Q1 引导：有答错记录之后可以“看过了，继续”，走advance_instruction的bridge检查点（阶段guide→bridge，记下guided_at，60秒间隔照旧），检查点guide_correct仍为false。普通、被替换过（guide_write_guard只对已有答错记录之后的bridge放行）与音调引导都适用；advance_guided_sequence对有答错记录的一步放行，检查点形状不变。引导作答仍只是引导证据，不进FSRS；之后的首次检查照常独立评分。
+  Q2 批小测：一项答对，或它冻结的每道小测题都已有答错记录，即了结；intro_batch.record_answer只在未了结时重排。finished（不看取向：队列空且每项答对或已放行）与complete_intro_batch据此完成，未答对的项写bridge，与其他项一样进入间隔与首次检查。intro_batch_state.validate_database（备份恢复也经它）因此接受“每道题都有答错记录而离开队列”的项；这一处放宽与取向无关。
+  Q3 前置：learning_dependencies._status对一个前置按这个先后判断——(1)有过独立答对（independent_ready_ids，含义不变）→满足；(2)前置所在内容库停用或缺失、或缺必需引用→不可用，挡住（设计08第9.2节的内容库规则，两种取向下都排在“学过”之前：内容库不可用时只有独立答对过的前置不挡）；(3)取向为广度优先且其教学已做完（阶段done，即有过一次评了分的首次检查，不论对错）→满足，状态记为taught，不当作一次成功；(4)否则按未加入、介绍中、引导中、等待独立答对挡住。取向经learning.store读取，一次前置检查至多读一次设置，且只在遇到“教学做完而没有独立答对”的前置时才读（TaughtRule）。经过_status的十来处调用（出题、计数、提交、推进教学、批量引入、路线、导师、掌握检查）一并放宽，并与出题用词的门槛（教过即可）取齐；build_dependency_plan的unmet只列未满足的。前置关系待核、前置未加入照旧挡住。content_availability.py里按独立答对集合判断依赖的那一处属于上面(2)的内容库规则，不动。
+  不变：同一内容下一种能力仍要前一种正式答对才开放；首次检查与复习的评分及“错误、揭示、辅助记为Again”；学习步与当日短步；60秒间隔与未评分等待；自报熟悉而检查没过回到完整教学；假名之间的前置。
+
+[I；2026-11-14，设计11第16节；合成数据测试与真实内容桌面对照，原生未验] 核心主线的词与语法交替只改学习路线里小节的先后与单元归属（导航）；本节的首次教学、前置、题目门控与评分都不读路线，照旧。交替用本节的门控口径约束自己：提前的词（与读音规则）刚学到时每种能力的门控题不少于 min(原顺序时的数量, 3)，语法项不少于原顺序；另按学习者能开关的题型组保底（2026-11-14，设计 11 第 16.9 节）：每种能力里原顺序有门控题的每个设置组（learning_ui.KIND_GROUPS），提前后至少留 1 道，只开着一组题型时也不落到放宽层；硬前置照旧排在前面；按“已学的语法项数”计，题目不比原顺序晚开。“加入下一小节”取交替后顺序里第一个还有新内容的小节。
+
 代码/测试定位：learning_store.py的首次熟悉度及submit/finalize；learning_dependencies.py；learning_practice_policy.py；tests/test_initial_familiarity.py、test_initial_familiarity_ui.py、test_kana_initial_familiarity.py、test_learning_dependencies.py、test_learning_practice_policy.py、test_learning_practice_store.py。
 
 6. 队列、草稿、关闭题型与新增批次
@@ -143,6 +163,16 @@ vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还
 [I] 长期停学仍用实际经过时间与真实评分更新当前FSRS。不会因30/60/90天未打开批量归零、改所有due、降低全部能力或撤销前置；不把“没开App”当完全没接触日语。当前没有强制复学诊断，也没有已部署的savings补偿倍率或外部接触假定。
 
 [U] 长期中断后代表项优先的有界合成比较未显示一致优势，故保留原普通复习。
+
+[I；2026-11-12/13，设计12 WP-B3、WP-H；fake UI与合成存储测试，原生未验] 学习取向为“广度优先”时的到期服务与首学服务（扎实或没有设置时上文逐项不变）。_continue_dispatch在两条线的普通队头都算出冻结优先级之后：任一队头低于3档（冻结反馈、真实草稿、当日短步、语境词与规则探测、已被提升的教学块）照旧先出；明确开始请求照旧（first_teaching_dispatch.explicit_start_head）；两条线的队头都不是到期复习时照旧（均为新工作时轮转）。其余情形——至少一条线的队头是到期复习——由arrangement的ShareDispatcher.decide在三个去处之间按时间份额选：新内容F（share_candidate：原_proportional_teaching“挣到一块之后”的整条分支，先是已开始而未评分的块，再是四个池子轮流的新候选，“当天两次未评分即停”与全部资格检查保留）、课程复习C（课程线的3档队头）、假名练习K（假名线的3档队头）。两层比较：先新内容对复习，比“窗口用时÷权重”，小的先，相等取新内容；选了复习而C、K都有候选时再比课程对假名，相等取课程；只有一边有候选时全归它。默认权重新内容:复习＝50:50、课程:假名＝70:30；学习重点的偏重（只学新的100:0、多学新的70:30、不偏50:50、多复习30:70、只复习0:100；假名少85:15、正常70:30、假名多40:60）改的就是这两组权重，只在广度优先时起作用。8/16/32/64的挣块规则与同日循环保护在广度优先时不用，所以一轮里的任何一步都可能出教学块，不再限于封存前的第一步。“首学服务比例不是用户时间额度”这句只对扎实成立：广度优先时份额就是按时间算的。
+
+[I；同上] 窗口用时（arrangement/rules/clock，事件由sources/events从已有记录当场推出，不落库、不存计数器）：假名正式作答与单词拼写作答、课程primary/unresolved作答、引导完成与假名介绍等教学标记，按时刻排序，相邻间隔封顶（教学事件900秒，其余300秒），超过30分钟或跨学习日算新的一坐（教学事件计240秒，其余20秒）；从最近的事件往回累计满30分钟学习时间（最多回看14天），不按天清零。一个状态的教学标记、第一次正式作答及同一学习日紧接的一次记给新内容，之后记给复习；AI练习与导师作答、只算练习的作答不是事件，批小测每次作答的时刻未取。优先级0–2的工作、明确开始的块、已被提升的块的后续、用户自己开的假名批次、掌握检查与“课程学习”单线入口里的作答不参加份额选择，但用掉的时间照样记账，之后由份额找补。“课程学习”单线入口不走份额，内部仍是到期复习先于新课。一次只开一个块：本轮被提升的块还没有结果、且现在或桥接等待（60秒检索延迟＋30秒）之内可答时，新内容没有候选；有了结果、被跳过、不见了或要等得更久时清除这个记号。探新内容候选一无所获时本轮60秒内不再探。
+
+[I；同上] 轮次的例外——提升已登记的教学块：本文件开头“本地练习开始时固定本轮题单及优先级”与“封存后顺序不变”在广度优先时多一个例外。份额选中新内容时，practice_round.promote把那个候选移到所在线冻结顺序的最前、跨线优先级记为(1,0)，效果与封存前的promote_initial相同，但封存之后也可用。它只移动本轮已登记的条目（封存后才加入的课探不到；提升被拒时本轮不再探），不新增条目，其余条目的冻结优先级与相对顺序不变；一次只有一个被提升的块，计划里记下它，RoundSnapshot与PreparedKana的校验都算它。此后这个块靠(1,0)接着做完（引导之后等60秒再做首次检查；新假名介绍之后做它的第一道题），与封存前的受保护块相同。
+
+[I；同上] 学习重点的范围（两种取向下都起作用；设置键study_focus_v1）：范围由sources/scope_catalog换成内容集合（课的内容标识与“kana:<id>:<script>”，含已加入的前置），调度仍不读路线。课程收集时的排序键在3档及以上加范围分量，假名可答条目另加范围排序键，两条线之间比较用的冻结优先级不变；首学探针只对新的候选用范围；两条线之间两边都是3档及以上而只有一边在范围内时先出范围内的（扎实下也包括范围内是新内容、范围外是到期复习），0–2档仍在前；广度优先时份额先在有范围内候选的去处之间分。封存或结束的轮次不再带范围。改重点（services/focus.FocusService.change，与已存的相同时不写不重排）调用practice_round.restart(store, lane='main')重排一次。前置、暂停、内容库停用、明确开始、两次未评分即停与防泄题间隔都不被重点越过。
+
+[I；2026-11-13，设计12 WP-E；同上] 加练（两种取向都有，不参加份额选择）：主线排好的工作都做完或都在等时可以开启的内存模式（services/extra_session.ExtraSession，每个学习存储一个，不保存）。每一步之前先看排好的工作有没有到时的，有就restart本轮并交回分派（交回原样的状态搁置一个刷新周期，5分钟）；否则按范围内优先、没到期而距上次正式评分满24小时的按可提取率从低到高提前正式评分——假名一批至多20个状态，作为主线新会话、每题带题目元数据标记extra_practice_v1，模式结束或重启后在下一次出题前结束这一批；课程一次一道，经第2节的提前通道——其后24小时内评过分的组成至多8个状态的练习牌组，只算练习（第2节）。同一状态两次之间至少隔8题；学习步、重学步里的状态不进加练。提前评分的作答是普通的正式记录，照常是钟的事件、按线记给课程复习或假名练习。
 
 代码/测试定位：review_dispatch.py、new_dispatch.py、first_teaching_dispatch.py、first_teaching_kana.py、explicit_learning_start.py；tests/test_review_dispatch.py、test_review_dispatch_runtime.py、test_first_teaching_dispatch_core.py、test_first_teaching_dispatch_runtime.py、test_first_teaching_backlog.py、test_first_teaching_lane_fairness.py、test_first_teaching_local_day.py、test_explicit_learning_start_pending.py。
 

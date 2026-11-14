@@ -7,9 +7,10 @@ import sqlite3
 
 import pytest
 
-from kanamemory.content_pack import (ContentPackError, clear_cache, decode_value,
-                                    encode_value, load_namespace, namespace_document,
-                                    validate_installed_pack, validate_pack)
+from kanamemory.content_pack import (PERSONAL_REQUIRED_NAMESPACES, QUESTION_READINGS, ContentPackError,
+                                    ShardedNamespace, clear_cache, decode_value, encode_value, load_namespace,
+                                    namespace_document, validate_installed_pack, validate_pack,
+                                    validate_question_dependencies, validate_question_readings)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SPEC = importlib.util.spec_from_file_location("build_teaching_content", _ROOT / "tools/build_teaching_content.py")
@@ -166,12 +167,195 @@ def test_invalid_profile_or_deleted_namespace_is_rejected(tmp_path, monkeypatch,
 
 
 def test_startup_validates_content_checksum_before_using_learner_state(tmp_path):
+    # Version 1 (whole-namespace) packs; the sharded layout's file-level checks
+    # are covered in tests/test_content_pack_shards.py.
     source, pack = tmp_path / "source", tmp_path / "teaching.sqlite3"
     _write(source, "lesson", {"value": 1})
-    _BUILDER.build(source, pack, profile="demo")
+    _BUILDER.build(source, pack, profile="demo", layout="legacy")
     assert validate_pack(pack)["namespace_count"] == 1
     with closing(sqlite3.connect(pack)) as connection:
         connection.execute("UPDATE namespace SET payload_json=?", (json.dumps({"value": 2}),))
         connection.commit()
     with pytest.raises(ContentPackError, match="checksum"):
         validate_pack(pack)
+
+
+# ------------------------------------------- question_dependencies (design 11 section 5)
+
+_SHA = "a" * 64
+_GOOD = {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {
+    "words": ["word:b"], "grammar": ["grammar:g"], "kana": ["kana:a"], "oov": ["私"]}}}}}
+
+
+def _dependencies(**changes):
+    value = json.loads(json.dumps(_GOOD))
+    value["items"]["word:a"]["vocab_meaning"][_SHA].update(changes)
+    return value
+
+
+@pytest.mark.parametrize("value", [
+    _GOOD,
+    {"schema_version": 1, "items": {}},
+    {"schema_version": 1, "items": {"word:a": {}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {}}}}},
+])
+def test_question_dependencies_accepts_the_v1_contract_including_missing_items(value):
+    assert validate_question_dependencies(value) is value
+
+
+@pytest.mark.parametrize("value", [
+    {"schema_version": 2, "items": {}},
+    {"schema_version": 1},
+    {"schema_version": 1, "items": {}, "extra": 1},
+    {"schema_version": 1, "items": []},
+    {"schema_version": 1, "items": {"": {}}},
+    {"schema_version": 1, "items": {"word:a": {"Vocab": {}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {"abc": {}}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA.upper(): {}}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: []}}}},
+    _dependencies(readings=["x"]),
+    _dependencies(words="word:b"),
+    _dependencies(words=[f"word:{i}" for i in range(41)]),
+    _dependencies(words=["word:b", "word:b"]),
+    _dependencies(words=["word:b", ""]),
+    _dependencies(words=["word:a"]),
+    _dependencies(grammar=[7]),
+    _dependencies(oov=["私" * 65]),
+    _dependencies(kana=["k" * 1025]),
+])
+def test_question_dependencies_rejects_malformed_namespaces(value):
+    with pytest.raises(ContentPackError):
+        validate_question_dependencies(value)
+
+
+@pytest.mark.parametrize("shard", [frozenset(), frozenset({"question_dependencies"})])
+def test_built_packs_validate_question_dependencies_when_present(tmp_path, monkeypatch, shard):
+    source, pack = tmp_path / "source", tmp_path / "teaching.sqlite3"
+    _write(source, "lesson", {"values": [1]})
+    _write(source, "question_dependencies", _GOOD)
+    result = _BUILDER.build(source, pack, profile="demo", shard=shard)
+    assert validate_pack(pack, deep=True)["namespace_count"] == 2
+    monkeypatch.setenv("KANAMEMORY_TEACHING_PACK", str(pack))
+    clear_cache()
+    loaded = load_namespace("question_dependencies", {})
+    assert loaded["schema_version"] == 1 and dict(loaded["items"]["word:a"]) == _GOOD["items"]["word:a"]
+    assert ("shards" in result) == (shard != frozenset()) or shard == frozenset()
+    # A malformed entry never builds: the builder's deep validation rejects it.
+    _write(source, "question_dependencies", _dependencies(words=["word:a"]))
+    with pytest.raises(ContentPackError, match="dependency"):
+        _BUILDER.build(source, pack, profile="demo", shard=shard)
+    _write(source, "question_dependencies", {"schema_version": 2, "items": {}})
+    with pytest.raises(ContentPackError, match="dependencies"):
+        _BUILDER.build(source, pack, profile="demo", shard=shard)
+    # Other namespaces keep their generic checks only; the pack still loads.
+    assert load_namespace("lesson") == {"values": [1]}
+
+
+def test_question_dependencies_is_optional_for_personal_packs():
+    assert "question_dependencies" not in PERSONAL_REQUIRED_NAMESPACES
+
+
+# ------------------------------------------- question_readings (design 11 section 7)
+
+_READING_ENTRY = {"ids": ["word:b", "grammar:g"],
+          "fields": {"prompt": [[0, 1, "た", 0], [3, 5, "きっぷ", -1]], "task": [[2, 4, "ぶんみゃく", 1]]},
+          "options": {"買い物": [[0, 3, "かいもの", 0]], "3人": [[0, 2, "さんにん", -1]]}}
+_READINGS_GOOD = {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: _READING_ENTRY}}}}
+
+
+def _readings(**changes):
+    entry = {**json.loads(json.dumps(_READING_ENTRY)), **changes}
+    entry = {key: value for key, value in entry.items() if value is not None}
+    return {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: entry}}}}
+
+
+@pytest.mark.parametrize("value", [
+    _READINGS_GOOD,
+    {"schema_version": 1, "items": {}},
+    {"schema_version": 1, "items": {"word:a": {}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {}}}},
+    _readings(ids=None, fields={"prompt": [[0, 2, "がっこう", -1]]}, options=None),      # no lesson: no "ids"
+    _readings(fields=None),                                                               # options only
+    _readings(fields={"prompt": [[0, 1, "らーめん", 0], [1, 2, "ゔぁ", 1]]}),             # ー and ゔ are kana
+    _readings(options={"x" * 400: [[0, 1, "あ", -1]]}),
+    _readings(ids=[f"word:{i}" for i in range(60)]),
+])
+def test_question_readings_accepts_the_v1_contract(value):
+    assert validate_question_readings(value) is value
+
+
+@pytest.mark.parametrize("value", [
+    {"schema_version": 2, "items": {}},
+    {"schema_version": True, "items": {}},
+    {"schema_version": 1},
+    {"schema_version": 1, "items": {}, "extra": 1},
+    {"schema_version": 1, "items": []},
+    {"schema_version": 1, "items": {"": {}}},
+    {"schema_version": 1, "items": {"word:a": {"Vocab": {}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {"abc": _READING_ENTRY}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA.upper(): _READING_ENTRY}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {}}}}},            # an entry holds a span
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: []}}}},
+    _readings(readings={"切符": "きっぷ"}),                                               # unknown key
+    _readings(fields=None, options=None),                                                 # ids alone
+    _readings(ids=[]), _readings(ids="word:b"), _readings(ids=["word:b", "word:b"]), _readings(ids=["word:b", ""]),
+    _readings(ids=["word:b", 7]), _readings(ids=[f"word:{i}" for i in range(61)]), _readings(ids=["k" * 1025, "x"]),
+    _readings(fields={}), _readings(options={}), _readings(fields=[]), _readings(fields={"prompt": []}),
+    _readings(fields={"Prompt": [[0, 1, "た", -1]]}), _readings(fields={"": [[0, 1, "た", -1]]}),
+    _readings(fields={f"f{i}": [[0, 1, "た", -1]] for i in range(17)}),
+    _readings(options={"": [[0, 1, "た", -1]]}), _readings(options={"x" * 401: [[0, 1, "た", -1]]}),
+    _readings(options={f"選択{i}": [[0, 2, "せんたく", -1]] for i in range(61)}),
+    _readings(fields={"prompt": [[0, 1, "た"]]}), _readings(fields={"prompt": [[0, 1, "た", -1, 0]]}),
+    _readings(fields={"prompt": [(0, 1, "た", -1)]}), _readings(fields={"prompt": [{"start": 0}]}),
+    _readings(fields={"prompt": [[1, 1, "た", -1]]}), _readings(fields={"prompt": [[2, 1, "た", -1]]}),
+    _readings(fields={"prompt": [[-1, 1, "た", -1]]}), _readings(fields={"prompt": [[0.0, 1, "た", -1]]}),
+    _readings(fields={"prompt": [[True, 2, "た", -1]]}), _readings(fields={"prompt": [[0, 100001, "た", -1]]}),
+    _readings(fields={"prompt": [[3, 5, "きっぷ", -1], [0, 1, "た", 0]]}),                 # not sorted
+    _readings(fields={"prompt": [[0, 3, "たべ", 0], [2, 5, "きっぷ", -1]]}),               # overlapping
+    _readings(fields={"prompt": [[0, 1, "", -1]]}), _readings(fields={"prompt": [[0, 1, "タ", -1]]}),
+    _readings(fields={"prompt": [[0, 1, "ta", -1]]}), _readings(fields={"prompt": [[0, 1, "た べ", -1]]}),
+    _readings(fields={"prompt": [[0, 1, "食", -1]]}), _readings(fields={"prompt": [[0, 1, "あ" * 41, -1]]}),
+    _readings(fields={"prompt": [[0, 1, 7, -1]]}),
+    _readings(fields={"prompt": [[0, 1, "た", 2]]}), _readings(fields={"prompt": [[0, 1, "た", -2]]}),
+    _readings(fields={"prompt": [[0, 1, "た", "0"]]}), _readings(fields={"prompt": [[0, 1, "た", False]]}),
+    _readings(ids=None, fields={"prompt": [[0, 1, "た", 0]]}),                              # a ref needs "ids"
+    _readings(fields={"prompt": [[i, i + 1, "あ", -1] for i in range(81)]}),
+])
+def test_question_readings_rejects_malformed_namespaces(value):
+    with pytest.raises(ContentPackError):
+        validate_question_readings(value)
+
+
+@pytest.mark.parametrize("shard", [None, frozenset()])
+def test_the_builder_stores_question_readings_per_item_and_validates_them(tmp_path, monkeypatch, shard):
+    assert QUESTION_READINGS == "question_readings" and QUESTION_READINGS in _BUILDER.SHARDED_NAMESPACES
+    assert QUESTION_READINGS not in PERSONAL_REQUIRED_NAMESPACES
+    source, pack = tmp_path / "source", tmp_path / "teaching.sqlite3"
+    other = {"vocab_usage": {"b" * 64: {"fields": {"prompt": [[0, 2, "がっこう", -1]]}}}}
+    value = {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: _READING_ENTRY}}, "word:b": other}}
+    _write(source, "lesson", {"values": [1]})
+    monkeypatch.setenv("KANAMEMORY_TEACHING_PACK", str(pack))
+    monkeypatch.setenv("KANAMEMORY_LIBRARY_ROOT", str(tmp_path / "no-libraries"))
+    kwargs = {} if shard is None else {"shard": shard}
+    _BUILDER.build(source, pack, profile="demo", **kwargs)   # a pack without the namespace builds and loads
+    clear_cache()
+    assert load_namespace(QUESTION_READINGS, {}) == {} and load_namespace("lesson") == {"values": [1]}
+    _write(source, QUESTION_READINGS, value)
+    result = _BUILDER.build(source, pack, profile="demo", **kwargs)
+    assert validate_pack(pack, deep=True)["namespace_count"] == 2
+    clear_cache()
+    loaded = load_namespace(QUESTION_READINGS, {})
+    assert loaded["schema_version"] == 1 and list(loaded["items"]) == ["word:a", "word:b"]
+    assert dict(loaded["items"]["word:a"]) == value["items"]["word:a"]
+    assert dict(loaded["items"]["word:b"]) == value["items"]["word:b"]
+    if shard is None:  # one shard per content id plus the schema version; only the item read is decoded
+        assert result["shards"] == 4 and isinstance(loaded, ShardedNamespace)
+        assert loaded.loaded_keys() == {"schema_version", "items/word:a", "items/word:b"}
+    # A malformed entry never builds: the builder's deep validation rejects it, whole or sharded.
+    _write(source, QUESTION_READINGS, _readings(fields={"prompt": [[0, 1, "タ", -1]]}))
+    with pytest.raises(ContentPackError, match="reading"):
+        _BUILDER.build(source, pack, profile="demo", **kwargs)
+    _write(source, QUESTION_READINGS, {"schema_version": 2, "items": {}})
+    with pytest.raises(ContentPackError, match="readings"):
+        _BUILDER.build(source, pack, profile="demo", **kwargs)
+    clear_cache()

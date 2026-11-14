@@ -25,6 +25,8 @@ from kanamemory.answer_speech import clean_utterance, pronunciation_utterance
     ("三百", "三百"),
     ("１人でコーヒーを飲む。", "１人でコーヒーを飲む。"),
     ("ジュース・ケーキ", "ジュース・ケーキ"),
+    ("A：田中さん？\nB：山田です。", "田中さん？ 山田です。"),
+    ("Ａ: 誰？\nＢ: 友達です。", "誰？ 友達です。"),
     ("/koː/", ""),
     ("[e] · 2", ""),
     ("_---", ""),
@@ -33,6 +35,8 @@ from kanamemory.answer_speech import clean_utterance, pronunciation_utterance
     ("漢字＋漢字", ""),
     ("学校（　）行きます。", ""),
     ("（1）に行きます。", ""),
+    ("A：学生（　）。\nB：先生です。", ""),
+    ("これはA：です。", ""),
     ("行く（解释不能朗读）", ""),
 ])
 def test_known_notation_is_removed_without_stripping_lexical_content(label, spoken):

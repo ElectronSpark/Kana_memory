@@ -199,12 +199,41 @@ def _validate(spec):
     return all_refs
 
 
+def namespace_reader():
+    """One shared, read-only copy of an installed namespace per (loader, pack file).
+
+    load_namespace deep-copies on every call; pitch questions only read the
+    registry, so the copy is made once and reused until the pack file changes.
+    Callers must not mutate the result; return deepcopy slices instead.
+    """
+    slot = {}
+
+    def read(loader, name, default):
+        from .content_pack import pack_path
+        path = pack_path()
+        try:
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        key = (loader, name, str(path), stamp)
+        entry = slot.get("entry")
+        if entry is None or entry[0] != key:
+            entry = slot["entry"] = (key, loader(name, default))
+        return entry[1]
+    read.cache_clear = slot.clear
+    return read
+
+
+_registry = namespace_reader()
+
+
 def _specification(question):
     if not isinstance(question, dict) or question.get("input_mode") != "pitch_fill":
         raise ValueError("Whole-utterance sequences require pitch composition")
     spec = question.get("pitch_practice")
     refs = _validate(spec)
-    registry = load_namespace("pitch_sequences", {})
+    registry = _registry(load_namespace, "pitch_sequences", {})
     if (not isinstance(registry, dict) or registry.get("format") != "kanamemory-pitch-sequences"
             or type(registry.get("version")) is not int or registry["version"] != 1
             or not isinstance(registry.get("sources"), list) or not isinstance(registry.get("records"), list)):

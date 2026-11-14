@@ -1,7 +1,6 @@
 """Shared examples are teaching material, never automatic quiz hints or ratings."""
 from __future__ import annotations
 
-import json
 import weakref
 from copy import deepcopy
 from functools import wraps
@@ -160,11 +159,15 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                 rows.append(u.label(source['url'], size=12, color=u.MUTED))
         return rows
 
-    def example_targets_available(self, *, source_text=None, reference_ids=None):
-        """Read-only dictionary/kana references do not become enrolled lessons."""
+    def example_targets_available(self, *, source_text=None, reference_ids=None, views=False):
+        """Read-only dictionary/kana references do not become enrolled lessons.
+
+        ``views``: catalogue lessons as read-only views (learning_items_available); for the example
+        service, which keeps its targets for the session and only reads them.
+        """
         from .ai_materials import ai_reference_targets
         from .content import ContentRepository
-        items = {item['id']: item for item in self.learning_items_available()}
+        items = {item['id']: item for item in self.learning_items_available(views=views)}
         repo = getattr(self, 'repo', None)
         if isinstance(repo, ContentRepository):
             for item in ai_reference_targets(repo, source_text=source_text, target_ids=reference_ids):
@@ -177,42 +180,117 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         else:
             self.show_learning_detail(item)
 
+    def _example_service_key(self, items):
+        # The service's own targets. Custom material and material usage are
+        # re-read by the service itself (refresh compares their exact JSON),
+        # so a restore or import that changes only them keeps the service and
+        # its indexes; personal versions change the target snapshots.
+        return (id(self.store), tuple((x['id'], x.get('revision')) for x in items),
+                self.store.get_setting('personal_content_version_generation_v1', 0))
+
     def example_store(self):
-        from .example_store import ExampleStore, SETTING
+        """The session's one ExampleStore; every call runs on the UI thread.
+
+        Pages call this for every visible example. After the first build a
+        call costs a token check, or after a database write one cheap target
+        signature (example_store.targets_state): the catalogue is listed and
+        the service rebuilt only when enrolled content, custom material, AI
+        material, material usage or personal versions changed. Explicit
+        invalidation (``_example_cache_key = None``) always re-lists.
+        """
+        from .example_store import ExampleStore, SETTING, targets_state
         db = getattr(self.store, '_db', None)
         transaction = db is not None and db.in_transaction
         token = ((id(self.store), id(db), db.total_changes,
                   db.execute('PRAGMA data_version').fetchone()[0],
                   id(self.learning_store), id(getattr(self, 'repo', None)))
                  if db is not None and not transaction else None)
-        # One screen can request this service for every visible example. Avoid
-        # copying the entire course catalogue again while the database is
-        # unchanged. Own writes, external commits and replaced stores all miss
-        # this shortcut; progress itself is still read by each service query.
-        if token is not None and token == getattr(self, '_example_access_token', None):
+        # Own writes, external commits and replaced stores all miss this
+        # shortcut; progress itself is still read by each service query.
+        if (token is not None and token == getattr(self, '_example_access_token', None)
+                and getattr(self, '_example_cache_key', None) is not None):
+            return self._example_service
+        state = (id(self.store), id(self.learning_store), id(getattr(self, 'repo', None)),
+                 targets_state(self.store, self.learning_store))
+        if (getattr(self, '_example_cache_key', None) is not None
+                and state == getattr(self, '_example_targets_state', None)):
+            # Same targets: the service re-reads custom material and personal
+            # changes itself, inside a transaction too (live reads, no caching).
+            if not transaction:
+                self._example_access_token = token
             return self._example_service
         value = self.store.get_setting(SETTING, None)
         reference_ids = {reference['target_id'] for reference in (value or {}).get('references', [])}
-        items = self.example_targets_available(reference_ids=reference_ids)
+        items = self.example_targets_available(reference_ids=reference_ids, views=True)
         if transaction:
             # total_changes does not decrease on rollback. Never publish a
             # catalogue containing uncommitted lessons or custom references.
             self._example_access_token = None
             return ExampleStore(self.store, self.learning_store, items,
                 lexical_review=getattr(getattr(self, 'repo', None), "lexical_review", None))
-        # Restores and imports can replace the setting without changing the
-        # StudyStore object. A content key prevents retaining a stale index.
-        from .material_workflow import digest
-        key = (id(self.store), tuple((x['id'], x.get('revision')) for x in items),
-               json.dumps(value, ensure_ascii=False, sort_keys=True),
-               digest(self.store.get_setting('material_usage_v1', {})),
-               self.store.get_setting('personal_content_version_generation_v1', 0))
+        key = self._example_service_key(items)
         if getattr(self, '_example_cache_key', None) != key:
             self._example_service = ExampleStore(self.store, self.learning_store, items,
                 lexical_review=getattr(getattr(self, "repo", None), "lexical_review", None))
             self._example_cache_key = key
+        self._example_targets_state = state
         self._example_access_token = token
         return self._example_service
+
+    async def prewarm_examples(self):
+        """Startup: build the session's ExampleStore on a worker's own connections.
+
+        The first build (bundled catalogue, validation, indexes) takes seconds
+        on a phone; Toga's event loop is the Android main thread. The worker
+        lists the same targets with the App's own functions, the service is
+        adopted only if the target signature is still the one it was built
+        from, and any failure leaves the ordinary lazy build in place.
+        """
+        from types import MethodType, SimpleNamespace
+        from .content import ContentRepository
+        from .example_store import ExampleStore, SETTING, targets_state
+        from .learning_store import LearningStore
+        from .practice_worker import run_in_background
+        repo = getattr(self, 'repo', None)
+        if getattr(self, '_example_cache_key', None) is not None or not isinstance(repo, ContentRepository):
+            return False
+        value = self.store.get_setting(SETTING, None)
+        reference_ids = {reference['target_id'] for reference in (value or {}).get('references', [])}
+        functions = (self.learning_items_available.__func__, self.example_targets_available.__func__)
+
+        def build(content, progress):
+            learning = LearningStore(progress)
+            state = targets_state(progress, learning)
+            reader = SimpleNamespace(store=progress, learning_store=learning, repo=content)
+            reader.learning_items_available = MethodType(functions[0], reader)
+            items = MethodType(functions[1], reader)(reference_ids=reference_ids, views=True)
+            return state, ExampleStore(progress, learning, items, lexical_review=content.lexical_review).warm()
+
+        self._example_prewarm_running = True
+        try:
+            try:
+                state, service = await run_in_background(repo, self.store, build)
+            except Exception as exc:  # optional warm-up: the lazy build still works
+                self._example_prewarm_error = type(exc).__name__
+                return False
+            return self._adopt_example_service(repo, state, service)
+        finally:
+            self._example_prewarm_running = False
+            self._fill_example_placeholders()
+
+    def _adopt_example_service(self, repo, state, service):
+        from .example_store import targets_state
+        db = getattr(self.store, '_db', None)
+        current = (id(self.store), id(self.learning_store), id(repo), targets_state(self.store, self.learning_store))
+        if (getattr(self, '_example_cache_key', None) is not None or (db is not None and db.in_transaction)
+                or current[3] != state or getattr(self, 'repo', None) is not repo):
+            return False
+        service.attach(self.store, self.learning_store, lexical_review=getattr(repo, 'lexical_review', None))
+        self._example_service = service
+        self._example_cache_key = self._example_service_key(list(service.items.values()))
+        self._example_targets_state = current
+        self._example_access_token = None
+        return True
 
     def example_text(self, example, reference=None, *, interactive=False):
         from .personal_reading import presentation, annotation_exclusions
@@ -284,14 +362,80 @@ class ExampleUIMixin(LexicalExampleUIMixin):
                     break
         return rows
 
+    def example_background_known(self, example_id, target_id, known_ids):
+        """+1 context (四之二 item 5): every other referenced item is known."""
+        return all(target == target_id or target in known_ids
+                   for target in self.example_store().reference_targets(example_id))
+
+    @staticmethod
+    def _title_highlight(item, text):
+        # The fallback sentence has no reference spans: mark the word itself.
+        title = item.get('title', '') if item.get('family') == 'word' else ''
+        start = text.find(title) if title else -1
+        return [{'start': start, 'end': start + len(title), 'quote': title}] if start >= 0 else []
+
+    def example_cards(self, item, *, limit=2, known_ids=None):
+        """Ranked shared examples, else the lesson's own example.
+
+        With known_ids (batch cards), only sentences whose other references are
+        all known are shown; when none qualifies and the lesson example is a
+        shared sentence with unknown references, no example is shown at all.
+        While the startup worker is still building the example service, a
+        placeholder keeps the UI thread free and is filled when it finishes.
+        """
+        if (getattr(self, '_example_prewarm_running', False)
+                and getattr(self, '_example_cache_key', None) is None):
+            holder = u.col(u.label('例句准备中…', size=13, color=u.MUTED))
+            holder._feedback_fragment = {'kind': 'example_pending', 'target_id': item['id']}
+            if getattr(self, '_example_waiting', None) is None:
+                self._example_waiting = []
+            self._example_waiting.append((holder, item, limit, known_ids))
+            return holder
+        return self._example_cards_now(item, limit=limit, known_ids=known_ids)
+
+    def _fill_example_placeholders(self):
+        """Replace waiting placeholders still on screen; runs on the UI thread."""
+        waiting, self._example_waiting = getattr(self, '_example_waiting', None) or [], []
+        for holder, item, limit, known_ids in waiting:
+            if getattr(holder, 'window', True) is None:
+                continue  # its page is gone; a new render builds normally
+            try:
+                cards = self._example_cards_now(item, limit=limit, known_ids=known_ids)
+            except Exception as exc:  # the page stays usable; the label remains
+                self._example_prewarm_error = type(exc).__name__
+                continue
+            holder.clear()
+            holder.add(cards)
+            holder._feedback_fragment = getattr(cards, '_feedback_fragment', holder._feedback_fragment)
+
     @with_example_progress
-    def example_cards(self, item, *, limit=2):
-        page = self.example_store().for_item_page(item['id'], limit=limit)
+    def _example_cards_now(self, item, *, limit=2, known_ids=None):
+        page = self.example_store().for_item_page(item['id'], limit=limit if known_ids is None else None)
         entries = page['examples']
-        if not page['total']:
-            instruction = item.get('instruction', {})
+        instruction = item.get('instruction', {})
+        if known_ids is not None:
+            known = {item['id'], *known_ids}
+            fallback = instruction.get('example', '')
+            # In ranked order, stop at `limit` shown sentences: a common item
+            # (は) has over a thousand, each check reads its references, and the
+            # skipped tail matters only when nothing qualifies (scanned fully).
+            shown, excluded = [], []
+            for entry in entries:
+                if limit and len(shown) >= limit:
+                    break
+                (shown if self.example_background_known(entry['id'], item['id'], known) else excluded).append(entry)
+            entries = shown[:limit]
+            # A shared copy of the lesson sentence carries its references;
+            # without one the lesson sentence has no background references.
+            if not entries and any(e['text'] == fallback for e in excluded) or not entries and not fallback.strip():
+                result = u.col()
+                result._feedback_fragment = {'kind': 'example_withheld', 'target_id': item['id'],
+                    'excluded_example_ids': [e['id'] for e in excluded]}
+                return result
+        if (not page['total']) if known_ids is None else not entries:
+            highlight = self._title_highlight(item, instruction.get('example', '')) if known_ids is not None else []
             result = u.col(self.annotated_sentence(instruction.get('example', ''), size=20,
-                audio=instruction.get('example_text_role', 'study') == 'study'),
+                audio=instruction.get('example_text_role', 'study') == 'study', highlight_spans=highlight),
                 self.natural_translation_label(instruction.get('example', ''), instruction.get('translation', ''), color=u.MUTED),
                 *self.order_translation_rows(instruction.get('example', ''), instruction.get('translation', ''),
                     explicit=instruction.get('order_translation')),
@@ -328,10 +472,13 @@ class ExampleUIMixin(LexicalExampleUIMixin):
     def _render_item_examples(self, target_id, offset=0):
         self._item_examples_state = (target_id, offset)
         service = self.example_store()
-        items = {x['id']: x for x in self.example_targets_available(reference_ids={target_id})}
+        # The service already holds the current targets; list the catalogue
+        # again only for a target it does not know (a dictionary reference).
+        target = service.items.get(target_id) or next(
+            x for x in self.example_targets_available(reference_ids={target_id}) if x['id'] == target_id)
         page = service.for_item_page(target_id, offset=offset, limit=8)
         entries = page['examples']
-        children = [u.label(items[target_id]['title'], size=21, bold=True)]
+        children = [u.label(target['title'], size=21, bold=True)]
         children[0]._feedback_fragment = {'kind': 'example_collection', 'target_id': target_id,
             'ordered_example_ids': [e['id'] for e in entries],
             'total': page['total'], 'offset': offset, 'sort': 'learner_progress_weighted', 'limit': 8}
@@ -416,7 +563,8 @@ class ExampleUIMixin(LexicalExampleUIMixin):
             candidates = linked
         else:
             candidates = refs
-        candidates = [r for r in candidates if not selected or r['id'] != selected['id']]
+        candidates = [r for r in candidates if (not selected or r['id'] != selected['id'])
+                      and not r.get('library_unavailable')]
         if candidates and not choices:
             children.append(u.label('关联学习项', size=16, bold=True))
         for ref in candidates:
@@ -484,8 +632,10 @@ class ExampleUIMixin(LexicalExampleUIMixin):
             placeholder='搜索要关联的词义、语法或读音规则', style=u.Pack(margin_bottom=6))
         search = lambda w: self._render_example_target_picker(example_id, self.example_target_query.value or '')
         self.example_target_query.on_confirm = search
-        items = [x for x in self.learning_items_available() if not query.strip() or query.strip().casefold() in
-                 ' '.join(str(x.get(k, '')) for k in ('title', 'meaning', 'reading')).casefold()]
+        unavailable = self.store.library_unavailable_ids()  # 08 section 8.2: no new links to them
+        items = [x for x in self.learning_items_available(views=True) if x['id'] not in unavailable
+                 and (not query.strip() or query.strip().casefold() in
+                 ' '.join(str(x.get(k, '')) for k in ('title', 'meaning', 'reading')).casefold())]
         children = [self.example_target_query, u.button('搜索', search, compact=True)]
         for item in items[offset:offset + 12]:
             children.append(u.button(item['title'], lambda w, target=item['id']:
@@ -657,7 +807,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
         from .example_store import parse_pack, validate_pack
         try:
             raw = self._example_json_input.value or ''
-            candidate = parse_pack(raw, known_targets={x['id'] for x in self.learning_items_available()},
+            candidate = parse_pack(raw, known_targets={x['id'] for x in self.learning_items_available(views=True)},
                                    require_status=True)
             # LLM/external proposals remain inert until this visible preview
             # is explicitly accepted; never interpret prose as instructions.
@@ -676,7 +826,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
             for ex in candidate['examples'][offset:offset + 5]:
                 refs = [r for r in candidate['references'] if r['example_id'] == ex['id']]
                 for ref in refs:
-                    target = next(x for x in self.learning_items_available() if x['id'] == ref['target_id'])
+                    target = next(x for x in self.learning_items_available(views=True) if x['id'] == ref['target_id'])
                     preview_rows.add(u.label(target['title'], bold=True), self.example_text(ex, ref),
                         self.natural_translation_label(ex['text'], ex.get('translation', ''), color=u.MUTED),
                         *self.order_translation_rows(ex['text'], ex.get('translation', ''),

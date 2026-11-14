@@ -10,6 +10,7 @@ def native_route_candidates(store, allowed_for, *, audio_ready, handwriting_read
     from .practice_availability import summarize_queue_availability
     from .domain import HANDWRITING_SKILLS, LISTENING_SKILLS
     result, enabled = [], set()
+    unavailable = None  # 08 section 8.2: read once, only when a lane has a head
     for lane in ("main", "word_romaji"):
         pending = store.load_session_progress(lane=lane, lazy_questions=True)
         if not pending:
@@ -20,7 +21,9 @@ def native_route_candidates(store, allowed_for, *, audio_ready, handwriting_read
         if index >= len(questions):
             continue
         question = questions[index]
-        if (question.kind not in allowed or question.kind not in NATIVE
+        if unavailable is None:
+            unavailable = store.library_unavailable_ids()
+        if (question.content_id in unavailable or question.kind not in allowed or question.kind not in NATIVE
                 or question.kind in HANDWRITING_SKILLS and not handwriting_ready
                 or question.kind in LISTENING_SKILLS and not audio_ready):
             continue

@@ -8,7 +8,7 @@ from collections import deque
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, time, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import hashlib
 import heapq
 import json
@@ -30,6 +30,30 @@ from .kana_question_policy import direction_allowed, question_allowed
 UTC = timezone.utc
 ALGORITHM_VERSION = "py-fsrs-6.3.2/fsrs-6"
 CONTENT_CONTROLS_SETTING = "study_item_controls_v1"
+# The UI connection runs on Android's main thread: a busy wait must end well
+# before the 5 s input-dispatch ANR. UI write entry points turn the resulting
+# "database is locked" into a retry hint (draft_debounce.is_database_locked).
+SQLITE_BUSY_TIMEOUT_SECONDS = 2.5
+
+
+def enable_wal(db) -> str:
+    """Switch a learner connection to WAL; only then relax fsync to NORMAL.
+
+    The one place progress connections choose durability. In WAL mode
+    synchronous=NORMAL keeps the database consistent across crashes and power
+    loss; only the most recent commit(s) may be lost on power failure (no
+    corruption). A connection that cannot use WAL (e.g. :memory:) keeps the
+    default synchronous=FULL. Returns the journal mode SQLite actually chose.
+
+    Also keeps SQLite's temporary storage in memory: Android gives SQLite no
+    writable temp directory, so a sort or grouping that outgrows the page cache
+    fails with "disk I/O error" instead of spilling to a file (see content.py).
+    """
+    db.execute("PRAGMA temp_store=MEMORY")
+    mode = str(db.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    if mode == "wal":
+        db.execute("PRAGMA synchronous=NORMAL")
+    return mode
 SKILLS = {"kana_choice", "kana_romaji", "romaji_kana", "romaji_kana_full", "romaji_handwriting", "kana_handwriting", "word_kana", "word_meaning_kana", "word_romaji"}
 WORD_SKILLS = {"word_kana", "word_meaning_kana", "word_romaji"}
 WORD_KIND_PAUSE = "word_kind_pause_v1"
@@ -598,19 +622,27 @@ class StudyStore:
         # Session randomness is separately seeded. Disable FSRS's global RNG so
         # the same ratings/timestamps reproduce the same memory-state sequence.
         self.scheduler = Scheduler(enable_fuzzing=False)
-        self._db = sqlite3.connect(self.path, timeout=10)
+        from .record_schema import LearnerConnection, ensure_current
+        # LearnerConnection only adds a connection-local schema-fact cache.
+        self._db = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_SECONDS, factory=LearnerConnection)
         self._db.row_factory = sqlite3.Row
+        # Rows this connection writes to its own TEMP bookkeeping after opening (read_revision leaves them out).
+        self._untracked_changes = 0
         self._db.execute("PRAGMA foreign_keys=ON")
-        self._db.execute("PRAGMA journal_mode=WAL")
-        from .record_schema import ensure_current
+        enable_wal(self._db)
         try:
             self.record_upgrade = ensure_current(self._db, self.data_dir)
         except BaseException:
             self._db.close()
             raise
-        with self._db:
-            self._db.execute("INSERT OR IGNORE INTO app_setting VALUES (?,?)", ("scheduler", json.dumps(self.scheduler.to_dict())))
-        saved = self._db.execute("SELECT value_json FROM app_setting WHERE key='scheduler'").fetchone()
+        # Read first: an existing learner file (every worker connection) needs no
+        # write lock to open; only a brand-new file writes the default once.
+        scheduler_row = lambda: self._db.execute("SELECT value_json FROM app_setting WHERE key='scheduler'").fetchone()
+        saved = scheduler_row()
+        if saved is None:
+            with self._db:
+                self._db.execute("INSERT OR IGNORE INTO app_setting VALUES (?,?)", ("scheduler", json.dumps(self.scheduler.to_dict())))
+            saved = scheduler_row()
         self.scheduler = Scheduler.from_dict(json.loads(saved[0]))
         from .learning_evidence import ensure_schema as ensure_evidence_schema
         ensure_evidence_schema(self._db)
@@ -688,8 +720,15 @@ class StudyStore:
         self._db.execute("BEGIN IMMEDIATE")
 
     def read_revision(self) -> tuple[int, int]:
-        """Local changes (including rollbacks) plus commits by other connections."""
-        return self._db.total_changes, self._db.execute("PRAGMA data_version").fetchone()[0]
+        """Local changes (including rollbacks) plus commits by other connections.
+
+        Rows this connection wrote to its own TEMP bookkeeping while setting it
+        up (``_untracked_changes``, see _adaptive_evidence_monitor) are not
+        learner data: they are left out, so that a monitor created between two
+        reads does not look like a write and empty the caches keyed on this.
+        """
+        changes = self._db.total_changes - getattr(self, "_untracked_changes", 0)
+        return changes, self._db.execute("PRAGMA data_version").fetchone()[0]
 
     def clear_learning_data(self) -> dict:
         """Clear this learner's progress while retaining preferences and files."""
@@ -762,11 +801,40 @@ class StudyStore:
                 self._db.execute("UPDATE study_card SET suspended=0 WHERE content_id=?", (content_id,))
         return dict(control)
 
+    def unavailable_content_ids(self, now: datetime | None = None) -> frozenset[str]:
+        """Decode item controls once for a loop: ``cid not in result`` equals
+        is_content_available(cid, now) and the content's library availability.
+        Read for one synchronous action only."""
+        return frozenset(self._unavailable_content_ids(now))
+
     def _unavailable_content_ids(self, now: datetime | None = None) -> set[str]:
+        """Item controls (user intent) plus library-unavailable content (08 section 8.1).
+
+        The second part is the same AvailabilityView the attached
+        LearningStore.read_operation shares (else one live read); it is a
+        read-time projection and never writes controls or suspensions.
+        """
         now = _utc(now)
         return {content_id for content_id, control in self.get_setting(CONTENT_CONTROLS_SETTING, {}).items()
                 if control["suspended"] or (control["buried_until_utc"] is not None
-                    and datetime.fromisoformat(control["buried_until_utc"]) > now)}
+                    and datetime.fromisoformat(control["buried_until_utc"]) > now)} | self.library_unavailable_ids()
+
+    def library_unavailable_ids(self) -> frozenset[str]:
+        """Learned content an enabled library no longer serves (orphaned/blocked/retired)."""
+        return self.library_availability().unavailable_ids
+
+    def library_availability(self):
+        """The AvailabilityView of the attached LearningStore.read_operation, else one live read.
+
+        Also answers for content without progress (state_of/available). A
+        read-time projection only; never writes controls or suspensions.
+        """
+        from .learning_store import LearningStore, _attached_read, availability_view
+        read = _attached_read(self)
+        if read is not None:
+            return read.availability()
+        from .learning_dependencies import independent_ready_ids
+        return availability_view(self, ready_ids=lambda: independent_ready_ids(LearningStore.reader(self)))
 
     def reload_daily_new_limit(self):
         # Preserve old settings/backup round trips without applying a quota.
@@ -1039,7 +1107,36 @@ class StudyStore:
                 if until > now:
                     for identity in groups.get((row["content_id"], row["script"]), []):
                         result[identity] = max(result.get(identity, until), until)
+            # A practice-only answer (design 12 E5) shows the answer without a review event:
+            # its exposure row starts the same wait for the kana's directions.
+            for row in self.queries.practice_exposures(batch, (now - timedelta(seconds=60)).isoformat()):
+                until = _utc(datetime.fromisoformat(row["occurred_at_utc"])) + timedelta(seconds=60)
+                if until > now:
+                    for identity in groups.get((row["target_id"], row["ability"].split(":", 1)[0]), []):
+                        result[identity] = max(result.get(identity, until), until)
         return result
+
+    def record_practice_exposure(self, event_id: str, content_id: str, skill: str, script: str,
+                                 question, result: dict, *, now: datetime | None = None) -> None:
+        """A practice-only kana answer showed its answer (design 12 E5, 10 (6)): one evidence row "见过".
+
+        Source kana, role exposure (weight 0, never eligible), event id
+        ``event_id`` ("practice:..."), in its own transaction. feedback_wait_times
+        reads it like a formal answer's finalization, so the kana's directions
+        wait the same 60 seconds before a formal question. Nothing of the card,
+        the session, its checkpoint or the queue is written.
+        """
+        _validate_key(content_id, skill, script)
+        now = _utc(now)
+        metadata = question.get("metadata") or {}
+        from .learning_evidence import LearningEvidenceStore
+        with self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            LearningEvidenceStore(self).record_attempt(event_id, {
+                "target_id": content_id, "ability": script + ":" + skill, "kind": skill,
+                "revision": str(metadata.get("content_version", "1")),
+                "prompt": question.get("prompt", ""), "answer": question.get("answer", "")},
+                result, source="kana", role="exposure", now=now)
 
     def reconcile_session_kinds(self, session_id: str, allowed_kinds,
                                 *, now: datetime | None = None, lazy_questions=False) -> dict | None:
@@ -1238,16 +1335,31 @@ class StudyStore:
         a later toggle from reviving an answered or superseded repetition.
         """
         policy = self._snapshot_question_policy(original)
-        candidates = [(old, item) for old, item in enumerate(original[:index])
-            if item["kind"] in allowed and item["kind"] not in WORD_SKILLS
+        # An archived prefix (explicit receipt) is closed history: only skipped
+        # copies after its bound are candidates; their parents may lie below it.
+        receipt = self._archived_prefix(session_id)
+        start = min(receipt["upto"], index) if receipt else 0
+        candidates = [(old, original[old]) for old in range(start, index)
+            if original[old]["kind"] in allowed and original[old]["kind"] not in WORD_SKILLS
             and policy.allowed(old)
-            and item.get("metadata", {}).get("not_before_utc")]
+            and original[old].get("metadata", {}).get("not_before_utc")]
         if not candidates:
             return []
-        answers = {row["question_index"]: (row["event_id"], row["card_id"])
-            for row in self._db.execute("""SELECT a.question_index,a.event_id,e.card_id
+        answer_sql = """SELECT a.question_index,a.event_id,e.card_id
                 FROM session_answer a JOIN review_event e USING(event_id)
-                WHERE a.session_id=?""", (session_id,))}
+                WHERE a.session_id=?"""
+        if not start:
+            answers = {row["question_index"]: (row["event_id"], row["card_id"])
+                for row in self._db.execute(answer_sql, (session_id,))}
+        else:
+            answers = {row["question_index"]: (row["event_id"], row["card_id"])
+                for row in self._db.execute(answer_sql + " AND a.question_index>=?", (session_id, start))}
+            for parent in sorted({item["metadata"].get("relearning_of_index") for _, item in candidates}
+                                 - {None}):
+                if type(parent) is int and parent < start:
+                    found = self._db.execute(answer_sql + " AND a.question_index=?", (session_id, parent)).fetchone()
+                    if found is not None:
+                        answers[parent] = (found["event_id"], found["card_id"])
         unavailable = self._unavailable_content_ids(now)
         reserved = {(item["content_id"], item["kind"], item["script"]) for item in surviving}
         restored, cards, latest_reviews = [], {}, {}
@@ -1289,13 +1401,42 @@ class StudyStore:
             raise ValueError("原练习队列已改变，请返回后重新添加新批次。")
         # The token covers only this lane's immutable payload and visible draft.
         questions = self._session_snapshot(session_id)
-        token = hashlib.sha256(json.dumps([*list(row), questions], ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")).hexdigest()
-        return {**dict(row), "questions": questions}, token
+        receipt = self._archived_prefix(session_id)
+        start = receipt["upto"] if receipt else 0
+        return {**dict(row), "questions": questions}, self._append_token(row, receipt, questions[start:])
 
     def session_append_token(self, session_id: str) -> str:
-        """Capture the queue/draft version before a worker builds an addition."""
-        return self._session_append_state(session_id)[1]
+        """Capture the queue/draft version before a worker builds an addition.
+
+        With a prefix archive receipt only the suffix after its bound is read;
+        the receipt's frozen digests stand in for the archived prefix.
+        """
+        receipt = self._archived_prefix(session_id)
+        if receipt is None:
+            return self._session_append_state(session_id)[1]
+        current = self._checkpoint_row()
+        row = self._db.execute("SELECT * FROM session_checkpoint WHERE session_id=?", (session_id,)).fetchone()
+        if row is None or current is None or current["session_id"] != session_id:
+            raise ValueError("原练习队列已改变，请返回后重新添加新批次。")
+        suffix = list(session_questions.iter_rows(self._db, session_id, start=receipt["upto"]))
+        return self._append_token(row, receipt, suffix)
+
+    @staticmethod
+    def _append_token(row, receipt, questions):
+        # Without a receipt the token is byte-identical to the original whole-session hash.
+        payload = ([*list(row), questions] if receipt is None else
+                   [*list(row), {"archived_prefix": receipt["upto"], "sha256": receipt["sha256"]}, questions])
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False,
+            separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _archived_prefix(self, session_id):
+        """Count-validated prefix archive receipt (practice_archive), or None.
+
+        Archival is an explicit use case. Whole-session consumers then treat
+        [0, upto) as closed history and work after the bound only.
+        """
+        from .practice_archive import archived_prefix
+        return archived_prefix(self, session_id)
 
     def get_session_summary(self, session_id: str) -> dict:
         count = len(self._session_snapshot(session_id))
@@ -1306,18 +1447,32 @@ class StudyStore:
         auxiliary = self._db.execute("""SELECT COUNT(*) AS answered,COALESCE(SUM(correct),0) AS correct
             FROM word_spelling_attempt WHERE session_id=?""", (session_id,)).fetchone()
         answered = row["answered"] + auxiliary["answered"]
+        # Practice-only answers of a reinforce batch (design 12 E3, E4) are neither answered nor skipped:
+        # their exposure rows name their positions (a position also answered formally counts once).
+        # "practised" is reported only when there are any, so a summary without them keeps its shape.
+        practised = self.queries.practised_positions(session_id)
+        if practised:
+            practised -= self.queries.answered_positions(session_id)
         return {**dict(row), "answered": answered, "correct": row["correct"] + auxiliary["correct"],
-                "total": count, "skipped": count - answered, "auxiliary_count": auxiliary["answered"]}
+                "total": count, "skipped": count - answered - len(practised), "auxiliary_count": auxiliary["answered"],
+                **({"practised": len(practised)} if practised else {})}
 
     def prepare_next_question(self, session_id: str, now: datetime | None = None,
                               *, lazy_questions=False, fair_new=False, teaching_only=False,
                               dry_run=False, teaching_kinds=None, teaching_targets=None,
                               teaching_unassessed=False, prefer_unassessed=False,
-                              dependency_graph=None) -> dict | None:
+                              dependency_graph=None, scope_contents=None) -> dict | None:
         """Advance past paused items and safely order unseen, timed repetitions.
 
         The committed prefix and any visible unsubmitted answer remain fixed.
         No skipped question is recorded as an incorrect answer or an FSRS review.
+        scope_contents: the learner's focus scope (design 12 H3), None for no
+        scope; kana are members as arrangement.rules.focus.kana_member. When a
+        spaced queue is ordered (a round being collected, or no round), the
+        answerable items inside it go first within their tier (3 and up) by an
+        additional sort key; the priority itself, frozen for the cross-lane
+        comparison and used to keep one content from coming twice in a row,
+        is unchanged. A teaching probe offers the introductions inside it first.
         """
         now = _utc(now)
         pending = self.load_session_progress(lazy_questions=lazy_questions)
@@ -1386,7 +1541,8 @@ class StudyStore:
         review_day, daily_counts = reviews_today(self, now) if due_cards else (None, {})
         learned_scripts = ({tuple(row) for row in self._db.execute(
             "SELECT DISTINCT content_id,script FROM study_card WHERE review_count>0")} if spaced else set())
-        if (not round_active(self) and not teaching_only and not fair_new and not state and not unavailable and not paused_directions
+        if (scope_contents is None and not round_active(self) and not teaching_only and not fair_new and not state
+                and not unavailable and not paused_directions
                 and all(question_allowed(q) for q in questions[index:])
                 and not due_cards
                 and not any(question.metadata.get("not_before_utc") for question in questions[index:])
@@ -1454,10 +1610,22 @@ class StudyStore:
                 return (*rank, old)
             repeated = bool(question.metadata.get("not_before_utc"))
             return (0 if repeated else 1, available_at(question) if repeated else now, old)
+        if scope_contents is not None:
+            # Once per call, and only with a scope: the two helpers below run per item.
+            from .arrangement.rules.focus import kana_member, scoped_priority
+        def scope_component(question):
+            return 0 if kana_member(question.content_id, question.script) in scope_contents else 1
+        def order(item):
+            # Design 12 H3: the focus scope is one more sort key of the answerable items, after the tier.
+            rank = priority(item)
+            if scope_contents is None or not spaced:
+                return rank
+            return scoped_priority(rank, scope_component(item[1]))
         if not sealed(self):
-            for item in sorted(ready, key=priority):
+            for item in sorted(ready, key=order):
                 ready_by_content.setdefault(item[1].content_id, deque()).append(item)
-            heap = [(priority(items[0]), content_id) for content_id, items in ready_by_content.items()]
+            # (sort key, content, priority): the priority alone decides the same-content check below.
+            heap = [(order(items[0]), content_id, priority(items[0])) for content_id, items in ready_by_content.items()]
             heapq.heapify(heap)
             ready = []
             previous_content = questions[index - 1].content_id if index else None
@@ -1465,8 +1633,8 @@ class StudyStore:
                 selected = heapq.heappop(heap)
                 if (selected[1] == previous_content and heap
                         and (not fair_new
-                             or (selected[0][0] < 4 and heap[0][0][0] < 4)
-                             or heap[0][0][:2] == selected[0][:2])):
+                             or (selected[2][0] < 4 and heap[0][2][0] < 4)
+                             or heap[0][2][:2] == selected[2][:2])):
                     alternative = heapq.heappop(heap)
                     heapq.heappush(heap, selected)
                     selected = alternative
@@ -1474,7 +1642,8 @@ class StudyStore:
                 ready.append(ready_by_content[content_id].popleft())
                 previous_content = content_id
                 if ready_by_content[content_id]:
-                    heapq.heappush(heap, (priority(ready_by_content[content_id][0]), content_id))
+                    following = ready_by_content[content_id][0]
+                    heapq.heappush(heap, (order(following), content_id, priority(following)))
         if round_active(self):
             if collecting(self):
                 from types import SimpleNamespace
@@ -1517,6 +1686,9 @@ class StudyStore:
                 fresh = [item for item in eligible if should_introduce(SimpleNamespace(store=self),item[1])]
                 additional = [item for item in eligible if identity(item) in unseen]
                 introductions = [*additional,*fresh] if prefer_unassessed else [*fresh,*additional]
+                if scope_contents is not None:
+                    # Design 12 H2: the introductions inside the focus scope are taught first (stable).
+                    introductions.sort(key=lambda item: scope_component(item[1]))
                 if teaching_unassessed and introductions:
                     pool = 'additional' if identity(introductions[0]) in unseen else 'introduction'
                     teaching_trace = {'selected_kana_pool':pool,'kana_service_candidates':{
@@ -1689,12 +1861,19 @@ class StudyStore:
         from .kana_routing import project_cards
         return project_cards(self, aliases=aliases)
 
+    def study_day(self, now: datetime) -> date:
+        """The learner's study day of an aware instant: the calendar date the day bounds use.
+
+        Read-only. The same date for the same instant and zone, whatever
+        connection or session asks (the arrangement clock keys sittings by it).
+        """
+        return now.astimezone().date() if self._device_local else now.astimezone(self.zone).date()
+
     def _day_bounds(self, now: datetime):
+        day = self.study_day(now)
         if self._device_local:
-            day = now.astimezone().date()
             # Naive astimezone uses each boundary's device-local DST offset.
             return (datetime.combine(day, time.min).astimezone(UTC).isoformat(), datetime.combine(day + timedelta(days=1), time.min).astimezone(UTC).isoformat())
-        day = now.astimezone(self.zone).date()
         return (datetime.combine(day, time.min, self.zone).astimezone(UTC).isoformat(), datetime.combine(day + timedelta(days=1), time.min, self.zone).astimezone(UTC).isoformat())
 
     def stats(self, now: datetime | None = None) -> dict:
@@ -2637,6 +2816,19 @@ def _word_meaning(row: dict) -> str:
     return ""
 
 
+# Spelling-question distractors use only the Hepburn spellings the app teaches.
+# Kunrei/Nihon-shiki aliases of core kana (si, ti, tu, tyu, du ...) are still
+# accepted as answers, and rare loanword spellings keep their own questions, but
+# neither is offered as a wrong option: they teach nothing to a beginner.
+_RARE_DISTRACTOR_ROMAJI = frozenset({"kwa", "kwi", "kwe", "kwo", "gwa", "tsi", "fyu", "vyu"})
+
+
+def _non_teaching_romaji(records: list[dict]) -> frozenset[str]:
+    aliases = {normalize_romaji(value) for row in records if row.get("tier", "modern_core") == "modern_core"
+               for value in _romaji_values(row)[1:]}
+    return frozenset(aliases | _RARE_DISTRACTOR_ROMAJI)
+
+
 def _same_kana_shape(left: dict, right: dict, script: str) -> bool:
     # A voiced kana is still one letter after canonical composition. Groups
     # such as きゃ / ティ and single letters never serve as each other's options.
@@ -2649,6 +2841,7 @@ def _kana_choices(row: dict, records: list[dict], all_records: list[dict],
     primary = _romaji_values(row)[0]
     answer = primary if kind == "kana_choice" else normalize_answer(row[script])
     accepted = {normalize_romaji(value) for value in _romaji_values(row)}
+    excluded = _non_teaching_romaji(all_records) if kind == "kana_choice" else frozenset()
     choices = []
     # Prefer the selected scope. A one-item scope (notably ヴ) still receives
     # useful distractors of the same shape; only distractors may leave scope.
@@ -2662,6 +2855,8 @@ def _kana_choices(row: dict, records: list[dict], all_records: list[dict],
                 continue
             candidate_romaji = _romaji_values(candidate)
             if not candidate_romaji or accepted.intersection(normalize_romaji(value) for value in candidate_romaji):
+                continue
+            if normalize_romaji(candidate_romaji[0]) in excluded:
                 continue
             value = candidate_romaji[0] if kind == "kana_choice" else normalize_answer(candidate[script])
             if value != answer and value not in pool:
@@ -3048,8 +3243,10 @@ def _adaptive_stages_uncached(store: StudyStore, script: str, now: datetime) -> 
 
 def _adaptive_evidence_monitor(store):
     """Connection-local, transactional invalidation; never a backup table."""
+    db = store._db
     if not getattr(store, '_adaptive_monitor_ready', False):
-        store._db.executescript("""
+        before = db.total_changes
+        db.executescript("""
             CREATE TEMP TABLE adaptive_evidence_revision (
                 epoch INTEGER NOT NULL, writes INTEGER NOT NULL,
                 review_high INTEGER NOT NULL, word_high INTEGER NOT NULL);
@@ -3097,10 +3294,14 @@ def _adaptive_evidence_monitor(store):
                     AND EXISTS(SELECT 1 FROM review_event WHERE card_id=NEW.card_id))
               BEGIN UPDATE adaptive_evidence_revision SET epoch=epoch+1,writes=writes+1; END;
         """)
+        # The monitor's own first row is bookkeeping in a TEMP table. Counted as a change it emptied
+        # every cache keyed on StudyStore.read_revision the first time a page asked for kana stages
+        # (the home page plans the lessons, then creates this: the add page planned them all again).
+        store._untracked_changes = getattr(store, '_untracked_changes', 0) + db.total_changes - before
         store._adaptive_monitor_ready = True
-    row = store._db.execute('SELECT epoch,writes FROM adaptive_evidence_revision').fetchone()
-    return (store._db.execute('PRAGMA data_version').fetchone()[0], row[0], row[1],
-            store._db.execute('PRAGMA main.schema_version').fetchone()[0])
+    row = db.execute('SELECT epoch,writes FROM adaptive_evidence_revision').fetchone()
+    return (db.execute('PRAGMA data_version').fetchone()[0], row[0], row[1],
+            db.execute('PRAGMA main.schema_version').fetchone()[0])
 
 
 def _adaptive_event_rows(db, script, cursors=None):

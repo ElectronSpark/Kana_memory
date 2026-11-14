@@ -14,11 +14,14 @@ import json
 PREFIX = 'practice_archive_v1:'
 NATIVE_PREFIX = PREFIX + 'native:'
 COURSE_PREFIX = PREFIX + 'course:'
+SESSION_PREFIX = PREFIX + 'prefix:'
 _CHECKPOINT = {'session_id', 'updated_at_utc', 'question_index', 'session_right',
                'assisted_indices_json', 'state_json'}
 _QUESTION = {'question_id', 'unit_id', 'kind', 'snapshot_json', 'status', 'draft_json',
              'result_json', 'created_at_utc', 'not_before_utc', 'exposure_group'}
 _COMMON = {'version', 'kind', 'archived_at_utc', 'before', 'before_sha256', 'evidence'}
+_SESSION_PART = {'version', 'kind', 'archived_at_utc', 'session_id', 'upto', 'counts', 'sha256'}
+_PARTS = ('questions', 'answers', 'spellings', 'events')
 
 
 def _dump(value):
@@ -143,8 +146,102 @@ def _validate_course(db, key, value):
     return before['question_id']
 
 
-def validate_database(db) -> set[str]:
-    """Validate exact archive exceptions; return only course rows they own."""
+def _prefix_rows(db, session_id, upto):
+    """The frozen prefix [0, upto): questions, answers, word attempts, review events."""
+    def ordered(sql):
+        return [dict(row) for row in db.execute(sql, (session_id, upto))]
+    return {
+        'questions': ordered('SELECT question_index,snapshot_json FROM session_question '
+                             'WHERE session_id=? AND question_index<? ORDER BY question_index'),
+        'answers': ordered('SELECT * FROM session_answer WHERE session_id=? AND question_index<? '
+                           'ORDER BY question_index'),
+        'spellings': ordered('SELECT * FROM word_spelling_attempt WHERE session_id=? AND question_index<? '
+                             'ORDER BY question_index,attempt_id'),
+        'events': ordered('SELECT e.* FROM review_event e JOIN session_answer a ON a.event_id=e.event_id '
+                          'WHERE a.session_id=? AND a.question_index<? ORDER BY a.question_index,e.event_id'),
+    }
+
+
+def _prefix_digest(rows):
+    counts = {part: len(rows[part]) for part in _PARTS}
+    digests = {part: hashlib.sha256('\n'.join(_dump(row) for row in rows[part]).encode('utf-8')).hexdigest()
+               for part in _PARTS}
+    return counts, digests
+
+
+def _prefix_counts(db, session_id, upto):
+    queries = (
+        ('questions', 'SELECT COUNT(*) FROM session_question WHERE session_id=? AND question_index<?'),
+        ('answers', 'SELECT COUNT(*) FROM session_answer WHERE session_id=? AND question_index<?'),
+        ('spellings', 'SELECT COUNT(*) FROM word_spelling_attempt WHERE session_id=? AND question_index<?'),
+        ('events', 'SELECT COUNT(*) FROM session_answer a JOIN review_event e ON e.event_id=a.event_id '
+                   'WHERE a.session_id=? AND a.question_index<?'))
+    return {part: db.execute(sql, (session_id, upto)).fetchone()[0] for part, sql in queries}
+
+
+def _session_bound(db, session_id):
+    """Largest archivable prefix: settled questions below any live checkpoint.
+
+    With a live checkpoint, questions before it are settled (writers only touch
+    the current question and the unfinished suffix). Without one, a question is
+    settled once answered (formal review or word attempt). Paused word drafts
+    are never frozen.
+    """
+    from .domain import WORD_KIND_PAUSE
+    count = db.execute('SELECT COUNT(*) FROM session_question WHERE session_id=?', (session_id,)).fetchone()[0]
+    checkpoint = db.execute('SELECT question_index FROM session_checkpoint WHERE session_id=?',
+                            (session_id,)).fetchone()
+    limit = count if checkpoint is None else min(count, checkpoint[0])
+    bound = 0
+    for index, raw in db.execute('SELECT question_index,snapshot_json FROM session_question '
+                                 'WHERE session_id=? AND question_index<? ORDER BY question_index',
+                                 (session_id, limit)).fetchall():
+        question = _load(raw)
+        if (index != bound or not isinstance(question, dict)
+                or WORD_KIND_PAUSE in (question.get('metadata') or {})):
+            break
+        if checkpoint is None and not db.execute(
+                'SELECT 1 FROM session_answer WHERE session_id=? AND question_index=? UNION ALL '
+                'SELECT 1 FROM word_spelling_attempt WHERE session_id=? AND question_index=?',
+                (session_id, index, session_id, index)).fetchone():
+            break
+        bound += 1
+    return bound
+
+
+def _validate_prefix(db, key, value, *, deep=True):
+    if (not isinstance(value, dict) or set(value) != _SESSION_PART
+            or type(value.get('version')) is not int or value['version'] != 1
+            or value.get('kind') != 'prefix' or not _text(value.get('session_id'))
+            or key != SESSION_PREFIX + value['session_id']
+            or type(value.get('upto')) is not int or value['upto'] <= 0
+            or not isinstance(value.get('counts'), dict) or set(value['counts']) != set(_PARTS)
+            or not isinstance(value.get('sha256'), dict) or set(value['sha256']) != set(_PARTS)):
+        raise ValueError('Invalid session prefix archive receipt')
+    _date(value['archived_at_utc'])
+    sid, upto = value['session_id'], value['upto']
+    if db.execute('SELECT 1 FROM study_session WHERE session_id=?', (sid,)).fetchone() is None:
+        raise ValueError('Archived session prefix lost its session')
+    checkpoint = db.execute('SELECT question_index FROM session_checkpoint WHERE session_id=?', (sid,)).fetchone()
+    if checkpoint is not None and checkpoint[0] < upto:
+        raise ValueError('Archived session prefix includes the live question')
+    if deep:
+        counts, digests = _prefix_digest(_prefix_rows(db, sid, upto))
+        if digests != value['sha256']:
+            raise ValueError('Archived session prefix differs from its frozen rows')
+    else:
+        counts = _prefix_counts(db, sid, upto)
+    if counts != value['counts'] or counts['questions'] != upto:
+        raise ValueError('Archived session prefix differs from its frozen rows')
+
+
+def validate_database(db, *, deep=True) -> set[str]:
+    """Validate exact archive exceptions; return only course rows they own.
+
+    deep=False checks session prefix receipts by row counts instead of hashing
+    their frozen rows (used inside the local archival transaction); backup and
+    restore validation keep the default full check.
+    """
     result = set()
     for key, raw in db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (PREFIX + '*',)):
         value = _load(raw)
@@ -152,6 +249,8 @@ def validate_database(db) -> set[str]:
             _validate_native(db, key, value)
         elif key.startswith(COURSE_PREFIX) and _table(db, 'learning_question'):
             result.add(_validate_course(db, key, value))
+        elif key.startswith(SESSION_PREFIX):
+            _validate_prefix(db, key, value, deep=deep)
         else:
             raise ValueError('Unknown practice archive receipt')
     return result
@@ -271,7 +370,7 @@ def archive_previous_rounds(store, *, now=None):
     summary = {'native': 0, 'course': 0, 'skipped_course': 0, 'skipped_owners': {}}
     with db:
         db.execute('BEGIN IMMEDIATE')
-        validate_database(db)
+        validate_database(db, deep=False)
         for row in db.execute('SELECT * FROM session_checkpoint').fetchall():
             before = dict(row)
             head = db.execute('SELECT snapshot_json FROM session_question WHERE session_id=? AND question_index=?',
@@ -302,5 +401,71 @@ def archive_previous_rounds(store, *, now=None):
                 db.execute('INSERT INTO app_setting VALUES (?,?)', (_course_key(row['question_id']), _dump(value)))
                 db.execute("UPDATE learning_question SET status='completed' WHERE question_id=?", (row['question_id'],))
                 summary['course'] += 1
-        validate_database(db)
+        validate_database(db, deep=False)
     return summary
+
+
+def archive_session_prefix(store, session_id, *, upto=None, now=None):
+    """Explicitly freeze a session's settled prefix; never triggered automatically.
+
+    Rows stay in place, so learning IDs (session_id, question_index), answers,
+    review events, due times, grading idempotency and the backup record format
+    are unchanged. The receipt records the bound plus counts and sha256 of the
+    prefix questions/answers/word attempts/review events, so readers can treat
+    [0, upto) as immutable history and work on the unfinished suffix only.
+    Re-running with the same bound is a no-op; a bound can only grow.
+    """
+    from .domain import _utc
+    db = store._db
+    if db.in_transaction:
+        raise RuntimeError('Practice archival owns its transaction')
+    if not _text(session_id) or len(SESSION_PREFIX + session_id) > 256:
+        raise ValueError('Invalid archived session identity')
+    key = SESSION_PREFIX + session_id
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        if db.execute('SELECT 1 FROM study_session WHERE session_id=?', (session_id,)).fetchone() is None:
+            raise ValueError('Unknown session_id')
+        row = db.execute('SELECT value_json FROM app_setting WHERE key=?', (key,)).fetchone()
+        previous = _load(row[0]) if row else None
+        if previous is not None:
+            _validate_prefix(db, key, previous)
+        bound = _session_bound(db, session_id)
+        target = bound if upto is None else upto
+        if type(target) is not int or not 0 < target <= bound:
+            raise ValueError('Only settled questions before the live question can be archived')
+        if previous is not None and target <= previous['upto']:
+            if target < previous['upto']:
+                raise ValueError('An archived session prefix cannot shrink')
+            return {'session_id': session_id, 'upto': target, 'changed': False}
+        counts, digests = _prefix_digest(_prefix_rows(db, session_id, target))
+        value = {'version': 1, 'kind': 'prefix', 'archived_at_utc': _utc(now).isoformat(),
+                 'session_id': session_id, 'upto': target, 'counts': counts, 'sha256': digests}
+        db.execute('INSERT INTO app_setting VALUES (?,?) '
+                   'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (key, _dump(value)))
+        _validate_prefix(db, key, value)
+    return {'session_id': session_id, 'upto': target, 'changed': True}
+
+
+def archived_prefix(store, session_id, *, rows=False):
+    """Validated prefix receipt (with rows=True also its frozen rows), or None.
+
+    Without rows the check is count-based and cheap, so a reader may skip
+    [0, upto). rows=True re-hashes the prefix and returns detached question,
+    answer, word attempt and review event rows.
+    """
+    if not _text(session_id) or len(SESSION_PREFIX + session_id) > 256:
+        raise ValueError('Invalid archived session identity')
+    key = SESSION_PREFIX + session_id
+    db = store._db
+    row = db.execute('SELECT value_json FROM app_setting WHERE key=?', (key,)).fetchone()
+    if row is None:
+        return None
+    value = _load(row[0])
+    _validate_prefix(db, key, value, deep=rows)
+    if rows:
+        frozen = _prefix_rows(db, session_id, value['upto'])
+        frozen['questions'] = [{'question_index': part['question_index'], 'question': _load(part['snapshot_json'])}
+                               for part in frozen['questions']]
+        value['rows'] = frozen
+    return value

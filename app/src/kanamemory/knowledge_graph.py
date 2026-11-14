@@ -112,3 +112,13 @@ def question_relations(question):
                 revision=facts["learning_condition_revision"],
                 provenance=facts["learning_condition_source"]))
     return result
+
+
+def alias_relations(aliases, *, revision, provenance="library.aliases"):
+    """Alias edges for a library's ``aliases`` (08 §9.4): routing for new enrolment only.
+
+    They never merge progress; validate_relations still rejects ambiguous or
+    cyclic alias routing.
+    """
+    return [relation("alias", old, new, revision=revision, provenance=provenance)
+            for old, new in sorted(aliases.items())]

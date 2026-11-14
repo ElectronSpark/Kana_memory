@@ -5,6 +5,7 @@ from datetime import datetime
 
 from .domain import _utc
 from .learning_questions import stored_enabled_kinds
+from .content_availability import AVAILABLE, state_text
 from .learning_store import _ability_due, _latest_due
 
 ABILITY_LABELS = {"understanding": "理解", "reading": "读法", "use": "提取与使用",
@@ -41,7 +42,7 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
         content = queries.course_row(pending["content_id"])
         if content["stage"] in {"intro", "guide"}:
             continue
-        if content["stage"] == "bridge" and not learning._retrieval_ready(content, now):
+        if content["stage"] == "bridge" and not learning.retrieval_ready(content, now):
             continue
         question = learning.get_question(pending["question_id"])
         effective_due = _latest_due(_ability_due(pending, question), pending["not_before_utc"])
@@ -49,9 +50,12 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
             ready_content.add(pending["content_id"])
     due = len(ready_content)
     items = []
+    availability = learning.availability()
     for content_id in queries.course_ids_page(limit, offset):
         item = learning.get_item(content_id)
         item["dependency_status"] = dependency_state(content_id)
+        # 08 section 7.3: records stay readable; unavailable content is not practisable.
+        item["availability"] = availability.state_of(content_id)
         content = queries.course_row(content_id)
         for unit in item["units"]:
             event = queries.latest_primary_rating(unit["unit_id"])
@@ -63,10 +67,11 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
             unit["awaiting_rating"] = bool(question and question["result"] is not None)
             unit["prerequisite_blocked"] = item["dependency_status"]["blocked"]
             effective_due = _latest_due(_ability_due(unit, question), question["not_before_utc"]) if question else None
-            if content["stage"] == "bridge" and not learning._retrieval_ready(content, now):
+            if content["stage"] == "bridge" and not learning.retrieval_ready(content, now):
                 effective_due = _latest_due(effective_due, content["retrieval_at_utc"])
             unit["practice_due_at_utc"] = effective_due
             unit["due"] = bool(question and unit["question_enabled"] and not unit["suspended"]
+                and item["availability"] == AVAILABLE
                 and not unit["prerequisite_blocked"]
                 and content["stage"] not in {"intro", "guide"}
                 and (unit["awaiting_rating"] or not effective_due or datetime.fromisoformat(effective_due) <= now))
@@ -132,10 +137,15 @@ def build_learning_records(app):
             return
         for item in result["items"]:
             panel.add(u.label(item.get("title", item["id"]), size=20, bold=True, color=u.GREEN),
-                      u.label(("读音规则" if item.get("domain") == "pronunciation" else "单词" if item["family"] == "word" else "语法") + " · " + STAGE_LABELS[item["stage"]], size=12, color=u.MUTED))
+                      u.label(("读音规则" if item.get("domain") == "pronunciation" else "单词" if item["family"] == "word" else "语法") + " · " + STAGE_LABELS[item["stage"]]
+                              + ("" if item["availability"] == AVAILABLE else " · " + state_text(item["availability"])),
+                              size=12, color=u.MUTED))
+            if item["availability"] != AVAILABLE:
+                panel.add(u.label("学习记录、草稿和复习时间均保留；该库恢复可用前不出题。", size=12, color=u.MUTED))
             for unit in item["units"]:
                 label = ABILITY_LABELS[unit["ability"]]
-                status = ("已暂停" if unit["suspended"] else "题型未启用" if unit["has_pending"] and not unit["question_enabled"]
+                status = (state_text(item["availability"]) if item["availability"] != AVAILABLE
+                    else "已暂停" if unit["suspended"] else "题型未启用" if unit["has_pending"] and not unit["question_enabled"]
                     else "待前置" if unit["prerequisite_blocked"]
                     else "待评分" if unit["awaiting_rating"] else "现在可练" if unit["due"]
                     else "待介绍" if unit["has_pending"] and item["stage"] == "intro"
@@ -143,7 +153,10 @@ def build_learning_records(app):
                     else "待练" if unit["has_pending"] else "暂未安排" if unit["review_count"] else "未练")
                 pause = not bool(unit["suspended"])
                 panel.add(u.row(u.label(label + " · " + status, bold=True, flex=1),
-                    u.button("暂停" if pause else "恢复", lambda w, cid=item["id"], a=unit["ability"], p=pause: change(cid, a, p), compact=True)))
+                    # A fixed width, as every small button beside a flexing label: without it Android gave the
+                    # same pair on the check summary no width at all (native10).
+                    u.button("暂停" if pause else "恢复", lambda w, cid=item["id"], a=unit["ability"], p=pause: change(cid, a, p),
+                             compact=True, width=72)))
                 if unit["practice_due_at_utc"] and not unit["awaiting_rating"]:
                     panel.add(u.label(("原待练：" if unit["suspended"] else "待练：") + date_label(unit["practice_due_at_utc"]), size=13, color=u.MUTED))
                 elif unit["due_at_utc"] and not unit["has_pending"]:

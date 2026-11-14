@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from kanamemory import diagnostic_events as events
+from support.app_fixtures import setup_app  # noqa: F401
+from support.feedback_ui_support import feedback_app, seed  # noqa: F401
 
 
 def test_error_messages_unknown_fields_and_dynamic_type_names_are_not_recorded(monkeypatch):
@@ -76,11 +78,47 @@ def test_swallowed_ui_and_platform_failures_use_registered_names():
     from support.paths import ROOT
     package = ROOT / "app/src/kanamemory"
     names = {name: set(recorded_names(package / name)) for name in (
-        "retention_session_ui.py", "tutor_ui.py", "multi_cloze_ui.py", "platform_android.py")}
+        "retention_session_ui.py", "tutor_ui.py", "multi_cloze_ui.py", "platform_android.py", "feedback_ui.py")}
     assert {("diagnostic_time", "save"), ("diagnostic_audio", "play"), ("diagnostic_audio", "save"),
             ("diagnostic_scope", "save")} <= names["retention_session_ui.py"]
     assert ("tutor_suggestions", "request") in names["tutor_ui.py"]
     assert names["multi_cloze_ui.py"] == {("multi_cloze", "save"), ("multi_cloze", "commit")}
+    assert ("feedback_export", "refresh") in names["feedback_ui.py"]
     for pairs in names.values():
         for operation, stage in pairs:
             assert operation in events.OPERATIONS and stage in events.STAGES, (operation, stage)
+
+
+def test_feedback_export_progress_maps_every_stage_to_a_registered_name():
+    # The export failure stage is dynamic: each progress value the page sets must map
+    # to a registered stage (or be the unrecorded "idle"), or record() drops the event.
+    import ast
+    from support.paths import ROOT
+    from kanamemory import feedback_ui
+    tree = ast.parse((ROOT / "app/src/kanamemory/feedback_ui.py").read_text(encoding="utf-8"))
+    progress = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Subscript)
+                and getattr(target.slice, "value", None) == "stage" for target in node.targets):
+            progress.add(node.value.value)
+        elif isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "update":
+            progress.update(k.value.value for k in node.keywords if k.arg == "stage")
+        elif isinstance(node, ast.Dict):
+            progress.update(v.value for k, v in zip(node.keys, node.values)
+                            if getattr(k, "value", None) == "stage" and isinstance(v, ast.Constant))
+    assert progress == {"preparing", "delivery", "archiving", "idle"}
+    mapping = feedback_ui.EXPORT_DIAGNOSTIC_STAGES
+    assert set(mapping) == progress - {"idle"}
+    assert set(mapping.values()) <= events.STAGES and "feedback_export" in events.OPERATIONS
+
+
+def test_feedback_export_delivery_failure_is_recorded(feedback_app, monkeypatch):
+    monkeypatch.setattr(events, "_buffer", events.DiagnosticBuffer())
+    app = feedback_app
+    seed(app)
+    app.show_feedback_manager()
+    app.platform.export_feedback.side_effect = OSError("写入失败")
+    app.export_feedback_records()
+    assert "未能导出" in app.alert.call_args.args[0]
+    assert [(row["operation"], row["stage"], row["error_type"]) for row in events.error_events()] == [
+        ("feedback_export", "commit", "OSError")]

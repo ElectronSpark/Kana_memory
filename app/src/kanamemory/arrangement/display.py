@@ -1,0 +1,453 @@
+"""Display models of the study arrangement (design 12 UI1-UI6, design 13 C2).
+
+Pure, immutable, plain data: strings, numbers, enums and tuples. No
+widgets, stores, services or callbacks. The presenter
+(services/presenters.ArrangementPresenter) composes every sentence; a page
+only lays them out. Actions are named by data (an orientation, a depth
+level, a section id), never by a closure.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .model import DeckAnswerMode, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, Tilt
+from .rules.depth import KanaDepth
+
+# Fixed wording (design 12 UI1, UI3, UI4, UI5).
+BREADTH_TITLE = "广度优先"
+BREADTH_TEXT = "每次学习都会穿插新内容（约占一半时间）；复习做不完就往后放一放，不必一次清空。"
+THOROUGH_TITLE = "扎实"
+THOROUGH_TEXT = "先把到期的复习做完，再学新的（原来的方式）。"
+DEPTH_TITLES = {KanaDepth.RECOGNITION: "只认读", KanaDepth.SPELLING: "认读＋拼写",
+                KanaDepth.HANDWRITING: "认读＋拼写＋手写"}
+KEEP_TITLE = "保持现在的题型设置"
+KEEP_TEXT = "不改动现在的题型开关。"
+INVITE_TEXT = "可以调整学习方式：现在是先复习完再学新的。去看看"
+NO_NEW_TEXT = "已加入的内容都学过了"
+ADD_NEXT = "加入下一小节"   # the home page's existing caption, followed by " · <section title>"
+ADD_NEXT_AND_START = "加入下一小节并开始"
+REVIEW_FIRST = "先复习"
+PROGRESS_NOTE = "广度优先时复习排得晚是正常的；想少一些，可以放慢加入新小节、停掉不需要的方向，或改用扎实。"
+PROGRESS_HEADING = "时间与进度"
+REVIEWS_HEADING = "复习"
+NO_REVIEWS_TEXT = "还没有复习记录"
+# D2 when a depth level rewrites the mixed switches but the kinds in force stay the same (a single-kind plan).
+SINGLE_KIND_UNCHANGED_TEXT = "只改综合练习的题型开关；现在用的单一题型练习不受影响。"
+PLAN_UNCHANGED_TEXT = "只改综合练习的题型开关；现在用的练习不受影响。"
+COURSE_REVIEW_TITLE = "课程复习"
+DIRECTION_TITLES = {KanaDirection.READING: "识读", KanaDirection.SPELLING: "拼写",
+                    KanaDirection.HANDWRITING: "手写"}
+# The pass rate looks at this many of the latest formal reviews (UI4).
+PASS_RATE_REVIEWS = 40
+# The focus (design 12 H1, UI6).
+FOCUS_HEADING = "学习重点"
+TILT_HEADING = "新内容与复习"
+KANA_TILT_HEADING = "复习里的假名"
+SCOPE_HEADING = "范围"
+TILT_TITLES = {Tilt.ONLY_NEW: "只学新的", Tilt.NEW: "多学新的", Tilt.EVEN: "不偏", Tilt.REVIEW: "多复习",
+               Tilt.ONLY_REVIEW: "只复习"}
+KANA_TILT_TITLES = {KanaTilt.LESS: "假名少", KanaTilt.NORMAL: "正常", KanaTilt.MORE: "假名多"}
+TILT_THOROUGH_TEXT = "偏重只在广度优先时起作用；扎实是先把到期的复习做完再学新的，没有份额可调。"
+SCOPE_TEXT = "范围内的先做；范围内都做完才轮到别的，别的复习会排得更晚。"
+CHANGE_TEXT = "改重点会重新排一次当前这一轮。"
+NO_SCOPE_TITLE = "不设范围"
+SCOPE_GONE_TITLE = "所选范围"
+SCOPE_GONE_TEXT = "已停用或不存在，暂按没有范围安排"
+CANCEL_FOCUS = "取消重点"
+DROP_SCOPE = "改为不设范围"
+SET_FOCUS = "设为重点"
+FOCUS_SET_TEXT = "这是现在的学习重点。"
+# A scope title shown twice in the scope choice gets its kind beside it.
+SCOPE_KIND_TITLES = {"route": "路线", "node": "路线的一部分", "library": "内容库", "family": "类别"}
+
+
+@dataclass(frozen=True)
+class OrientationOption:
+    mode: Orientation
+    title: str   # 广度优先 / 扎实
+    text: str    # the explanatory sentence of UI1
+
+
+@dataclass(frozen=True)
+class DepthOption:
+    """One choice of "假名练到哪一步". ``level`` None is "keep the current switches"."""
+
+    level: KanaDepth | None
+    title: str
+    text: str           # the consequence sentence (D2), its number already in it
+    stopping_due: int   # kana cards due now that this choice would stop serving (0 for keep)
+
+
+@dataclass(frozen=True)
+class OrientationModel:
+    """The orientation screen (UI1 with D1, D2). Nothing is written until the page confirms.
+
+    ``chosen`` is the stored orientation, None when never chosen.
+    ``current_depth`` is the level the current switches match, None when none.
+    ``depths`` are the three levels and, only when ``current_depth`` is None,
+    a last option with level None that keeps the switches. ``preselected``
+    is the chosen orientation, or BREADTH when never chosen; use
+    preselected_depth(mode) for the depth to preselect when the learner picks
+    ``mode`` (None means the keep option).
+    """
+
+    chosen: Orientation | None
+    orientations: tuple[OrientationOption, ...]
+    depths: tuple[DepthOption, ...]
+    current_depth: KanaDepth | None
+    preselected: Orientation
+    breadth_depth: KanaDepth | None
+    thorough_depth: KanaDepth | None
+
+    def preselected_depth(self, mode: Orientation) -> KanaDepth | None:
+        return self.breadth_depth if Orientation(mode) is Orientation.BREADTH else self.thorough_depth
+
+    def depth_option(self, level: KanaDepth | None) -> DepthOption:
+        return next(option for option in self.depths if option.level == level)
+
+
+@dataclass(frozen=True)
+class SectionNote:
+    """B10: no new content to learn; the route's next section is offered first (never added automatically).
+
+    ``add_and_start`` / ``review_first`` are the two button captions of the
+    once-per-launch prompt before the first "继续学习".
+    """
+
+    section_id: str
+    title: str
+    text: str = NO_NEW_TEXT
+    add_and_start: str = ADD_NEXT_AND_START
+    review_first: str = REVIEW_FIRST
+    # The route of the section: None for the current route (as before WP-H); a route id when the
+    # section is the next one inside the learner's focus scope (B10 with a scope, H6).
+    route_id: str | None = None
+
+    @property
+    def add_next(self) -> str:
+        """The caption of the button that adds this section (the home page's existing wording)."""
+        return f"{ADD_NEXT} · {self.title}"
+
+
+@dataclass(frozen=True)
+class HomeRowsModel:
+    """The arrangement's rows on the home page (UI2, UI3, UI5).
+
+    ``invite`` is True when the orientation was never chosen; ``invite_text``
+    is then the UI5 line (it leads to the orientation screen), else None.
+    Under breadth only: ``progress_line`` (UI2; without its 7-day part when
+    the clock window does not cover the 7 days, and None when the route is
+    empty as well), ``usage_line`` (UI2, None when all three minutes are 0 or
+    the window does not cover today; it leads to the orientation screen)
+    and ``note`` (B10, None unless the caller said there is no new content
+    and the route has a next section; with a focus scope that still has a
+    section not added, the scope's next section, its ``route_id`` set).
+    Under thorough or a missing setting all three are None. The focus row
+    is a model of its own (FocusRowModel, presenter.home_focus).
+    """
+
+    invite: bool = False
+    invite_text: str | None = None
+    progress_line: str | None = None
+    usage_line: str | None = None
+    note: SectionNote | None = None
+
+
+@dataclass(frozen=True)
+class FocusRowModel:
+    """The home page's focus row (UI6), under every orientation; there is no row without a focus.
+
+    ``line`` "重点：<scope title> · <tilt title>" with only the parts that are
+    set and act (the tilts only under breadth); tapping it opens the
+    orientation screen. ``cancel`` the caption of the action beside it
+    (取消重点; the page calls its cancel callback, which the wiring maps to
+    FocusService.clear). ``outside_due`` the due reviews outside the scope
+    that 继续学习 can serve under the learner's kinds (presenters.
+    ArrangementPresenter.outside_due: due work, not questions answerable this
+    minute) and ``outside_due_line`` "重点之外到期 N 题"; both None without a
+    scope that resolves.
+    """
+
+    line: str
+    cancel: str = CANCEL_FOCUS
+    outside_due: int | None = None
+    outside_due_line: str | None = None
+
+
+@dataclass(frozen=True)
+class TiltOption:
+    """One of the five new-against-review tilts: ``share`` "70:30", ``text`` "多学新的 70:30"."""
+
+    tilt: Tilt
+    title: str
+    share: str
+    text: str
+
+
+@dataclass(frozen=True)
+class KanaTiltOption:
+    """One of the three kana tilts inside review: ``share`` course:kana "85:15", ``text`` "假名少 85:15"."""
+
+    kana: KanaTilt
+    title: str
+    share: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ScopeOption:
+    """A scope the screen offers; ``scope`` None is "no scope" (不设范围)."""
+
+    scope: FocusScope | None
+    title: str
+
+
+@dataclass(frozen=True)
+class FocusModel:
+    """The third part of the orientation screen: the learner's focus (UI6, H1).
+
+    ``focus`` the stored focus (preselect from it). ``tilts`` (five) and
+    ``kana_tilts`` (three) are offered only under breadth: offers_tilts(mode)
+    for the orientation picked on the screen; ``tilt_note`` is the sentence
+    to show instead under thorough. ``scope_line`` says the current scope:
+    its title, the fact that it no longer resolves (``scope_resolves``
+    False), or that none is set. ``scopes``: none first, then the stored
+    scope when the list below would not hold it (a node scope set from a
+    route page, or a scope that no longer resolves; titled as in
+    ``scope_line``), then each enabled route, each usable content library,
+    each family; titles are unique (a repeated one carries its kind).
+    ``drop_scope`` is the caption of the page's offer to pick "no scope"
+    while the stored scope does not resolve. ``scope_text`` and
+    ``change_text`` are the two sentences of UI6. Confirming calls the
+    focus service's change() with the picked tilt, kana tilt and scope.
+    """
+
+    focus: Focus
+    tilts: tuple[TiltOption, ...]
+    kana_tilts: tuple[KanaTiltOption, ...]
+    scopes: tuple[ScopeOption, ...]
+    scope_line: str
+    scope_resolves: bool = True
+    heading: str = FOCUS_HEADING
+    tilt_heading: str = TILT_HEADING
+    kana_heading: str = KANA_TILT_HEADING
+    scope_heading: str = SCOPE_HEADING
+    tilt_note: str = TILT_THOROUGH_TEXT
+    scope_text: str = SCOPE_TEXT
+    change_text: str = CHANGE_TEXT
+    drop_scope: str = DROP_SCOPE
+
+    @staticmethod
+    def offers_tilts(mode: Orientation) -> bool:
+        """The tilts act only under breadth first (H1): the page shows them, or ``tilt_note``."""
+        return Orientation(mode) is Orientation.BREADTH
+
+
+@dataclass(frozen=True)
+class FocusButtonModel:
+    """设为重点 on the page of a route, stage, unit, section or content library (UI6, H6).
+
+    ``scope`` the page's own object as a focus scope. ``current`` True when
+    it is the stored focus scope: ``caption`` is then 取消重点 and ``lines``
+    say so with UI6's sentence (范围内的先做……); otherwise ``caption`` is
+    设为重点 and ``lines`` is empty. The page calls its set callback with
+    ``scope`` or its cancel callback; the wiring maps them to the focus
+    service (with_scope), which rearranges the current round once.
+    """
+
+    scope: FocusScope
+    current: bool
+    caption: str
+    lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DayMinutes:
+    """Whole minutes the study clock charged on one study day (``day``: ISO date of the learner's study day).
+
+    ``line`` is the shown line, its label (month-day) and minutes already in it.
+    """
+
+    day: str
+    new: int
+    course: int
+    kana: int
+    line: str = ""
+
+
+@dataclass(frozen=True)
+class ReviewFigures:
+    """Review figures of course review or one kana direction (UI4).
+
+    ``due``: questions due now and not answered. ``longest_overdue_days``:
+    whole days since the earliest due among them, None when nothing is due.
+    ``pass_percent``: rounded percentage of passed (rating > 1) answers among
+    the latest PASS_RATE_REVIEWS formal reviews, None when there is none;
+    ``reviews`` is how many it is based on; ``basis`` is that number when
+    fewer than PASS_RATE_REVIEWS (to show beside the rate), else None.
+    ``line`` is the shown line with all of these already in it.
+    """
+
+    title: str
+    direction: KanaDirection | None   # None for course review
+    due: int
+    longest_overdue_days: int | None
+    pass_percent: int | None
+    reviews: int
+    line: str = ""
+
+    @property
+    def basis(self) -> int | None:
+        return self.reviews if 0 < self.reviews < PASS_RATE_REVIEWS else None
+
+
+@dataclass(frozen=True)
+class ProgressModel:
+    """"时间与进度" on the records page (UI4), shown under every orientation; read-only.
+
+    ``days``: the last 7 study days, oldest first, today last. ``new_lessons``
+    and ``new_kana``: lessons and kana first learned on those days.
+    ``route_position`` / ``route_total``: N and M of 第 N／M 小节 (RouteFacts).
+    ``route_line``: "路线：第 N／M 小节" ("路线：没有小节" for an empty route);
+    ``learned_line``: "近 7 天新学 L 课 · 新假名 K 个".
+    ``reviews``: course review, then 识读, 拼写, 手写. ``note``: the fixed sentence.
+    ``heading``, ``days_heading`` ("近 7 天每天用时（分钟）") and
+    ``reviews_heading``: the block's headings. Every shown text is composed
+    here or by the presenter; the page only lays the lines out.
+    """
+
+    days: tuple[DayMinutes, ...]
+    new_lessons: int
+    new_kana: int
+    route_position: int
+    route_total: int
+    route_line: str
+    learned_line: str
+    reviews: tuple[ReviewFigures, ...]
+    days_heading: str = ""
+    heading: str = PROGRESS_HEADING
+    reviews_heading: str = REVIEWS_HEADING
+    note: str = PROGRESS_NOTE
+
+
+# The practice deck and practice-only answers (design 12 E5, UI8). No rating word appears here:
+# a practice answer is never rated, and a miss is never called "重来" or "遗忘".
+PRACTICE_HEADER = "练习"
+PRACTICE_CORRECT = "答对了"
+PRACTICE_RETRY = "稍后再练一次"
+PRACTICE_ADVANCED = "下次复习提前了一点"
+PRACTICE_ONLY_NOTE = "24 小时内已经评过分，这次只算练习，不改复习安排。"
+PRACTICE_ONLY_MOVED_NOTE = "24 小时内已经评过分，这次只算练习。"   # with 下次复习提前了一点 after it
+PRACTICE_CONTINUE = "继续"
+PRACTISED_LINE = "只算练习 {count} 题（不评分）"   # the end page of a batch (design 12 E4)
+DECK_MISSES_NOTE = "刚才答错的再练一次：只算练习，不评分。"
+DECK_SUBMIT = "提交"
+DECK_INPUT = "输入答案"
+DECK_REVEAL = "不会，看答案"
+DECK_SHOW_ANSWER = "想好了，看答案"
+DECK_SELF_RIGHT = "我答对了"
+DECK_SELF_WRONG = "没答对"
+DECK_NEXT = "下一题"
+DECK_LEAVE = "结束练习"
+DECK_FINISH = "完成"
+DECK_PLAY = "播放读音"
+DECK_ANSWER_PREFIX = "答案："
+DECK_DONE_TITLE = "这组练习做完了"
+
+
+@dataclass(frozen=True)
+class PracticeResultModel:
+    """The result of one practice-only answer (UI8): never a rating.
+
+    ``verdict``: 答对了 or 稍后再练一次 (empty when the answer could not be scored);
+    ``lines``: further sentences in order (on the queue's result page the
+    practice-only note, then 下次复习提前了一点 after a confirmed miss that
+    moved the due; the judge's own note for an answer it could not score);
+    ``continue_caption``: the one button that goes on.
+    """
+
+    verdict: str
+    lines: tuple[str, ...] = ()
+    correct: bool | None = None
+    continue_caption: str = PRACTICE_CONTINUE
+
+
+@dataclass(frozen=True)
+class DeckQuestionModel:
+    """One question of the practice deck as the page shows it (header 练习).
+
+    ``mode`` decides the controls: option buttons, a text field with
+    ``submit_caption``, or (self-check) ``show_answer_caption`` and then the
+    answer with the two self-report buttons. ``answer`` is shown only in
+    self-check mode, after the learner asks for it.
+    """
+
+    header: str
+    progress: str
+    prompt: str
+    mode: DeckAnswerMode
+    task: str = ""
+    note: str = ""
+    options: tuple[str, ...] = ()
+    audio_text: str = ""
+    answer: str = ""
+    play_caption: str = DECK_PLAY
+    submit_caption: str = DECK_SUBMIT
+    input_hint: str = DECK_INPUT
+    reveal_caption: str = DECK_REVEAL
+    show_answer_caption: str = DECK_SHOW_ANSWER
+    self_right_caption: str = DECK_SELF_RIGHT
+    self_wrong_caption: str = DECK_SELF_WRONG
+    leave_caption: str = DECK_LEAVE
+
+
+@dataclass(frozen=True)
+class DeckResultModel:
+    """The deck's result page of one answer: the UI8 result, the answer and its explanation; no rating."""
+
+    header: str
+    result: PracticeResultModel
+    answer_line: str = ""
+    explanation: str = ""
+    next_caption: str = DECK_NEXT
+    leave_caption: str = DECK_LEAVE
+    scored: bool = True   # False: the answer could not be scored; the page offers the same question again
+
+
+@dataclass(frozen=True)
+class DeckEndModel:
+    """The end of a deck: what was practised, and the one way on."""
+
+    header: str
+    title: str
+    summary: str
+    finish_caption: str = DECK_FINISH
+
+
+# Extra practice (design 12 E1, E5, UI7): the button on the end and wait pages of 继续学习, the once-per-launch
+# page before the first start, and the deck's header and leave button while the mode is on.
+EXTRA_BUTTON = "继续加练"
+EXTRA_HEADER = "加练"
+EXTRA_INTRO_TEXT = "这些题还没到期。24 小时内评过分的只算练习；同一题连着答错两次，它的下次复习会提前一点。"
+EXTRA_START = "开始加练"
+EXTRA_BACK = "回到今日"
+EXTRA_END = "结束加练"
+EXTRA_DECK_NOTE = "这些题 24 小时内已经评过分：只算练习，不评分。"
+EXTRA_NOTHING = "现在没有可以加练的题，稍后再试。"   # the mode ended before any extra question
+
+
+@dataclass(frozen=True)
+class ExtraButtonModel:
+    """继续加练 on an end or wait page of 继续学习 (shown only when something can be practised)."""
+
+    caption: str = EXTRA_BUTTON
+
+
+@dataclass(frozen=True)
+class ExtraIntroModel:
+    """The page 加练 before the first start of extra practice in a launch (UI7)."""
+
+    header: str = EXTRA_HEADER
+    text: str = EXTRA_INTRO_TEXT
+    start_caption: str = EXTRA_START
+    back_caption: str = EXTRA_BACK

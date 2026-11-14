@@ -236,3 +236,44 @@ def test_export_detects_corrupt_capture_instead_of_rehashing_it_as_valid(store):
         store._db.execute('UPDATE feedback_record SET context_json=? WHERE id=?', ('{}', record['id']))
     with pytest.raises(ValueError, match='上下文校验'):
         store.get(record['id'])
+
+
+def test_wal_connection_relaxes_fsync_only_in_wal(tmp_path):
+    """09 Q1, as domain.enable_wal: synchronous=NORMAL(1) only when WAL is active."""
+    with FeedbackStore(tmp_path / 'feedback.sqlite3') as value:
+        assert value._db.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'wal'
+        assert value._db.execute('PRAGMA synchronous').fetchone()[0] == 1
+        value.create('WAL 下的反馈原文完整保留。', context(), category='unclear')
+    with FeedbackStore(tmp_path / 'feedback.sqlite3') as reopened:
+        assert reopened.list_records()[0]['note'] == 'WAL 下的反馈原文完整保留。'
+
+
+def test_non_wal_connection_keeps_full_fsync(tmp_path, monkeypatch):
+    real_connect = sqlite3.connect
+
+    class NoWal:
+        """A connection on which SQLite declines WAL (e.g. unsupported VFS)."""
+        def __init__(self, *args, **kwargs):
+            object.__setattr__(self, '_db', real_connect(*args, **kwargs))
+
+        def execute(self, sql, *args):
+            if sql.strip().upper() == 'PRAGMA JOURNAL_MODE=WAL':
+                return self._db.execute('PRAGMA journal_mode=DELETE')
+            return self._db.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._db, name)
+
+        def __setattr__(self, name, value):
+            setattr(self._db, name, value)
+
+        def __enter__(self):
+            return self._db.__enter__()
+
+        def __exit__(self, *exc):
+            return self._db.__exit__(*exc)
+
+    monkeypatch.setattr(module.sqlite3, 'connect', NoWal)
+    with FeedbackStore(tmp_path / 'feedback.sqlite3') as value:
+        assert value._db.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'delete'
+        assert value._db.execute('PRAGMA synchronous').fetchone()[0] == 2

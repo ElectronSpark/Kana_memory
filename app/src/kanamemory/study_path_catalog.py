@@ -28,6 +28,36 @@ SMALL_UNIT_PLANS = _PATH.get("SMALL_UNIT_PLANS", {})
 COHERENCE_RULES = _PATH.get("COHERENCE_RULES", {})
 GRAMMAR_ROUTE_CONFIG = _PATH.get("GRAMMAR_ROUTE_CONFIG", {})
 PRONUNCIATION_ROUTE_CONFIG = _PATH.get("PRONUNCIATION_ROUTE_CONFIG", {})
+# Stage of the loanword kana spellings and the unit order of the kana stage
+# (design 11 section 6, R1). Absent or invalid values keep the original order.
+KANA_ROUTE_CONFIG = _PATH.get("KANA_ROUTE_CONFIG", {})
+_STAGE_ZERO_UNIT_ORDER = ("sound:mora", "alphabet:hiragana", "alphabet:katakana", "voiced:hiragana",
+                          "voiced:katakana", "sound:small_kana", "sound:shared_special",
+                          "yoon:hiragana", "yoon:katakana", "notation:hiragana", "notation:katakana")
+
+
+_REFERENCE_STAGE = 6
+
+
+def _loan_stage(script):
+    """Stage of one script's loanword spellings: 0, 1 or "reference" (the optional glyph stage).
+
+    loan_stage is one value for both scripts or {"hiragana": ..., "katakana": ...}.
+    """
+    stage = KANA_ROUTE_CONFIG.get("loan_stage", 1) if isinstance(KANA_ROUTE_CONFIG, dict) else 1
+    if isinstance(stage, dict):
+        stage = stage.get(script, 1)
+    if stage == "reference":
+        return _REFERENCE_STAGE
+    return stage if type(stage) is int and 0 <= stage <= 1 else 1
+
+
+def _stage_zero_unit_order():
+    order = KANA_ROUTE_CONFIG.get("stage_zero_unit_order") if isinstance(KANA_ROUTE_CONFIG, dict) else None
+    if (isinstance(order, (list, tuple)) and order
+            and all(isinstance(key, str) and key for key in order) and len(set(order)) == len(order)):
+        return tuple(order)
+    return _STAGE_ZERO_UNIT_ORDER
 
 
 def _matched_group(group, key):
@@ -77,6 +107,10 @@ def _grammar_route(item):
             stage = 4
     else:
         stage = GRAMMAR_ROUTE_CONFIG.get("levels", {}).get(item.get("level"), 3)
+        # Skeleton grammar placed in the first expression stage regardless of
+        # level (design 11 section 6, R2); prerequisites still lift the stage.
+        if key in GRAMMAR_ROUTE_CONFIG.get("stage_one_keys", ()):
+            stage = 1
         if category == GRAMMAR_ROUTE_CONFIG.get("written_category"):
             stage = 3 if item.get("level") == "基础" else 4
         if key in GRAMMAR_ROUTE_CONFIG.get("formal_keys", ()):
@@ -85,7 +119,7 @@ def _grammar_route(item):
     return stage, "grammar:" + category, category, topic
 
 
-def _learning_route(item):
+def _learning_route(item, topics=None):
     if item.get("domain") == "pronunciation":
         key = item["id"].split(":", 1)[-1]
         category = item.get("category", "读音规则")
@@ -104,10 +138,31 @@ def _learning_route(item):
         return stage, "sound:" + category, category, item["title"].split("：")[0]
     if item["family"] == "grammar":
         return _grammar_route(item)
-    for stage, unit, title, topic, words in WORD_TOPICS:
-        if item["title"] in words.split():
-            return stage, "word:" + unit, title, topic
+    route, _ = _word_topic(item, _word_topic_index() if topics is None else topics)
+    if route is not None:
+        return route
     return 3, "word:additional", "其他常用词义", item.get("semantic_group", "词义与读法")
+
+
+def _word_topic_index():
+    """Lesson key -> (stage, unit key, unit title, topic) of the first WORD_TOPICS row listing it.
+
+    A row lists lesson keys: a form, or "form@reading" for a lesson bound to
+    one reading of a form that another lesson also uses (vocabulary_lessons).
+    """
+    index = {}
+    for stage, unit, title, topic, words in WORD_TOPICS:
+        for key in words.split():
+            index.setdefault(key, (stage, "word:" + unit, title, topic))
+    return index
+
+
+def _word_topic(item, topics):
+    """(route, key) placing a word lesson, or (None, None); "form@reading" wins over the form."""
+    for key in (f"{item['title']}@{item.get('reading', '')}", item["title"]):
+        if key in topics:
+            return topics[key], key
+    return None, None
 
 
 def _kana_route(row, script, eligible):
@@ -123,12 +178,17 @@ def _kana_route(row, script, eligible):
                  "voicing_mark": "浊点与半浊点", "iteration_mark": "重复符号"}.get(category, "上下文中的符号")
         return 0, "notation:" + script, alphabet + "的拼写符号", topic
     if category in {"foreign_combination", "foreign_voiced"}:
+        stage = _loan_stage(script)
+        if stage == _REFERENCE_STAGE:
+            # A script's loanword spellings that real text hardly uses are
+            # read beside the historical glyphs, not studied before words.
+            return stage, "reference:" + script, alphabet + "与旧字形", "外来语拼写"
         head = row.get("hiragana") or text
         topic = {"て": "ティ与テュ", "で": "ディ与デュ", "と": "トゥ", "ど": "ドゥ",
                  "ふ": "ファ行与フュ", "ゔ": "ヴ系列", "う": "ウィ・ウェ・ウォ",
                  "つ": "ツァ行", "く": "クァ行", "ぐ": "グァ", "し": "シェ",
                  "じ": "ジェ", "ち": "チェ", "い": "イェ"}.get(head[0], "外来语拼写")
-        return 1, "loan:" + script, alphabet + "外来语拼写", topic
+        return stage, "loan:" + script, alphabet + "外来语拼写", topic
     hira = row.get("hiragana") or text
     if category == "yoon":
         return 0, "yoon:" + script, alphabet + "拗音", hira[0] + "的小ゃ・ゅ・ょ组合"
@@ -260,19 +320,18 @@ def flatten_sections(path):
 def _unit_priority(stage, key, position):
     if stage == 0:
         # Letter recognition precedes explanations that use longer examples.
-        prefixes = ("sound:mora", "alphabet:hiragana", "alphabet:katakana", "voiced:hiragana",
-                    "voiced:katakana", "sound:small_kana", "sound:shared_special",
-                    "yoon:hiragana", "yoon:katakana", "notation:hiragana", "notation:katakana")
+        prefixes = _stage_zero_unit_order()
         return (next((i for i, prefix in enumerate(prefixes) if key == prefix), len(prefixes)), position)
     return (0, position)
 
 
-def _combine_micro_lessons(path):
+def _combine_micro_lessons(path, scope_key=""):
     """Combine related neighbouring rules after ordering, without hiding edges.
 
     Each neighbour already belongs to one functional/topic unit. Consolidating
     consecutive graph nodes cannot introduce a prerequisite cycle. Four rules
     is an app pacing choice, not a scientifically established daily quota.
+    scope_key (empty for the core route) scopes derived unit IDs to one route.
     """
     replacement = {}
     for stage in path["stages"]:
@@ -345,10 +404,10 @@ def _combine_micro_lessons(path):
                     section.update(unit_id=new["id"], unit_title=new["title"])
                 units.append(new)
         stage["units"] = units
-    return _combine_small_units(path)
+    return _combine_small_units(path, scope_key)
 
 
-def _combine_small_units(path):
+def _combine_small_units(path, scope_key=""):
     """Place small lessons in explicitly related, multi-section teaching units."""
     plans = SMALL_UNIT_PLANS
     for stage in path["stages"]:
@@ -361,7 +420,7 @@ def _combine_small_units(path):
                 continue
             ids = {u["id"] for u in selected}
             first = min(stage["units"].index(u) for u in selected)
-            new = {"id": "unit:topic:" + _digest(stage["id"] + "|" + title),
+            new = {"id": "unit:topic:" + _digest((scope_key + "|" if scope_key else "") + stage["id"] + "|" + title),
                    "title": title, "sections": [s for u in selected for s in u["sections"]]}
             stage["units"] = [u for u in stage["units"] if u["id"] not in ids]
             stage["units"].insert(first, new)
@@ -436,7 +495,7 @@ def _weave_vocabulary(path, plans=None):
         for source_unit, source in originals:
             if source.get("optional") or not family(source, "word"):
                 continue
-            titles = {entry.get("title") for entry in source["entries"]}
+            titles = {entry.get("route_key", entry.get("title")) for entry in source["entries"]}
             targets = next((targets for forms, targets in rules if forms & titles), None)
             # The first matching rule owns this section even when its targets
             # are missing. A later rule must not silently reinterpret it.
@@ -476,20 +535,31 @@ def _weave_vocabulary(path, plans=None):
     return result
 
 
-def build_study_path(kana_rows, learning_items=None, extra_items=()):
-    """Return independent nested snapshots covering every supplied identity.
+def _core_section_identity(stage_id, unit_key, topic, depth):
+    return "section:" + _digest(f"{stage_id}|{unit_key}|{topic}|{depth}")
 
-    Existing learner-added dictionary senses appear in optional self-selected
-    extension units. Calling this function reads or changes no learner state.
+
+def _core_unit_identity(stage_id, unit_key):
+    return "unit:" + _digest(f"{stage_id}|{unit_key}")
+
+
+def study_path_records(kana_rows, learning_items=None, extra_items=()):
+    """Entry records in catalogue order, without sections or learner state.
+
+    Each record is (stage_index, unit_key, unit_title, topic, depth, entry):
+    stage_index indexes STAGES, entry carries the enrollment identity fields.
+    Shared by the core route and parallel study routes (design 10 section 6.3).
     """
     from .domain import _eligible_kana
     from .kana_dependencies import practice_kana_dependencies
-    from .learning_content import learning_items as bundled_items
+    from .content_library_index import isolated_copy
+    from .learning_content import learning_item_views as bundled_items
     from .learning_dependencies import validate_catalog
     from .kana_reading_rules import rule_for_kana, dependencies_for_kana
     kana_rows = list(kana_rows)
     kana_dependencies = practice_kana_dependencies(kana_rows)
-    items = deepcopy(list(bundled_items() if learning_items is None else learning_items))
+    # isolated_copy: independent lessons; templates of a catalogue view stay shared (never read here).
+    items = isolated_copy(list(bundled_items() if learning_items is None else learning_items))
     order = validate_catalog(items)
     catalogue = {item["id"]: item for item in items}
     extras = {}
@@ -497,18 +567,28 @@ def build_study_path(kana_rows, learning_items=None, extra_items=()):
         if item["id"] not in catalogue:
             extras[item["id"]] = deepcopy(item)
     records, depths, stage_of = [], {}, {}
+    topics = None
     for cid in order:
         item = catalogue[cid]
-        route = _learning_route(item)
+        if topics is None and item["family"] == "word":
+            topics = _word_topic_index()  # once per build, only when a word needs it
+        route = _learning_route(item, topics)
         deps = item.get("depends_on", [])
         stage = max([route[0], *(stage_of[d] for d in deps)])
         depths[cid] = 1 + max((depths[d] for d in deps), default=-1)
         stage_of[cid] = stage
-        records.append((stage, route[1], route[2], route[3], depths[cid], {
+        entry = {
             "id": cid, "kind": "learning", "content_id": cid, "title": item["title"],
             "family": item["family"], "domain": item.get("domain"),
             "teaching_group": _coherence(item) if item["family"] == "grammar" else route[3],
-            "depends_on": list(deps)}))
+            "depends_on": list(deps)}
+        if item["family"] == "word":
+            key = _word_topic(item, topics)[1]
+            if key and key != item["title"]:
+                # Only a reading-specific placement carries its key, so weave
+                # rules keyed by the plain form keep their old sections.
+                entry["route_key"] = key
+        records.append((stage, route[1], route[2], route[3], depths[cid], entry))
     for item in sorted(extras.values(), key=lambda i: i["id"]):
         records.append((7, "personal:" + item["family"], "自选词义" if item["family"] == "word" else "自选规则",
                         item["title"], 0, {"id": item["id"], "kind": "learning", "content_id": item["id"],
@@ -547,28 +627,43 @@ def build_study_path(kana_rows, learning_items=None, extra_items=()):
             # Keep depth zero: prerequisites may reorder existing sections, but
             # must not replace their stable enrollment identities.
             records.append((*route, 0, entry))
+    return records
+
+
+def assemble_study_path(records, *, version=None, scope=None, section_identity=None,
+                        unit_identity=None, scope_key="", resolvable=frozenset()):
+    """Group entry records into ordered stages/units/sections (pure, detached).
+
+    Defaults reproduce the core route exactly. A parallel route supplies its
+    own route-scoped section/unit identity functions and scope_key; entry
+    dependencies in resolvable are outside this tree but not unresolved.
+    """
+    section_identity = _core_section_identity if section_identity is None else section_identity
+    unit_identity = _core_unit_identity if unit_identity is None else unit_identity
     sections = {}
     identity_set = set()
     for position, (stage, unit_key, unit_title, topic, depth, entry) in enumerate(records):
         if entry["id"] in identity_set:
             raise ValueError("学习路径包含重复身份：" + entry["id"])
         identity_set.add(entry["id"])
-        sid = "section:" + _digest(f"{STAGES[stage][0]}|{unit_key}|{topic}|{depth}")
+        sid = section_identity(STAGES[stage][0], unit_key, topic, depth)
         section = sections.setdefault(sid, {"id": sid, "title": topic, "entries": [], "depends_on": [],
             "optional": stage >= 6, "stage_id": STAGES[stage][0], "stage_title": STAGES[stage][1],
-            "unit_id": "unit:" + _digest(f"{STAGES[stage][0]}|{unit_key}"), "unit_title": unit_title,
+            "unit_id": unit_identity(STAGES[stage][0], unit_key), "unit_title": unit_title,
             "_order": _unit_priority(stage, unit_key, position)})
         section["entries"].append(entry)
     owner = {entry["id"]: sid for sid, section in sections.items() for entry in section["entries"]}
     for sid, section in sections.items():
         dependencies = {owner[d] for entry in section["entries"] for d in entry["depends_on"] if d in owner and owner[d] != sid}
         section["depends_on"] = sorted(dependencies, key=lambda d: sections[d]["_order"])
-        unresolved = sorted({d for entry in section["entries"] for d in entry["depends_on"] if d not in owner})
+        unresolved = sorted({d for entry in section["entries"] for d in entry["depends_on"]
+                             if d not in owner and d not in resolvable})
         if unresolved:
             section["unresolved_dependencies"] = unresolved
     dependencies = {sid: section["depends_on"] for sid, section in sections.items()}
     section_order = {sid: section["_order"] for sid, section in sections.items()}
-    result = {"version": PATH_VERSION, "stages": [], "scope": "bundled_learning_identities_and_kana_scripts"}
+    result = {"version": PATH_VERSION if version is None else version, "stages": [],
+              "scope": "bundled_learning_identities_and_kana_scripts" if scope is None else scope}
     for stage_id, title in STAGES:
         stage_sections = [s for s in sections.values() if s["stage_id"] == stage_id]
         if not stage_sections:
@@ -599,4 +694,21 @@ def build_study_path(kana_rows, learning_items=None, extra_items=()):
             unit.pop("_order", None)
             stage_units.append(unit)
         result["stages"].append({"id": stage_id, "title": title, "optional": stage_id in {"stage:reference", "stage:personal"}, "units": stage_units})
-    return _weave_vocabulary(_combine_micro_lessons(result))
+    return _weave_vocabulary(_combine_micro_lessons(result, scope_key))
+
+
+def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_of=None):
+    """Return independent nested snapshots covering every supplied identity.
+
+    Existing learner-added dictionary senses appear in optional self-selected
+    extension units. Calling this function reads or changes no learner state.
+    library_of (content id -> extension library id or None): an extension
+    library's large sections are cut (design 11 section 16, M8(a)); without
+    it, and when no library section is large, the tree is the one built before.
+    """
+    path = assemble_study_path(study_path_records(kana_rows, learning_items, extra_items))
+    if library_of is None:
+        return path
+    from .route_mix.sections import split_library_sections
+    return split_library_sections(path, library_of, fixed_stage_ids=tuple(stage_id for stage_id, _ in STAGES[:1]),
+                                  digest=_digest)

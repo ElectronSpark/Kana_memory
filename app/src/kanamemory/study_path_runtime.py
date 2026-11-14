@@ -1,9 +1,8 @@
 """One continue action routes to the existing kana and course queues."""
+import json
+from dataclasses import dataclass
 from datetime import datetime
 from .practice_preferences import clean_preferences, enabled_preference_kinds
-from .course_planning import iter_question_plans
-from .answer_input import system_japanese_enabled
-from . import app_clock
 
 from .navigation import page_view
 from .study_path import StudyPathService
@@ -11,259 +10,446 @@ from .practice_availability import summarize_queue_availability
 
 
 _UNREAD = object()
+# A continue wait page that outlives this offers retry (review 2026-11-08 section 2).
+CONTINUE_WAIT_SECONDS = 20
+RECOMPUTE_QUEUE_TEXT = "重新计算今日队列"
+RECOMPUTED_NOTICE = "已按当前进度重新计算；原题、草稿和复习时间不变。"
+# Review 2026-11-08 section 2 item 4: when due reviews or an open question come
+# before the newly added section, the first page reached says so once.
+ENROLL_NOTICE = "已加入「{title}」（{count} 项）。先完成当前到期复习，新课会接着开始。"
+ENROLL_REVIEW_PAGES = frozenset({"question", "word_question", "ink_question", "feedback",
+                                 "learning_question", "learning_feedback"})
+
+
+def skipped_teaching_ids(app):
+    """Course items the learner chose to pass over this run (see learning_ui)."""
+    return frozenset(getattr(app, "_guide_skipped_ids", None) or ())
+
+
+def show_continue_wait(app, page, loop):
+    """The short "正在准备题目…" page; after CONTINUE_WAIT_SECONDS it offers retry.
+
+    The page itself (and so a late worker result) stays valid; only controls
+    are added. Returns False when the page could not be shown.
+    """
+    from . import ui_components as u
+    late = u.col()
+    app.screen(page, "继续学习", u.label("正在准备题目…", size=17, color=u.MUTED), late,
+               u.button("回到今日", app.leave_learning))
+    if app.page != page:
+        return False
+    token = app._page_token
+    # Which page is the wait page (the enrollment notice waits over it).
+    app._continue_wait_view = (page, token)
+
+    def overdue():
+        if getattr(app, "page", None) != page or app._page_token != token or late.children:
+            return
+        late.add(u.label("准备时间比预期长。", size=16))
+        late.add(u.label("已保存的进度不受影响。可以重试，或先回到今日。", size=13, color=u.MUTED))
+        late.add(u.button("重试", app.continue_study_path, primary=True))
+    cancel_continue_wait(app)
+    try:
+        app._continue_wait_timer = loop.call_later(CONTINUE_WAIT_SECONDS, overdue)
+    except (AttributeError, RuntimeError):
+        app._continue_wait_timer = None
+    return True
+
+
+def enrollment_notice(result, identities):
+    """One-shot notice for an add_sections result; None when nothing new was added.
+
+    Only presentation: the text, and the content ids of the added sections
+    (with their newly enrolled prerequisites), so a page that already shows
+    the new lesson does not get the notice.
+    """
+    if not isinstance(result, dict) or not result.get("added_sections"):
+        return None
+    added = set(result["added_sections"])
+    sections = [s for s in result.get("sections") or () if isinstance(s, dict) and s.get("id") in added]
+    if not sections:
+        return None
+    requested = set(identities)
+    titles = [s.get("title") for s in sections if s.get("id") in requested] or [s.get("title") for s in sections]
+    entries = [e for s in sections for e in s.get("entries") or ()]
+    new_ids = {e.get("content_id") for e in entries} | set(result.get("added_learning") or ())
+    return {"text": ENROLL_NOTICE.format(title="、".join(t for t in titles if t), count=len(entries)),
+            "new_ids": frozenset(new_ids), "anchor": None}
+
+
+def take_enrollment_notice(app):
+    """The armed notice for this continue action (cleared either way).
+
+    A notice armed by the add itself has no anchor; one carried over a
+    continue wait page is valid only while that same wait page is current.
+    """
+    notice, app._enroll_notice = getattr(app, "_enroll_notice", None), None
+    if not notice:
+        return None
+    anchor = notice.get("anchor")
+    if anchor is not None and anchor != (getattr(app, "page", None), getattr(app, "_page_token", None)):
+        return None
+    return notice
+
+
+def _landed_content_id(app, page):
+    if page in {"learning_question", "learning_feedback"}:
+        question = getattr(app, "_learning_question", None)
+        return question.get("content_id") if isinstance(question, dict) else None
+    return getattr(getattr(app, "question", None), "content_id", None)
+
+
+def place_enrollment_notice(app, notice):
+    """Show the notice on the review page this continue reached.
+
+    A continue wait page (show_continue_wait) keeps it for the resumed
+    action; the new lesson's own pages (or any other page) drop it: the
+    lesson starts right away.
+    """
+    if not notice:
+        return
+    page = getattr(app, "page", None)
+    view = (page, getattr(app, "_page_token", None))
+    if getattr(app, "_continue_wait_view", None) == view:
+        app._enroll_notice = {**notice, "anchor": view}
+        return
+    if page not in ENROLL_REVIEW_PAGES or _landed_content_id(app, page) in notice["new_ids"]:
+        return
+    slot = getattr(app, "content_slot", None)
+    children = list(getattr(slot, "children", None) or ())
+    if not children:
+        return
+    body = getattr(children[0], "content", None) or children[0]
+    from . import ui_components as u
+    label = u.label(notice["text"], size=13, bold=True)
+    if callable(getattr(body, "insert", None)):
+        body.insert(0, label)
+    else:
+        rest = list(body.children)
+        body.clear()
+        body.add(label, *rest)
+
+
+def cancel_continue_wait(app):
+    timer, app._continue_wait_timer = getattr(app, "_continue_wait_timer", None), None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except (AttributeError, RuntimeError):
+            pass
+
+
+def show_continue_error(app, error, *, title=None):
+    """Actionable page instead of a stuck wait page; the caller records the error."""
+    from . import ui_components as u
+    cancel_continue_wait(app)
+    reason = (str(error).strip().splitlines() or [""])[0][:80] or type(error).__name__
+    feedback = getattr(app, "begin_page_feedback", None)
+    app.screen("learning_wait", "无法准备下一题",
+        *([u.label(title, size=19, bold=True)] if title else []),
+        u.label("准备下一题时出错，学习记录与草稿已保留。", size=16),
+        u.label("原因：" + reason, size=13, color=u.MUTED),
+        u.button("重试", app.continue_study_path, primary=True),
+        u.button("回到今日", app.leave_learning),
+        *([u.button("反馈", feedback)] if callable(feedback) else []))
+    try:
+        error._continue_error_shown = True
+    except AttributeError:
+        pass
+
+
+def _course_title(app, before):
+    """Title of the course item this continue action reached, when known."""
+    for name in ("_learning_item", "_learning_current"):
+        value = getattr(app, name, None)
+        if value is None or value is before.get(name):
+            continue
+        content = value.get("content", value) if isinstance(value, dict) else None
+        if isinstance(content, dict) and isinstance(content.get("title"), str):
+            return content["title"]
+    return None
+
+
+def continue_failed(app, error, *, source):
+    """A background continue step failed: record it and leave an actionable page.
+
+    Without this the asyncio task error only reached the loop's log and the
+    "正在准备题目…" page stayed up. An error the inline continue already showed
+    is not rendered twice.
+    """
+    from .diagnostic_events import record_error
+    from .crash_events import record_unhandled
+    record_unhandled(error, source)
+    if getattr(error, "_continue_error_shown", False):
+        return
+    record_error("kana_queue_assembly", "callback", error)
+    show_continue_error(app, error)
+
+
+def routes_service_key(value):
+    """The part of study_routes_v1 a StudyPathService is built from.
+
+    Personal route specs and enabled flags change the RouteSet, so they
+    rebuild the service; active_route and added_sections are read live and
+    leave the (costly) core tree in place (design 10 WP-R3).
+    """
+    import json
+    rows = value.get("routes") if isinstance(value, dict) else None
+    if not isinstance(rows, dict):
+        return ()
+    return tuple(sorted(
+        (str(rid), row.get("enabled") if isinstance(row, dict) else None,
+         json.dumps(row.get("spec"), ensure_ascii=False, sort_keys=True, default=str)
+         if isinstance(row, dict) and "spec" in row else None)
+        for rid, row in rows.items()))
+
+
+def registry_service_key(registry):
+    """The part of the library registry a StudyPathService is built from.
+
+    The service filters library routes and catalogue items by the registry
+    it saw at construction; disabling a library that no learned content
+    belongs to leaves the unavailable ids unchanged, so enabled/state are
+    keyed explicitly (F3 open item 3). None (no registry written yet) is ().
+    """
+    rows = registry.get("libraries") if isinstance(registry, dict) else None
+    if not isinstance(rows, (list, tuple)):
+        return ()
+    return tuple(sorted((str(row.get("library_id")), bool(row.get("enabled")), str(row.get("state")))
+                        for row in rows if isinstance(row, dict)))
+
+
+def current_route_next(service):
+    """Positional _path_next_controls arguments for the current route.
+
+    (overview,) for the core route, exactly the pre-route call; otherwise
+    (that route's overview, route_id) (design 10 section 8.2).
+    """
+    from .study_path_display import active_route, route_key
+    current = active_route(service)
+    if route_key(current) is None:
+        return (service.overview(),)
+    return (service.overview(route_id=current), current)
+
+
+@dataclass(frozen=True)
+class PreparedKana:
+    """Proof that continue already reconciled and prepared the stored main queue.
+
+    Lifetime: the rest of one synchronous continue action. resume_practice and
+    show_question reuse ``prepared`` instead of reconciling/preparing again only
+    while the database revision, practice-round plan, lane, session and queue
+    kinds are all unchanged; any write or setting change makes them redo the
+    original work. It grants no write or grading permission.
+    """
+    session_id: str
+    prepared: dict
+    kinds: tuple
+    revision: tuple
+    plan: tuple
+
+    @staticmethod
+    def _plan(store):
+        from .practice_round import course_order_token, finished, promoted, sealed
+        # promoted: a promotion reorders the kana lane too (design 12 B5).
+        return (course_order_token(store), sealed(store), finished(store), promoted(store))
+
+    @classmethod
+    def capture(cls, store, prepared, kinds):
+        return cls(prepared["session_id"], prepared, tuple(kinds), store.read_revision(), cls._plan(store))
+
+    def current(self, store, session_id, kinds) -> bool:
+        return (getattr(store, "practice_lane", "main") == "main" and not store.in_transaction
+                and session_id == self.session_id and tuple(kinds) == self.kinds
+                and store.read_revision() == self.revision and self._plan(store) == self.plan)
+
+
+def course_current_in_worker(content, progress, *, snapshot, enabled_kinds, now, fair_new=True):
+    """Worker half of a sealed-round continue: course candidate filtering and order.
+
+    Runs on practice_worker.run_in_background's own connections. The frozen
+    round order arrives as a practice_round.RoundSnapshot (pure data) and is
+    installed on this worker connection only; LearningStore.reader never
+    writes. Returns the current() result for the UI thread to seed (WP7a).
+    """
+    from .learning_store import LearningStore
+    from .material_qualification import bind_resources
+    bind_resources(progress, repo=content)
+    snapshot.install(progress)
+    learning = LearningStore.reader(progress)
+    moment = datetime.fromisoformat(now)
+    with learning.read_operation(now=moment) as read:
+        value = learning.current(enabled_kinds, now=moment, fair_new=fair_new, projection=read)
+    progress._build_cancel_check()
+    return value
+
+
+@dataclass(frozen=True)
+class CourseCurrentResume:
+    """UI-thread state of one sealed-round continue waiting for its worker.
+
+    Lifetime: until the worker returns. ``value`` is used only after the
+    BackgroundTicket (page, page token, UI revision) and the RoundSnapshot
+    both still hold; any mismatch makes continue recompute inline.
+    """
+    ticket: object
+    snapshot: object
+    pending: object
+    now: datetime
+    prepared_kana: object
+    enabled_kinds: tuple
+    value: object = _UNREAD
 
 
 class StudyPathRuntimeMixin:
-    def _study_path_unqueued_courses(self):
-        """Preview the gap between finalizing a course and saving its next Q.
-
-        A process interruption can leave genuine ability schedules without a
-        pending question. Use the continuation planner and append timing rules
-        without materializing or saving question snapshots on the home page.
-        """
-        from .domain import _utc
-        from .learning_dependencies import independent_ready_ids, prerequisite_status
-        from .learning_questions import KIND_ABILITIES
-        now = _utc(None)
-        enabled = self.learning_preferences()["enabled"]
-        result = {"ready": 0, "waiting": 0, "instruction": 0, "blocked": 0,
-                  "blocked_content": 0, "blocked_material": 0, "next_due": None}
-        from .practice_round import planned_round_running
-        if planned_round_running(self.store):
-            return result
-        if not enabled:
-            return result
-        visible_rows = self.store.queries.pending_course_headers(enabled)
-        visible_content = {row['content_id'] for row in visible_rows}
-        known_teaching = set()
-        for row in visible_rows:
-            current = self.learning_store.ability_instruction_row(row['content_id'], row['ability'])
-            if current['stage'] in {'intro', 'guide'}:
-                known_teaching.add(current['introduction_id'])
-        blocked_content = set()
-        abilities = sorted({KIND_ABILITIES[kind] for kind in enabled})
-        missing = self.store.queries.unqueued_course_ids(abilities)
-        ready_ids, teaching, future = independent_ready_ids(self.learning_store), set(), []
-        system_input = system_japanese_enabled(self.store)
-        exposures = self.learning_store.content_exposure_times(now=now)
-        prerequisites = {}
-        for row in missing:
-            item = self.learning_store.get_item(row[0])
-            # Already assessed lessons are grandfathered by the dependency
-            # contract. Only new lessons need a fresh prerequisite inspection.
-            for unit, plan in iter_question_plans(item, enabled_kinds=enabled,
-                    queries=self.store.queries, learning_store=self.learning_store,
-                    system_japanese_input=system_input,
-                    unit_states={u['ability']: u for u in item['units']}):
-                if unit["suspended"]:
-                    continue
-                if self.learning_store.content_question_blocked(item, plan):
-                    result['blocked_material'] += 1
-                    continue
-                content_row = self.learning_store.ability_instruction_row(item['id'], unit['ability'])
-                scope = dict(content_row).get('instruction_scope')
-                key = item['id'], scope
-                if key not in prerequisites:
-                    prerequisites[key] = (self.learning_store.prerequisite_status(item['id'], scope,
-                        ready_ids=ready_ids) if scope else prerequisite_status(self.learning_store, item,
-                        ready_ids=ready_ids))['blocked']
-                blocked = prerequisites[key]
-                if blocked:
-                    result["blocked"] += 1
-                    # A pending sibling ability already contributes this content
-                    # to LearningStore.counts()["blocked_content"].
-                    if item["id"] not in visible_content:
-                        blocked_content.add(item["id"])
-                    continue
-                if content_row["stage"] in {"intro", "guide"}:
-                    if content_row['introduction_id'] not in known_teaching:
-                        teaching.add(content_row['introduction_id'])
-                    continue
-                due = self.learning_store.question_not_before(unit, plan, now=now, exposure_times=exposures)
-                if content_row["stage"] == "bridge" and not self.learning_store._retrieval_ready(content_row, now):
-                    due = max(due or "", content_row["retrieval_at_utc"])
-                if due and datetime.fromisoformat(due) > now:
-                    result["waiting"] += 1
-                    future.append(due)
-                else:
-                    result["ready"] += 1
-        result["instruction"] = len(teaching)
-        result["blocked_content"] = len(blocked_content)
-        result["next_due"] = min(future) if future else None
-        return result
-
-    def _study_path_unqueued_reviews(self, pending=_UNREAD):
-        """Preview due cards and the next home refresh time without writing.
-
-        A finished queue can leave real review cards but no checkpoint. Count
-        their original directions only, using the builder's eligibility rules
-        and the same queue policy/service availability as actual resumption.
-        Only unfinished directions reserve work; history cannot hide due cards
-        or newly unlocked recall directions in a continuously extended queue.
-        """
-        from .practice_round import planned_round_running
-        if planned_round_running(self.store):
-            return {"ready": 0, "waiting": 0, "next_due": None}
-        from . import ui_components as u
-        from .app import KanaMemory
-        from .domain import (WORD_SKILLS, LISTENING_SKILLS, HANDWRITING_SKILLS,
-                             CONTENT_CONTROLS_SETTING, _BatchQuestionStore,
-                             build_questions, _utc)
-        now = _utc(None)
-        pending = self.store.load_session_progress(lane="main", lazy_questions=True) if pending is _UNREAD else pending
-        kinds = (KanaMemory._queue_kinds(self, pending) if pending else
-                 enabled_preference_kinds(getattr(self, "_practice_preferences", {})))
-        from .kana_context_words import preview_context_word
-        context_count = int(preview_context_word(self.repo, self.store, kinds,
-            audio_available=bool(self.platform.tts_ready), now=now))
-        kinds = {kind for kind in kinds if kind not in WORD_SKILLS
-                 and (self.platform.tts_ready or kind not in LISTENING_SKILLS)
-                 and (self.model_state == "ready" or kind not in HANDWRITING_SKILLS)}
-        if not kinds:
-            return {"ready": context_count, "waiting": 0, "next_due": None}
-        queued = {(q.content_id, q.kind, q.script) for q in
-                  (pending["questions"][pending["question_index"]:] if pending else [])
-                  if q.kind not in WORD_SKILLS}
-        grouped, due_by_key = {}, {}
-        controls = self.store.get_setting(CONTENT_CONTROLS_SETTING, {})
-        from .kana_routing import candidate_cards, current_identities, prospective_identities
-        cards = candidate_cards(self.store, kinds, now)
-        identities = current_identities(self.store, queued | {(c['content_id'], c['skill'], c['script']) for c in cards})
-        occupied = {identities[key] for key in queued}
-        feedback_due = self.store.feedback_wait_times(
-            ((c["content_id"], c["skill"], c["script"]) for c in cards), now)
-        for card in cards:
-            cid, kind, script = card["content_id"], card["skill"], card["script"]
-            control = controls.get(cid, {})
-            if kind not in kinds or identities[cid, kind, script] in occupied or control.get("suspended"):
-                continue
-            due = datetime.fromisoformat(card["due_at_utc"])
-            due = max(due, feedback_due.get((cid, kind, script), due))
-            if control.get("buried_until_utc"):
-                due = max(due, datetime.fromisoformat(control["buried_until_utc"]))
-            grouped.setdefault((kind, script), []).append(cid)
-            due_by_key[cid, kind, script] = due
-        advancing = self.study_path_service().kana_advancement_targets(kinds, now=now, pending=pending)
-        advancement_due = self.store.feedback_wait_times(
-            ((entry["content_id"], kind, entry["script"]) for entry, kind, _ in advancing), now)
-        for entry, kind, _ in advancing:
-            cid, script = entry["content_id"], entry["script"]
-            grouped.setdefault((kind, script), []).append(cid)
-            due_by_key[cid, kind, script] = advancement_due.get((cid, kind, script), now)
-        # Group by direction to avoid rebuilding the whole eligible catalogue
-        # once for every due card. Target-only previews create no choices.
-        ready, future, by_ability = context_count, [], {}
-        count_identities = prospective_identities(self.store, due_by_key) if due_by_key else {}
-        for (kind, script), content_ids in grouped.items():
-            targets = build_questions(self.repo, _BatchQuestionStore(self.store, content_ids),
-                kind=kind, script=script, limit=len(content_ids), seed=0, now=now,
-                include_extended=True, _targets_only=True)
-            for target in targets:
-                due = due_by_key[target.content_id, kind, script]
-                key = count_identities[target.content_id, kind, script]
-                by_ability[key] = min(by_ability.get(key, due), due)
-        ready += sum(due <= now for due in by_ability.values())
-        future.extend(due for due in by_ability.values() if due > now)
-        # Only future instants arm the home timer. Keeping an already-due
-        # instant here would cause a refresh loop until the learner answered.
-        return {"ready": ready, "waiting": len(future),
-                "next_due": min(future).isoformat() if future else None}
-
     def study_path_can_continue(self):
-        from . import ui_components as u
+        """Whether 继续学习 can reach anything now; the route page and the end pages ask (design 13 S3: the
+        home service answers, home_runtime builds it). KanaMemory._queue_kinds is the App's, as before."""
         from .app import KanaMemory
-        pending = self.store.load_session_progress(lane="main", lazy_questions=True)
-        available = summarize_queue_availability(self.store, pending,
-            allowed_kinds=KanaMemory._queue_kinds(self, pending) if pending else None)
-        counts = self.learning_store.counts(self.learning_preferences()["enabled"])
-        if available.ready_count or available.blocked_count or counts["ready"] or counts["instruction"]:
-            return True
-        courses = self._study_path_unqueued_courses()
-        return bool(courses["ready"] or courses["instruction"]
-                    or self._study_path_unqueued_reviews(pending)["ready"]
-                    or self.study_path_service().next_reference_entry() is not None)
+        from .home_runtime import home_inputs, home_service
+        service = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending))
+        return service.can_continue(home_inputs(self))
 
     def study_path_service(self):
         # Learner IDs, not the number of rows, detect restored/custom courses.
-        ids = self.store.queries.course_ids()
-        key = (id(self.store), ids)
+        store = self.store
+        ids = store.queries.course_ids()
+        # A registry change (library disabled/enabled) rebuilds the route too,
+        # as does a route enable/disable or personal route change.
+        from .study_routes import ROUTES_SETTING
+        from .route_mix.service import main_route_mix
+        from .learning_ui import KIND_GROUPS
+        view = self.learning_store.availability()
+        previous = getattr(self, "_study_path_service_value", None)
+        # Design 11 section 16 (M10): the main route mix of this data directory, kept by the service it
+        # replaces; a newly saved plan raises its generation, so the next call builds the mixed tree. Its M5
+        # floor follows the learner's kind switches (KIND_GROUPS, plain data for route_mix).
+        mix = main_route_mix(previous, getattr(store, "data_dir", None), KIND_GROUPS)
+        key = (id(self.store), ids, view.unavailable_ids, registry_service_key(getattr(view, "registry", None)),
+               routes_service_key(self.store.get_setting(ROUTES_SETTING, None)), getattr(mix, "generation", 0))
         if getattr(self, "_study_path_service_key", None) != key:
-            self._study_path_service_value = StudyPathService(self.repo, self.store, self.learning_store)
+            # The replaced service hands over its core route tree when the catalogue it was built from is unchanged.
+            self._study_path_service_value = StudyPathService(
+                self.repo, self.store, self.learning_store, previous=previous, route_mix=mix)
             self._study_path_service_key = key
         return self._study_path_service_value
 
+    async def prepare_main_route_mix(self):
+        """Startup warm-up, last step (design 11 section 16, M10): the main route mix plan of the current
+        derivation tree on a worker thread when it has none (route_mix.service); home is refreshed once
+        when one was saved. Only the started app (_background_assembly) runs it, not fixtures or tools, and
+        never while a backup runs or the app closes; a failure, getting the service included, returns False."""
+        if (not getattr(self, "_background_assembly", False) or getattr(self, "_backup_closing", False)
+                or getattr(self, "_backup_busy", False) or not callable(getattr(self, "study_path_service", None))):
+            return False
+        from .route_mix.service import prepare_in_background
+        saved = await prepare_in_background(self.study_path_service)
+        if saved and self.page == "home" and not getattr(self, "_backup_closing", False):
+            self.refresh_home_actions()
+        return saved
+
+    def cancel_main_route_mix(self):
+        """App exit (on_exit): a running main route mix computation stops and saves nothing."""
+        mix = getattr(getattr(self, "_study_path_service_value", None), "route_mix", None)
+        if mix is not None:
+            mix.cancel()
+
+    def study_arrangement(self):
+        """Preferences, study clock and share dispatcher of the current store (design 12 WP-B3).
+
+        Created on first use and replaced when the store object is replaced,
+        like study_path_service: the clock keeps memory of one connection.
+        The focus scope catalogue reaches the routes through this app's
+        study_path_service (asked only when a route or node scope is resolved).
+        """
+        from .arrangement.assembly import StoreArrangement
+        from .extra_practice_runtime import extra_inputs
+        current = getattr(self, "_study_arrangement_value", None)
+        if current is None or not current.serves(self.store):
+            current = self._study_arrangement_value = StoreArrangement.for_store(
+                self.store, routes=lambda: self.study_path_service(), repository=lambda: self.repo,
+                **extra_inputs(self))
+        return current
+
+    def _focus_scope(self):
+        """The focus scope's content for this dispatch (design 12 H3), None without one: one settings read.
+
+        The scope acts through "继续学习" (lead decision, design 12 section 12 WP-H):
+        the single-lane entries (课程学习, a kana practice opened by itself) keep
+        their own order, as N2 says for 课程学习; so a kana practice resumed
+        directly while a round is still being collected may freeze that round's
+        kana order without the scope (known, accepted).
+        """
+        return StudyPathRuntimeMixin.study_arrangement(self).scope_contents()
+
     def refresh_study_home(self):
-        from . import ui_components as u
+        """Redraw the home page in place: show_home, Back, the startup check, 取消重点, the timer (design 13 S3).
+
+        The home service reads and computes everything first (home_runtime
+        builds it for the stores of now); only then does the page clear and
+        draw the two slots and the stats label (F1: a read that fails leaves
+        the drawn home as it was). The showing keeps the moment it drew, and
+        the timer is armed exactly as before: only while home is shown, with
+        the current page token. The App's own methods (the queue kinds, the
+        word-drill count and entry, the timer) are called on its class, as
+        before the move.
+        """
         from .app import KanaMemory
-        from .study_path_ui import progress_text
-        path = self.study_path_service().overview()
-        pending = self.store.load_session_progress(lane="main", lazy_questions=True)
-        availability = summarize_queue_availability(self.store, pending,
-            allowed_kinds=KanaMemory._queue_kinds(self, pending) if pending else None)
-        counts = self.learning_store.counts(self.learning_preferences()["enabled"])
-        courses = self._study_path_unqueued_courses()
-        for name in ("ready", "waiting", "instruction", "blocked", "blocked_content", "blocked_material"):
-            counts[name] += courses[name]
-        unqueued = self._study_path_unqueued_reviews(pending)
-        ready = availability.ready_count + counts["ready"] + unqueued["ready"]
-        waiting = availability.waiting_count + counts["waiting"] + unqueued["waiting"]
-        dues = [date for date in (availability.next_due_utc, counts.get("next_due_at_utc"),
-                                 unqueued["next_due"], courses["next_due"]) if date]
-        self._home_queue_due = min(app_clock.localize(datetime.fromisoformat(d)) for d in dues) if dues else None
-        next_section = path.get("next_section")
-        self.home_action_slot.clear()
-        self.home_secondary_slot.clear()
-        has_work = (ready or counts["instruction"] or waiting or availability.blocked_count or counts["disabled"] or counts["blocked"]
-                    or counts.get('blocked_material') or counts.get('blocked_input') or path["in_progress_sections"])
-        if has_work:
-            caption = "继续学习"
-            handler = self.continue_study_path
-            lines = []
-            if ready:
-                lines.append(f"现在可答 {ready} 题")
-            if counts["instruction"]:
-                lines.append(f"可开始初学 {counts['instruction']} 项")
-            if waiting:
-                lines.append(f"待到期 {waiting} 题")
-            if counts["blocked_content"]:
-                lines.append(f"课程待前置 {counts['blocked_content']} 项")
-            if counts.get('blocked_material'):
-                lines.append(f"材料待核 {counts['blocked_material']} 题")
-            if counts.get('blocked_input'):
-                lines.append(f"待调整作答方式 {counts['blocked_input']} 题")
-            if availability.blocked_count:
-                lines.append(f"假名待前置 {availability.blocked_count} 题")
-            hint = " · ".join(lines) or "接着已加入的内容往下学。"
-        elif next_section:
-            caption, hint = "开始下一小节", next_section["title"]
-            handler = lambda w, identity=next_section["id"]: self._add_study_sections([identity])
-        else:
-            caption, hint, handler = "查看学习路线", "主线内容已完成初学，继续按时复习。", self.show_study_path
-        self.home_action_slot.add(u.label("接着学" if has_work else "开始今天的学习", size=22, bold=True, color=u.GREEN),
-            u.label(hint, size=14, color=u.MUTED), u.button(caption, handler, primary=True, multiline=True))
-        if waiting and self._home_queue_due:
-            self.home_action_slot.add(u.label("最近复习 " + self._home_queue_due.strftime("%m月%d日 %H:%M"), size=12, color=u.MUTED))
-        if has_work and next_section:
-            self.home_secondary_slot.add(u.button("学习下一小节 · " + next_section["title"],
-                lambda w, identity=next_section["id"]: self._add_study_sections([identity]), multiline=True))
-        self.home_secondary_slot.add(u.row(u.button("学习路线", self.show_study_path, flex=1, margin_right=8),
-                                          u.button("添加内容", self.show_study_path_add, flex=1)))
-        from .practice_round import planned_round_running
-        if planned_round_running(self.store):
-            self.home_secondary_slot.add(u.button("重新计算今日队列", self.recompute_study_queue, multiline=True))
-        if getattr(self, "_study_queue_recomputed", False):
-            self._study_queue_recomputed = False
-            self.home_secondary_slot.add(u.label("已按当前进度重新计算；原题、草稿和复习时间不变。",
-                                                 size=12, color=u.MUTED))
-        word_pending = self.store.load_session_progress(lane="word_romaji", lazy_questions=True)
-        word_count = KanaMemory._word_drill_remaining(self, word_pending)
-        self.home_secondary_slot.add(u.button(f"继续单词拼写（剩 {word_count} 词）" if word_count else "单词拼写",
-            lambda w: KanaMemory.open_home_word_drill(self), multiline=True))
-        self.home_stats_label.text = (f"主线初学完成 {path['required_completed_sections']}/{path['required_total_sections']} 节"
-            f" · 已加入 {path['required_added_sections']} 节")
-        if path.get("required_partial_sections"):
-            self.home_stats_label.text += f" · 部分加入 {path['required_partial_sections']} 节"
+        from .home.ui.home_page import draw_home
+        from .home_runtime import home_inputs, home_service, run_action
+        model = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending),
+                             word_count=lambda pending: KanaMemory._word_drill_remaining(self, pending)
+                             ).overview(home_inputs(self))
+        showing = self._study_home
+
+        def on_action(action, widget=None):
+            return run_action(self, action, widget, open_word_drill=lambda: KanaMemory.open_home_word_drill(self))
+        draw_home(model, action_slot=showing.action_slot, secondary_slot=showing.secondary_slot,
+                  stats_label=showing.stats_label, on_action=on_action)
+        showing.next_change_at = model.next_change_at
         KanaMemory._arm_home_review_refresh(self)
+
+    def press_home_primary(self, widget, action, *, route, no_new_content, add_next):
+        """The home page's primary button: the arrangement's two first-time questions, then ``action``.
+
+        Only this button asks them (continue_study_path and the other entry
+        points do not): a fresh install first sees the orientation screen
+        (design 12 UI1), which goes on to ``action`` after 确定; under breadth
+        the first press of this launch with nothing new to start shows the
+        B10 prompt once. The presenter decides; this only navigates.
+        ``add_next(section_id, route_id)``: the prompt's section may lie in the
+        focus scope's route (SectionNote.route_id).
+        """
+        presenter = StudyPathRuntimeMixin.study_arrangement(self).presenter
+        if presenter.orientation_due():
+            presenter.showed_orientation()
+            return self.show_study_orientation(then=lambda: action(widget))
+        note = presenter.continue_prompt(route, no_new_content=no_new_content)
+        if note is not None:
+            presenter.prompted_continue()
+            return self.show_section_prompt(note=note, on_add_and_start=lambda: add_next(note.section_id, note.route_id),
+                                            on_review_first=lambda: action(widget))
+        return action(widget)
+
+    @page_view()
+    def show_section_prompt(self, widget=None, *, note, on_add_and_start, on_review_first, **kwargs):
+        """B10's once-per-launch prompt before the first "继续学习" (page: arrangement/ui/section_note)."""
+        from .arrangement.ui.section_note import section_prompt
+        self.screen("study_section_prompt", "继续学习",
+                    *section_prompt(note, on_add_and_start=on_add_and_start, on_review_first=on_review_first))
+
+    def progress_rows(self, course_due):
+        """The records page's "时间与进度" block (design 12 UI4); ``course_due`` as the page already counted it."""
+        from .arrangement.model import RouteFacts
+        from .arrangement.ui.progress_block import progress_block
+        from .domain import _utc
+        from .study_path_display import active_route, route_kwargs
+        service = self.study_path_service()
+        facts = RouteFacts.from_overview(service.overview(**route_kwargs(active_route(service))))
+        model = StudyPathRuntimeMixin.study_arrangement(self).presenter.progress_model(
+            _utc(None), facts, course_due=course_due,
+            course_exclude=self.learning_store.availability().unavailable_ids)
+        return progress_block(model)
 
     def recompute_study_queue(self, widget=None, **kwargs):
         """Drop only this run's frozen main-lane order and rebuild the view.
@@ -274,56 +460,296 @@ class StudyPathRuntimeMixin:
         the next continue re-captures order from current long-term state.
         """
         from .practice_round import restart
-        # show_home already activated the main lane; the lane is also named
-        # explicitly, so a word-drill plan is never replaced from here.
-        if getattr(self, "page", None) != "home":
+        # Offered on the route page (review 2026-11-08 section 7 item 7: an
+        # internal action off the home page). The lane is named explicitly,
+        # so a word-drill plan is never replaced from here.
+        if getattr(self, "page", None) != "study_path":
             return
         restart(self.store, lane="main")
         self._study_queue_recomputed = True
-        self.refresh_home_actions()
+        self.show_study_path()
+
+    def record_course_due(self):
+        """Course questions due now for the records page: queued plus not yet
+        queued, long-term (a running planned round does not limit it); the home
+        service counts them (design 13 S3)."""
+        from .home_runtime import home_service
+        return home_service(self).course_due()
+
+    def study_queue_controls(self):
+        """Route-page controls of recompute_study_queue: the button while a
+        planned round runs, and the one-shot notice after a recompute."""
+        from . import ui_components as u
+        from .practice_round import planned_round_running
+        controls = []
+        if planned_round_running(self.store, lane="main"):
+            controls.append(u.button(RECOMPUTE_QUEUE_TEXT, self.recompute_study_queue, multiline=True))
+        if getattr(self, "_study_queue_recomputed", False):
+            self._study_queue_recomputed = False
+            controls.append(u.label(RECOMPUTED_NOTICE, size=12, color=u.MUTED))
+        return controls
 
     @page_view(replace=True)
     def continue_study_path(self, widget=None, *, _checkpoint_saved=False, **kwargs):
-        from . import ui_components as u
+        """One continue action; a failure ends on an actionable page, then re-raises."""
         from .app import KanaMemory
+        before = {name: getattr(self, name, None) for name in ("_learning_item", "_learning_current")}
+        notice = take_enrollment_notice(self)
+        try:
+            result = StudyPathRuntimeMixin._continue_study_path(self, KanaMemory, widget,
+                                                                _checkpoint_saved=_checkpoint_saved, **kwargs)
+            place_enrollment_notice(self, notice)
+            return result
+        except Exception as exc:
+            if not getattr(exc, "_continue_error_shown", False):
+                from .diagnostic_events import record_error
+                record_error("kana_queue_assembly", "read", exc)
+                show_continue_error(self, exc, title=_course_title(self, before))
+            # Still raised: the handler/crash log keeps the code location.
+            raise
+
+    def _continue_study_path(self, KanaMemory, widget=None, *, _checkpoint_saved=False, **kwargs):
+        """Body of continue_study_path; KanaMemory is passed in by its caller."""
+        from . import ui_components as u
         from .domain import _utc
         from .review_dispatch import kana_resume_priority, stored_review_priority
+        resume = kwargs.get("_course_resume")
+        if resume is not None:
+            StudyPathRuntimeMixin._resume_course_dispatch(self, resume)
+            return
         if not _checkpoint_saved and self._checkpoint() is False:
             return
         if KanaMemory._activate_practice_lane(self, "main") is False:
             return
+        # Design 12 E1: an early batch of extra practice left by an earlier launch ends before anything is served.
+        from .extra_practice_runtime import end_left_early_batch
+        end_left_early_batch(self)
         from .practice_round import begin, sealed, seal, frozen_priority, native_key, mark_finished
         begin(self.store, restart_finished=not _checkpoint_saved)
-        self.learning_store.ensure_prerequisites()
-        service = self.study_path_service()
-        preferences = clean_preferences(getattr(self, "_practice_preferences", {}))
-        existing = self.store.load_session_progress(lane="main", lazy_questions=True)
-        kinds = (KanaMemory._queue_kinds(self, existing) if existing
-                 else enabled_preference_kinds(preferences))
-        queued = ({"session_id": existing["session_id"] if existing else None} if sealed(self.store)
-                  else service.ensure_kana_queue(kinds,
-            audio_available=bool(self.platform.tts_ready), handwriting_available=self.model_state == "ready",
-            lazy_questions=True))
-        if queued["session_id"]:
-            # Do not overwrite the previous policy of an existing legacy queue.
-            pending = self.store.load_session_progress(lazy_questions=True)
-            if pending and self.store.get_setting("practice_queue_kinds", {}).get("session_id") != queued["session_id"]:
-                KanaMemory._set_queue_kind_policy(self, queued["session_id"], kinds)
-        for item in self.learning_store.items_needing_questions():
-            self._queue_learning_questions(item)
+        # Personal-content head/hold reads share one index (WP7a) up to the
+        # queued course questions; writes run in transactions (read live) and
+        # any local write renews the index before the next lookup.
+        with self.learning_store.read_operation():
+            self.learning_store.ensure_prerequisites()
+            service = self.study_path_service()
+            preferences = clean_preferences(getattr(self, "_practice_preferences", {}))
+            existing = self.store.load_session_progress(lane="main", lazy_questions=True)
+            kinds = (KanaMemory._queue_kinds(self, existing) if existing
+                     else enabled_preference_kinds(preferences))
+            if sealed(self.store):
+                queued = {"session_id": existing["session_id"] if existing else None}
+            else:
+                audio, handwriting = bool(self.platform.tts_ready), self.model_state == "ready"
+                plan = kwargs.get("_kana_plan")
+                # WP5: assemble the kana queue on a worker connection when the app
+                # enabled it; this action then ends on a short wait page and resumes
+                # here with the plan (KanaMemory._finish_kana_queue_assembly).
+                if plan is None and KanaMemory._plan_kana_queue_in_background(self, service, kinds,
+                        audio_available=audio, handwriting_available=handwriting,
+                        attempt=kwargs.get("_kana_attempt", 0)):
+                    return
+                queued = service.ensure_kana_queue(kinds, audio_available=audio,
+                    handwriting_available=handwriting, lazy_questions=True, plan=plan)
+            if queued["session_id"]:
+                # Do not overwrite the previous policy of an existing legacy queue.
+                pending = self.store.load_session_progress(lazy_questions=True)
+                if pending and self.store.get_setting("practice_queue_kinds", {}).get("session_id") != queued["session_id"]:
+                    KanaMemory._set_queue_kind_policy(self, queued["session_id"], kinds)
+            self._queue_missing_learning_questions()
         pending = self.store.load_session_progress(lane="main", lazy_questions=True)
         now = _utc(None)
+        prepared_kana = None
+        # Design 12 H3: the focus scope orders both lanes when this round is collected.
+        scope = StudyPathRuntimeMixin._focus_scope(self)
         if pending and KanaMemory._queue_kinds(self, pending):
             pending = KanaMemory._reconcile_practice_kinds(self, pending)
             if pending is False:
                 return
             # Select the same eligible head that resume will display. This
             # keeps cross-lane ordering consistent with pauses and timed steps.
+            kinds = KanaMemory._queue_kinds(self, pending)
             pending = (None if pending.get("completed") else
-                       self.store.prepare_next_question(pending["session_id"], now=now, lazy_questions=True, fair_new=True))
+                       self.store.prepare_next_question(pending["session_id"], now=now, lazy_questions=True, fair_new=True,
+                                                        **({} if scope is None else {"scope_contents": scope})))
+            if isinstance(pending, dict):
+                prepared_kana = (pending, kinds)
+        # WP7a: in a sealed round, course candidate filtering/order runs on a
+        # worker with the frozen round snapshot; this action ends on the short
+        # wait page and resumes through _resume_course_dispatch.
+        if not kwargs.get("_course_inline") and StudyPathRuntimeMixin._course_current_in_background(
+                self, pending, now, prepared_kana):
+            return
+        # One read context for the rest of this synchronous action: course
+        # dispatch, protected-teaching probes and the course page share it.
+        with self.learning_store.read_operation(now=now) as read:
+            StudyPathRuntimeMixin._continue_dispatch(self, pending, now, read, service, prepared_kana, scope=scope)
+
+    def _course_current_in_background(self, pending, now, prepared_kana):
+        """Start the sealed-round course current() on a worker; True when this action waits.
+
+        Only with startup's background assembly, a running loop, real stores,
+        the main lane of an active sealed round, no open transaction and no
+        UI-bound example store (material checks would differ on the worker).
+        The wait page must not write: otherwise the inline path continues.
+        """
+        import asyncio
+        from .content import ContentRepository
+        from .domain import StudyStore
+        from .practice_round import RoundSnapshot
+        from .practice_worker import BackgroundTicket
+        if (not getattr(self, "_background_assembly", False) or not isinstance(self.repo, ContentRepository)
+                or skipped_teaching_ids(self)
+                or not isinstance(self.store, StudyStore) or self.store.in_transaction
+                or getattr(self.store, "practice_lane", "main") != "main"
+                or getattr(self.store, "_material_resources", (None, None))[1] is not None):
+            return False
+        snapshot = RoundSnapshot.capture(self.store)
+        if snapshot is None:
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        from .app import KANA_ASSEMBLY_PAGE
+        if (not show_continue_wait(self, KANA_ASSEMBLY_PAGE, loop)
+                or tuple(self.store.read_revision()) != snapshot.revision):
+            return False
+        ticket = BackgroundTicket.capture(self.page, self._page_token, self.store)
+        resume = CourseCurrentResume(ticket, snapshot, pending, now, prepared_kana,
+                                     tuple(self.learning_preferences()["enabled"]))
+        from .draft_debounce import create_task_awake
+        self._course_dispatch_task = create_task_awake(
+            loop, StudyPathRuntimeMixin._finish_course_current(self, resume))
+        return True
+
+    async def _finish_course_current(self, resume):
+        """Back on the UI thread: use the worker value only if page, data and round still match."""
+        from dataclasses import replace
+        from .practice_worker import run_in_background
+        value, error = _UNREAD, None
+        try:
+            value = await run_in_background(self.repo, self.store, course_current_in_worker, {
+                "snapshot": resume.snapshot, "enabled_kinds": list(resume.enabled_kinds),
+                "now": resume.now.isoformat(), "fair_new": True})
+        except Exception as exc:
+            error = exc
+            from .diagnostic_events import record_error
+            record_error("kana_queue_assembly", "read", exc)
+        if not resume.ticket.page_current(getattr(self, "page", None), self._page_token):
+            return
+        cancel_continue_wait(self)
+        try:
+            if (error is None and resume.ticket.data_current(self.store) and resume.snapshot.current(self.store)
+                    and tuple(self.learning_preferences()["enabled"]) == resume.enabled_kinds):
+                self.continue_study_path(_checkpoint_saved=True, _course_resume=replace(resume, value=value))
+            else:
+                # Changed data/plan or a worker error: recompute the whole action inline.
+                self.continue_study_path(_checkpoint_saved=True, _course_inline=True)
+        except Exception as exc:
+            continue_failed(self, exc, source="async_task")
+
+    def _resume_course_dispatch(self, resume):
+        """Finish the paused continue with the seeded course head (inline if refused)."""
+        enabled = list(resume.enabled_kinds)
+        with self.learning_store.read_operation(now=resume.now) as read:
+            seeded = (resume.snapshot.current(self.store)
+                      and read.seed(self.learning_store.current_key(enabled, resume.now, fair_new=True),
+                                    resume.value, resume.ticket.revision))
+            if seeded:
+                StudyPathRuntimeMixin._continue_dispatch(self, resume.pending, resume.now, read,
+                                                         self.study_path_service(), resume.prepared_kana)
+                return
+        self.continue_study_path(_checkpoint_saved=True, _course_inline=True)
+
+    def _sealed_round_left_out(self, current, read):
+        """The course state "disabled" only means the sealed round could not queue that work.
+
+        A sealed round queues no course question, so content still in teaching
+        without a pending question reads as "disabled" although its kinds are
+        open (after startup's archive, in a round a practice batch started:
+        native note N12). The unqueued preview without the round limit tells
+        the two apart: work the current settings can offer is left to the
+        next round; only really closed kinds keep the "题型已关闭" page.
+        """
+        if not current or current.get("type") != "disabled":
+            return False
+        from .home_runtime import home_service
+        courses = home_service(self).unqueued_courses(projection=read, round_limited=False)
+        return bool(courses["ready"] or courses["instruction"] or courses["waiting"])
+
+    def _share_dispatch(self, pending, current, normal_kana, kana_priority, course_priority, now, read, skipped,
+                        kana_kinds, scope=None):
+        """Breadth-first dispatch (design 12 B2-B5): (protected (lane, head) or None, lane or None).
+
+        A protected head is already promoted and is shown like the protected
+        first-teaching block; a lane is the review side the share rule chose;
+        (None, None) leaves the existing lane choice. An explicit start keeps
+        its rule; heads below tier 3 (feedback, drafts, short steps, context
+        words, a promoted block) and new work without a due review keep the
+        existing order. The study clock reads every answer from the store.
+        ``scope``: the focus scope's content (design 12 H2), None for none:
+        the kinds with a candidate inside it share the time first.
+        """
+        from .arrangement.model import Unit
+        from .arrangement.sources.candidates import DispatchCandidates, LaneHead
+        from .first_teaching_dispatch import explicit_start_head
+        from .practice_round import promote, promote_initial, sealed
+        enabled = self.learning_preferences()["enabled"]
+        if not sealed(self.store):
+            explicit = explicit_start_head(self.store, self.learning_store, normal_kana, current,
+                enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read)
+            if explicit and not (explicit[0] == "course" and explicit[1].get("type") == "instruction"
+                                 and explicit[1].get("content", {}).get("id") in skipped):
+                lane, head = explicit
+                if lane == "course":
+                    promote_initial(self.store, course_id=head["question"]["id"])
+                elif pending:
+                    promote_initial(self.store, session_id=pending["session_id"], question=head["question"])
+                return explicit, None
+        normal = self.store.teaching_queries.choose_lane(kana_priority, course_priority,
+                     course_started=bool(current and current.get("new_dispatch_continue")))
+        priority = kana_priority if normal == "kana" else course_priority if normal == "course" else None
+        if priority is None or priority[0] != 3:
+            return None, None
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self)
+        source = DispatchCandidates(self.store, self.learning_store, pending=pending,
+            kana=LaneHead(normal_kana, kana_priority) if normal_kana else None,
+            course=LaneHead(current, course_priority) if course_priority is not None else None,
+            enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read, skipped=skipped,
+            memo=arrangement.probe_memo, scope_contents=scope)
+        dispatcher = arrangement.dispatcher
+        decision = dispatcher.decide(source, now)
+        if decision.unit is Unit.NEW:
+            lane, head = decision.candidate.ref
+            # A kana candidate needs a session: without one kana_kinds is () and
+            # the kana teaching probes return None, so "pending is None" below is
+            # never reached with a kana candidate.
+            if (promote(self.store, course_id=head["question"]["id"]) if lane == "course" else
+                    pending is not None and promote(self.store, session_id=pending["session_id"],
+                                                    question=head["question"])):
+                return (lane, head), None
+            # Not registered in this round: new content has no candidate now.
+            source.promotion_refused()
+            decision = dispatcher.decide(source.without_new(), now)
+        return None, {Unit.COURSE: "course", Unit.KANA: "kana"}.get(decision.unit)
+
+    def _continue_dispatch(self, pending, now, read, service, prepared_kana, scope=_UNREAD):
+        """``scope``: the focus scope's content the caller read for this action (None: no scope); read here when not given."""
+        from . import ui_components as u
+        from .app import KanaMemory
+        from .review_dispatch import kana_resume_priority, stored_review_priority
+        from .practice_round import sealed, seal, frozen_priority, native_key, mark_finished
+        if scope is _UNREAD:
+            scope = StudyPathRuntimeMixin._focus_scope(self)
+        scoped = {} if scope is None else {"scope_content_ids": scope}
+        # Sealed before this action: its queueing step could add nothing.
+        sealed_before = sealed(self.store)
         availability = summarize_queue_availability(self.store, pending,
             allowed_kinds=KanaMemory._queue_kinds(self, pending) if pending else None, now=now)
-        current = self.learning_store.current(self.learning_preferences()["enabled"], now=now, fair_new=True)
+        skipped = skipped_teaching_ids(self)
+        current = self.learning_store.current(self.learning_preferences()["enabled"], now=now, fair_new=True,
+                                              projection=read, **({"skip_teaching_ids": skipped} if skipped else {}),
+                                              **scoped)
         kana_priority = None
         if availability.ready_count and pending:
             q = pending["questions"][pending["question_index"]]
@@ -355,41 +781,72 @@ class StudyPathRuntimeMixin:
                         "pending": pending, "state": pending.get("state", {}),
                         "session_id": pending["session_id"], "question_index": pending["question_index"],
                         "dispatch_priority": kana_priority} if pending and kana_priority else None)
-        protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
-            enabled_kinds=self.learning_preferences()["enabled"],
-            kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now))
-        if protected:
-            from .practice_round import promote_initial
-            protected_lane, protected_head = protected
-            if protected_lane == "course":
-                promote_initial(self.store, course_id=protected_head["question"]["id"])
-            elif pending:
-                promote_initial(self.store, session_id=pending["session_id"], question=protected_head["question"])
+        share_lane = None
+        if StudyPathRuntimeMixin.study_arrangement(self).dispatcher.active():
+            # Breadth first (design 12 B2-B5): new content and review share time.
+            protected, share_lane = StudyPathRuntimeMixin._share_dispatch(
+                self, pending, current, normal_kana, kana_priority, course_priority, now, read, skipped,
+                KanaMemory._queue_kinds(self, pending) if pending else (), scope)
+        else:
+            protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
+                enabled_kinds=self.learning_preferences()["enabled"],
+                kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now, projection=read,
+                **({} if scope is None else {"scope": scope})))
+            if (protected and protected[0] == "course" and protected[1].get("type") == "instruction"
+                    and protected[1].get("content", {}).get("id") in skipped):
+                protected = None
+            if protected:
+                from .practice_round import promote_initial
+                protected_lane, protected_head = protected
+                if protected_lane == "course":
+                    promote_initial(self.store, course_id=protected_head["question"]["id"])
+                elif pending:
+                    promote_initial(self.store, session_id=pending["session_id"], question=protected_head["question"])
         seal(self.store)
+        # Proof that the kana head prepared above is still the stored queue:
+        # taken after seal (an in-memory step), checked again before reuse.
+        token = (PreparedKana.capture(self.store, *prepared_kana) if prepared_kana and not protected else None)
+        reuse = {} if token is None else {"_prepared": token}
         if protected:
             protected_lane, protected_head = protected
             if protected_lane == "course":
-                self.continue_learning(_selected_current=protected_head)
+                self.continue_learning(_selected_current=protected_head, _projection=read)
             else:
                 selected_question = protected_head["question"]
                 self.resume_practice(preserve_audio=True, _first_teaching=True,
                     _first_teaching_targets=protected_head.get('teaching_targets', {(selected_question.content_id,selected_question.script)}))
             return
-        lane = self.store.teaching_queries.choose_lane(kana_priority, course_priority,
-                           course_started=bool(current and current.get("new_dispatch_continue")))
+        # Design 12 H2: between the two lane heads the one inside the focus scope first (no scope: unchanged).
+        from .arrangement.sources.candidates import head_in_scope
+        inside = ({} if scope is None else {"inside": (head_in_scope("kana", normal_kana, scope),
+                                                       head_in_scope("course", current, scope))})
+        if inside.get("inside") == (False, True) and normal_kana:
+            # H4: an opened kana teaching block outside the scope goes on, as an opened course block does.
+            from .first_teaching_kana import opened_block
+            inside["kana_started"] = opened_block(self.store, normal_kana["question"], now)
+        lane = share_lane or self.store.teaching_queries.choose_lane(kana_priority, course_priority,
+                           course_started=bool(current and current.get("new_dispatch_continue")), **inside)
         if lane == "kana":
-            self.resume_practice(preserve_audio=True)
+            self.resume_practice(preserve_audio=True, **reuse)
         elif lane == "course":
-            self.continue_learning()
+            self.continue_learning(_projection=read)
         else:
-            if not availability.ready_count and not availability.waiting_count and not current:
+            # Design 12 E1: while extra practice is on, an end or "only waiting" outcome is its next step.
+            from .extra_practice_runtime import extra_button_rows, take_over
+            # A round with nothing left ends, also when all that remains is
+            # course work it could not admit (never a dead "题型已关闭" page).
+            left_out = sealed_before and StudyPathRuntimeMixin._sealed_round_left_out(self, current, read)
+            if not availability.ready_count and not availability.waiting_count and (not current or left_out):
                 mark_finished(self.store)
                 from .practice_round import finished
                 if finished(self.store):
+                    if take_over(self):
+                        return
                     self.screen("learning_done", "本轮已保存",
                         u.label("作答记录和复习安排已保存。", size=17),
                         u.button("开始新一轮", self.continue_study_path, primary=True),
                         *self.learning_next_content_controls(),
+                        *extra_button_rows(self),
                         u.button("回到今日", self.leave_learning))
                     return
             # Reference-only symbols have no made-up independent audio cards.
@@ -401,13 +858,16 @@ class StudyPathRuntimeMixin:
                   and (not current or not current.get("due_at_utc")
                        or datetime.fromisoformat(availability.next_due_utc)
                        < datetime.fromisoformat(current["due_at_utc"]))):
-                self.resume_practice()
+                if not take_over(self):
+                    self.resume_practice(**reuse)
             elif current:
-                self.continue_learning()
+                if not (current.get("type") == "waiting" and take_over(self)):
+                    self.continue_learning(_projection=read)
             elif availability.waiting_count:
-                self.resume_practice()
+                if not take_over(self):
+                    self.resume_practice(**reuse)
             elif availability.blocked_count:
-                self.resume_practice()
+                self.resume_practice(**reuse)
             elif any(e["kind"] == "kana" and e["state"] in {"added", "started"}
                      for stage in path["stages"] for unit in stage["units"] for section in unit["sections"] for e in section["entries"]):
                 self.screen("learning_wait", "暂时没有可进行的假名题型",
@@ -415,9 +875,25 @@ class StudyPathRuntimeMixin:
                     u.button("题型与练习设置", self.show_practice_hub, primary=True),
                     u.button("语音与手写模型", self.show_settings),
                     u.button("学习路线", self.show_study_path), u.button("回到今日", self.leave_learning))
+            elif take_over(self):
+                return
             else:
+                # Design 10 section 8.2: the current route's next section;
+                # without one, the other routes' next sections (at most 3).
+                from .study_path_display import active_route, other_route_rows, route_key, route_kwargs
+                from .arrangement.model import RouteFacts
+                from .arrangement.ui.section_note import section_note_rows
+                current = active_route(service)
+                shown = path if route_key(current) is None else service.overview(route_id=current)
+                others = other_route_rows(service, current) if not shown.get("next_section") else ()
+                # B10 under breadth: the next section first (presenter.end_note is None otherwise).
+                note = StudyPathRuntimeMixin.study_arrangement(self).presenter.end_note(RouteFacts.from_overview(shown))
                 self.screen("learning_done", "本次学习已保存",
+                    *(section_note_rows(note, on_add_next=lambda identity: self._add_study_sections(
+                        [identity], **route_kwargs(note.route_id or current))) if note is not None else ()),
                     u.label("可以继续下一小节，或稍后按复习安排回来。", size=17),
-                    *self._path_next_controls(path),
+                    *(self._path_next_controls(shown, route_id=current, others=others) if route_key(current) or others
+                      else self._path_next_controls(path)),
+                    *extra_button_rows(self),
                     u.button("题型与练习设置", self.show_practice_hub),
                     u.button("回到今日", self.leave_learning))

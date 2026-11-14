@@ -10,16 +10,42 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import threading
+from typing import NamedTuple
 import unicodedata
 
 FORMAT = "kanamemory-example-pack"
 VERSION = 1
 SETTING = "shared_examples_v1"
-MAX_BYTES = 16 * 1024 * 1024
+# A full export that includes the bundled catalogue (17.56 MiB compact with the
+# 2026-11-09 vocabulary expansion) must import again, so the normalized budget
+# equals the raw import allowance.
+MAX_BYTES = 32 * 1024 * 1024
 MAX_IMPORT_BYTES = 32 * 1024 * 1024
 MAX_EXAMPLES = 20000
 MAX_REFERENCES = 50000
 HINT_KINDS = ("meaning", "reading", "rule")
+
+
+class PackLimits(NamedTuple):
+    """Normalized (compact, sorted UTF-8 JSON) size and row budget of one pack."""
+    max_bytes: int
+    max_examples: int
+    max_references: int
+    size_message: str
+
+
+# Every pack a learner can supply or keep: import/export text, the saved
+# custom setting, backups, AI drafts and personal versions. The default.
+LEARNER_LIMITS = PackLimits(MAX_BYTES, MAX_EXAMPLES, MAX_REFERENCES,
+                            "例句材料超过 32 MiB 上限；请分批导入。")
+# Only the catalogue ExampleStore builds from installed content and read-only
+# merged views (bundled + learner) that are never saved. Measured 2026-11-09:
+# shipped 14.13 MiB / 7,727 examples / 29,128 references; with the staged
+# 5,600 new-word rows 17.56 MiB / 13,318 / 34,727. Bundled plus a maximal
+# learner pack (32 MiB / 20,000 / 50,000) stays near half of each.
+BUNDLED_LIMITS = PackLimits(96 * 1024 * 1024, 80000, 250000,
+                            "随包例句或合并后的例句视图超过 96 MiB 上限。")
 
 
 def empty_pack():
@@ -27,15 +53,15 @@ def empty_pack():
             "examples": [], "references": []}
 
 
-def _encoded(value):
+def _encoded(value, limits=LEARNER_LIMITS):
     try:
         encoded = json.dumps(value, ensure_ascii=False, sort_keys=True,
                              allow_nan=False, separators=(",", ":"))
         size = len(encoded.encode("utf-8"))
     except (ValueError, TypeError, RecursionError, UnicodeError) as exc:
         raise ValueError("例句材料必须是有效的 JSON。") from exc
-    if size > MAX_BYTES:
-        raise ValueError("例句材料超过 16 MiB 上限；请分批导入。")
+    if size > limits.max_bytes:
+        raise ValueError(limits.size_message)
     return encoded
 
 
@@ -132,14 +158,25 @@ def _validate_lexical_provenance(example):
             _string(url, "lexical_provenance.sources", 4000)
 
 
-def validate_pack(pack, known_targets=None):
+def validate_pack(pack, known_targets=None, *, limits=LEARNER_LIMITS):
     """Return a detached validated v1 snapshot; never repair anchors by guessing.
 
     `known_targets=None` permits old references whose course is currently absent,
     so backup restoration does not make their text unusable. Import callers can
     supply the current catalogue to catch mistyped targets before activation.
+    `limits` stays LEARNER_LIMITS for anything a learner supplies or keeps;
+    only ExampleStore's bundled catalogue and its unsaved merged views pass
+    BUNDLED_LIMITS (personal_graph.project_pack projects such a view).
     """
-    _encoded(pack)
+    _encoded(pack, limits)
+    _validate_records(pack, known_targets, limits)
+    value = deepcopy(pack)
+    value.setdefault("status", "reviewed")
+    return value
+
+
+def _validate_records(pack, known_targets, limits):
+    """Everything validate_pack checks except the encoded size; no copy."""
     if not isinstance(pack, dict) or pack.get("format") != FORMAT:
         raise ValueError("不是受支持的例句材料格式。")
     if type(pack.get("version")) is not int or pack["version"] != VERSION:
@@ -147,8 +184,8 @@ def validate_pack(pack, known_targets=None):
     if pack.get("status", "reviewed") not in {"reviewed", "draft"}:
         raise ValueError("例句材料审核状态不正确。")
     examples, references = pack.get("examples"), pack.get("references")
-    if (not isinstance(examples, list) or len(examples) > MAX_EXAMPLES
-            or not isinstance(references, list) or len(references) > MAX_REFERENCES):
+    if (not isinstance(examples, list) or len(examples) > limits.max_examples
+            or not isinstance(references, list) or len(references) > limits.max_references):
         raise ValueError("例句或关联数量超出范围。")
     targets = None if known_targets is None else {
         value["id"] if isinstance(value, dict) else value for value in known_targets}
@@ -216,9 +253,125 @@ def validate_pack(pack, known_targets=None):
         weight = ref.get("weight", 1.0)
         if type(weight) not in {int, float} or not math.isfinite(weight) or not 0 < weight <= 10:
             raise ValueError("关联权重必须大于 0 且不超过 10。")
-    value = deepcopy(pack)
-    value.setdefault("status", "reviewed")
-    return value
+
+
+# sha256 of the canonical encoding of catalogues that passed BUNDLED_LIMITS
+# validation in this process, newest last. Only fingerprints, never packs.
+_CATALOGUE_FINGERPRINTS = {}
+_CATALOGUE_CACHE_SIZE = 4
+_CATALOGUE_LOCK = threading.Lock()
+
+
+def _validated_catalogue(pack):
+    """Validate the catalogue ExampleStore just built from installed content.
+
+    The caller hands over ownership, so no detached copy is made. Its record
+    checks run once per process for each content fingerprint (the same
+    canonical encoding the size limit measures); any change to the catalogue
+    is a new fingerprint and is checked in full. Learner packs never come here.
+    """
+    encoded = _encoded(pack, BUNDLED_LIMITS)
+    fingerprint = hashlib.sha256(encoded.encode("utf-8")).digest()
+    with _CATALOGUE_LOCK:
+        known = fingerprint in _CATALOGUE_FINGERPRINTS
+    if not known:
+        _validate_records(pack, None, BUNDLED_LIMITS)
+        with _CATALOGUE_LOCK:
+            _CATALOGUE_FINGERPRINTS.pop(fingerprint, None)
+            _CATALOGUE_FINGERPRINTS[fingerprint] = None
+            while len(_CATALOGUE_FINGERPRINTS) > _CATALOGUE_CACHE_SIZE:
+                del _CATALOGUE_FINGERPRINTS[next(iter(_CATALOGUE_FINGERPRINTS))]
+    pack.setdefault("status", "reviewed")
+    return pack
+
+
+# The validated catalogue for the latest input, shared read-only by every
+# ExampleStore (their public accessors return detached copies). The key holds
+# the builder functions themselves (a monkeypatched or reloaded builder is a
+# new key), the content pack identity and a sha256 of the canonical encoding
+# of the exact items passed to the builder.
+_MEMO = {}
+_MEMO_BUILDING = {}
+_MEMO_LOCK = threading.Lock()
+
+
+def _catalogue_key(items):
+    from . import content_pack, example_catalogue, material_review
+    content = (str(content_pack.pack_path()), content_pack.effective_catalogue().token)
+    builders = (example_catalogue.bundled_example_pack, example_catalogue.expansion_rows,
+                example_catalogue._REVIEWED_BACKGROUND, material_review.review_data,
+                material_review.reviewed_pack, material_review.example_source_item)
+    # digest_default: catalogue views hash like the plain items they stand for; templates an extension
+    # library reads on demand enter by their checksum, without being read (design 08 section 6.5).
+    from .content_library_index import digest_default
+    encoded = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=digest_default)
+    return builders, content, hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).digest()
+
+
+def bundled_catalogue(store, items):
+    """The validated bundled catalogue for these targets, built once per input.
+
+    Thread-safe: a startup worker and the UI thread asking for the same input
+    share one build (the second caller waits). Failures are not remembered.
+    The result is read-only; never mutate it or its rows.
+    """
+    from .content_library_index import isolated_copy
+    from .personal_content_versions import original_source
+    # isolated_copy + owned: the same independent originals as original_source's own deepcopy, except that
+    # templates of a catalogue view stay shared / deferred (the example builder reads, never changes them).
+    originals = [original_source(store, isolated_copy(item), owned=True) for item in items]
+    key = _catalogue_key(originals)
+    while True:
+        with _MEMO_LOCK:
+            if key in _MEMO:
+                return _MEMO[key]
+            pending = _MEMO_BUILDING.get(key)
+            if pending is None:
+                pending = _MEMO_BUILDING[key] = threading.Event()
+                break
+        pending.wait()
+    try:
+        from . import example_catalogue
+        pack = _validated_catalogue(example_catalogue.bundled_example_pack(originals))
+        with _MEMO_LOCK:
+            _MEMO.clear()  # one catalogue at a time: a new input replaces the old
+            _MEMO[key] = pack
+        return pack
+    finally:
+        with _MEMO_LOCK:
+            _MEMO_BUILDING.pop(key, None)
+        pending.set()
+
+
+def clear_catalogue_cache():
+    """Forget the memoized catalogue and its validation fingerprints."""
+    with _MEMO_LOCK:
+        _MEMO.clear()
+    with _CATALOGUE_LOCK:
+        _CATALOGUE_FINGERPRINTS.clear()
+
+
+def targets_state(store, learning_store):
+    """Cheap signature of the state example targets derive from.
+
+    Besides the process-constant catalogue, ExampleUIMixin.example_targets_available
+    depends only on enrolled content outside the catalogue (an enrolled
+    catalogue lesson keeps its catalogue entry), the custom example pack, AI
+    material state, material usage and the personal-version generation
+    (bumped by every personal change and hold). Equal signatures mean the
+    same targets, so the App keeps one ExampleStore without re-listing the
+    catalogue per page or per enrolled lesson.
+    """
+    from .ai_materials import SETTING as AI_MATERIALS
+    from .learning_content import catalogue_ids
+    from .material_usage import SETTING as USAGE
+    from .personal_content_versions import GENERATION
+    db = getattr(learning_store, "_db", None)
+    catalogue = catalogue_ids()
+    rows = () if db is None else tuple(
+        (row[0], row[1]) for row in db.execute("SELECT content_id,revision FROM learning_content ORDER BY rowid")
+        if row[0] not in catalogue)
+    return (rows, *(store.get_setting(key, None) for key in (SETTING, AI_MATERIALS, USAGE, GENERATION)))
 
 
 def serialize_pack(pack, known_targets=None):
@@ -243,7 +396,8 @@ def parse_pack(raw, known_targets=None, *, require_status=False):
     return validate_pack(pack, known_targets)
 
 
-def _merge_packs(*packs):
+def _merge_packs(*packs, limits=LEARNER_LIMITS):
+    """Additive union; BUNDLED_LIMITS only for unsaved views containing the bundle."""
     result = empty_pack()
     for field in ("examples", "references"):
         values = {}
@@ -260,24 +414,48 @@ def _merge_packs(*packs):
                     raise ValueError("已有标识对应不同材料，不能覆盖：" + row["id"])
                 values[row["id"]] = deepcopy(row)
         result[field] = list(values.values())
-    return validate_pack(result)
+    return validate_pack(result, limits=limits)
 
 
 class ExampleStore:
     def __init__(self, store, learning_store, items, bundled_pack=None, lexical_review=None):
         self.store, self.learning_store = store, learning_store
-        self.items = {item["id"]: deepcopy(item) for item in items}
+        # Kept for the session. isolated_copy is deepcopy for plain items; a catalogue view keeps its shared
+        # (or deferred) templates instead of every lesson's templates being held here a second time.
+        from .content_library_index import isolated_copy
+        self.items = {item["id"]: isolated_copy(item) for item in items}
         self.lexical_review = lexical_review
         self._lexical_cache = None
+        # The bundled catalogue and merged views use BUNDLED_LIMITS; the custom
+        # setting and every import/save path below keep LEARNER_LIMITS.
         if bundled_pack is None:
-            from .example_catalogue import bundled_example_pack
-            from .personal_content_versions import original_source
-            bundled_pack = bundled_example_pack([original_source(store, item) for item in self.items.values()])
-        self.bundled = validate_pack(bundled_pack)
+            self.bundled = bundled_catalogue(store, self.items.values())
+        else:
+            self.bundled = validate_pack(bundled_pack, limits=BUNDLED_LIMITS)
         if self.bundled["status"] != "reviewed":
             raise ValueError("随包例句必须完成审核。")
         self._token = None
         self.refresh()
+
+    def warm(self):
+        """Compute the lazy read-only indexes now (a worker build's last step)."""
+        self._ensure_fresh()
+        self._lexical_resources()
+        self._graph_resources()
+        return self
+
+    def attach(self, store, learning_store, lexical_review=None):
+        """Adopt a service built on a worker thread's own connections.
+
+        `lexical_review` must read the same lexicon file as the builder's (the
+        lexical index is data read from it). Resources and indexes stay; the
+        next read refreshes on the new connection, which drops the personal
+        graph on a generation change and re-merges only changed custom
+        material (refresh compares its exact JSON).
+        """
+        self.store, self.learning_store, self.lexical_review = store, learning_store, lexical_review
+        self._token = self._progress_read = None
+        return self
 
     def _database_token(self):
         db = getattr(self.store, "_db", None)
@@ -339,7 +517,8 @@ class ExampleStore:
             merged = self.bundled
         else:
             from .material_review import reviewed_pack
-            merged = _merge_packs(self.bundled, reviewed_pack(active))
+            # Read-only index view; `custom` above was held to LEARNER_LIMITS.
+            merged = _merge_packs(self.bundled, reviewed_pack(active), limits=BUNDLED_LIMITS)
         self.custom = custom
         self._graph_cache = None
         self.active_custom = active
@@ -490,7 +669,8 @@ class ExampleStore:
         extra, by_example, _ = self._lexical_resources()
         pack = {**empty_pack(), "examples": list(extra.values()),
                 "references": [r for refs in by_example.values() for r in refs]}
-        return _merge_packs(self.bundled, reviewed_pack(self.active_custom), pack)
+        # Unsaved view of everything; serialize_pack/import keep LEARNER_LIMITS.
+        return _merge_packs(self.bundled, reviewed_pack(self.active_custom), pack, limits=BUNDLED_LIMITS)
 
     def prepare_import(self, pack, *, known_targets=None):
         """Validate an additive import without writing, for larger transactions.
@@ -511,12 +691,14 @@ class ExampleStore:
         for row in incoming["references"]:
             if row["id"] in external_refs and row != external_refs[row["id"]]:
                 raise ValueError("已有标识对应不同材料，不能覆盖：" + row["id"])
-        # Check all collisions and anchors before writing the one setting.
+        # The learner's own union first, under LEARNER_LIMITS (its message names
+        # the learner budget). Then all collisions and anchors in the view that
+        # includes the bundle, before writing the one setting.
+        merged = _merge_packs(self.custom, incoming)
         from .material_review import reviewed_pack
-        _merge_packs(self.bundled, reviewed_pack(self.custom), reviewed_pack(incoming))
+        _merge_packs(self.bundled, reviewed_pack(self.custom), reviewed_pack(incoming), limits=BUNDLED_LIMITS)
         bundled_examples = {row["id"]: row for row in self.bundled["examples"]}
         bundled_refs = {row["id"]: row for row in self.bundled["references"]}
-        merged = _merge_packs(self.custom, incoming)
         # An imported ref may use bundled text; keep that immutable text snapshot
         # with it so exports remain independently valid across future releases.
         used = {row["example_id"] for row in merged["references"] if row["id"] not in bundled_refs}
@@ -748,15 +930,36 @@ class ExampleStore:
                         **({"surface": True} if surface else {})})
         return result
 
+    def _library_unavailable(self):
+        """Learned content no enabled library serves (08 section 8.2); shared inside read_operation."""
+        read = getattr(self, "_progress_read", None)
+        token = self._database_token() if read is not None else None
+        if token is not None and read.get("library_token") == token:
+            return read["library_unavailable"]
+        value = self.store.library_unavailable_ids()
+        if token is not None:
+            read.update(library_token=token, library_unavailable=value)
+        return value
+
+    def reference_targets(self, example_id):
+        """Target ids of references(example_id), without the display copies."""
+        self._ensure_fresh()
+        return {ref["target_id"] for ref in self._references_for(example_id)}
+
     def references(self, example_id, current_target_id=None):
         self._ensure_fresh()
         result = []
         sources = self._references_for(example_id)
         statuses = self._statuses(ref["target_id"] for ref in sources)
+        unavailable = self._library_unavailable() if sources else frozenset()
         for source in sources:
             ref = deepcopy(source)
             ref["target"] = deepcopy(self.items.get(ref["target_id"], {
                 "id": ref["target_id"], "title": ref["target_id"], "unavailable": True}))
+            if ref["target_id"] in unavailable:
+                # Shown like any unavailable target; never a candidate to open or link.
+                ref["target"]["unavailable"] = True
+                ref["library_unavailable"] = True
             ref["status"] = statuses[ref["target_id"]]
             ref["familiarity"] = ref["status"]["familiarity"]
             ref["hints"] = self.display_hints(ref, current_target_id, _status=ref["status"])

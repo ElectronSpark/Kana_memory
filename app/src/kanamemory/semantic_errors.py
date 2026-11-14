@@ -3,11 +3,35 @@
 Raw observations live in the existing evidence ledger. Two disposable indexes
 are rebuilt on restore/retraction; neither is another scheduler or backup format.
 """
+from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 import math
 
 from .material_review import fingerprint
+
+_SHARED = {}
+
+
+def _assessments():
+    """Read-only shared copy of the installed annotations; never mutate it.
+
+    load_namespace deep-copies the whole namespace per call, and for_question
+    runs per question/keystroke. Reuse one copy until the pack file changes.
+    The loader is looked up per call so a replaced loader is honoured.
+    """
+    from . import content_pack
+    loader, path = content_pack.load_namespace, content_pack.pack_path()
+    try:
+        stat = path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        stamp = None
+    key = (loader, str(path), stamp)
+    entry = _SHARED.get('entry')
+    if entry is None or entry[0] != key:
+        entry = _SHARED['entry'] = (key, loader('semantic_assessments', {}))
+    return entry[1]
 
 
 def question_key(q):
@@ -22,12 +46,12 @@ def for_question(q):
         return None
     if any(len(str(q.get(k, ''))) > 1000 for k in ('prompt', 'answer')):
         return None  # The raw evidence snapshot must preserve the full source anchor.
-    from .content_pack import load_namespace
-    pack = load_namespace('semantic_assessments', {})
+    pack = _assessments()
     entry = pack.get('questions', {}).get(question_key(q))
     if not entry or pack.get('version') != 1:
         return None
-    value = {**entry, 'version': 1, 'source_key': fingerprint([q['target_id'], q['prompt'], q['answer']]),
+    # The shared pack copy is read-only; the descriptor gets its own slice.
+    value = {**deepcopy(entry), 'version': 1, 'source_key': fingerprint([q['target_id'], q['prompt'], q['answer']]),
              'target_id': q['target_id'], 'ability': q['ability'], 'content_revision': str(q['revision'])}
     validate(value)
     if any(set(o['wrong_answers']) & set(q.get('accepted_answers', [q['answer']]))
@@ -88,10 +112,9 @@ def snapshot(q, result):
 
 def pattern_label(target_id, pattern):
     """Presentation metadata never changes a frozen observation or its score."""
-    from .content_pack import load_namespace
     key = fingerprint([target_id, pattern.get('ability'), pattern.get('condition_revision'),
                        pattern.get('conditions'), pattern.get('error_code')])
-    value = load_namespace('semantic_assessments', {}).get('labels', {}).get(key)
+    value = _assessments().get('labels', {}).get(key)
     if (not isinstance(value, dict) or set(value) != {'title', 'context'}
             or any(not isinstance(value[k], str) or not 1 <= len(value[k]) <= 160 for k in value)):
         return None

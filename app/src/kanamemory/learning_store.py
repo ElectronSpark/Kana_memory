@@ -6,6 +6,7 @@ No old card, session, word-spelling evidence or due date is migrated in place.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -28,6 +29,12 @@ WORD_LISTENING_ADMISSION = "word_listening_admission_v1"
 WORD_LISTENING_DAILY_LIMIT = 8
 RETRIEVAL_DELAY_SECONDS = 60
 FEEDBACK_COOLDOWN_SECONDS = 60
+# An unscored (unresolved) answer is a queue pause, never an FSRS update:
+# re-asking within a minute only repeats the same unscorable attempt.
+UNRESOLVED_RETRY_SECONDS = 4 * 3600
+# Backup bound for any saved cooldown: legacy +60 s up to the next local
+# midnight after a second consecutive unresolved (<= 25 h with DST).
+RETRY_COOLDOWN_MAX_SECONDS = 36 * 3600
 MAX_JSON_BYTES = 2 * 1024 * 1024
 FAMILIARITY_LEVELS = {"new", "some", "familiar"}
 
@@ -38,6 +45,141 @@ class _ExposureTimes(dict):
     retention = None
     confirmation = None
     additional_teaching = None
+
+
+class _LearningRead:
+    """Course read projection shared by one synchronous continue/home action.
+
+    Only LearningStore.read_operation creates it; callers pass it explicitly
+    (``projection=``). It is not a database snapshot, a long-lived cache or a
+    write permission: a write on this connection or a commit by another one
+    (StudyStore.read_revision) drops every memoized value and renews the
+    business moment, transaction reads bypass it, and exiting the action ends
+    it. Memoized current()/counts() results are detached deep copies.
+    """
+
+    def __init__(self, learning, now):
+        self.learning = learning
+        self.now = _utc(now)
+        self.active = True
+        self._token = learning.store.read_revision()
+        self._values = {}
+        # >0 while a memoized current()/counts() computes: that call already
+        # validated the revision, and these reads never write.
+        self._depth = 0
+
+    def check_active(self):
+        if not self.active:
+            raise RuntimeError("Learning read operation has ended")
+
+    def _usable(self):
+        """Current revision is unchanged; otherwise reset and renew the moment."""
+        self.check_active()
+        if self.learning.store.in_transaction:
+            return False
+        if self._depth:
+            return True
+        token = self.learning.store.read_revision()
+        if token != self._token:
+            self._token, self._values = token, {}
+            self.now = _utc(None)
+        return True
+
+    def moment(self, now=None):
+        """The explicit time, else this action's business moment (renewed after writes)."""
+        if now is not None:
+            return _utc(now)
+        self._usable()
+        return self.now
+
+    def _shared(self, key, compute):
+        if not self._usable():
+            return compute()
+        if key not in self._values:
+            self._values[key] = compute()
+        return self._values[key]
+
+    def ready_ids(self):
+        from .learning_dependencies import independent_ready_ids
+        return self._shared(("ready_ids",), lambda: frozenset(independent_ready_ids(self.learning)))
+
+    def exposure_times(self, now):
+        return self._shared(("exposure_times", now.isoformat()),
+                            lambda: self.learning.content_exposure_times(now))
+
+    def ability_states(self):
+        return self._shared(("ability_states",), self.learning.store.teaching_queries.ability_states)
+
+    def content_rows(self):
+        return self._shared(("content_rows",), self.learning._dispatch_content_rows)
+
+    def availability(self):
+        """This action's content availability (08 section 8.1); live inside transactions."""
+        return self._shared(("availability",),
+                            lambda: availability_view(self.learning.store, ready_ids=self.ready_ids))
+
+    def personal_settings(self):
+        """Every personal-content head/hold key of this revision, or None to read live.
+
+        personal_content_versions/_compensation/personal_question look the
+        attached operation up on their store argument (``_learning_read``);
+        transaction reads and ended operations read each key live. Values equal
+        per-key get_setting reads (WP7a). Per lookup only this connection's
+        change counter is compared (no SQL): a local write or rollback renews
+        the revision and drops every memoized value, as _usable does. Another
+        connection's commit is seen at this operation's next revision check
+        (moment/ready_ids/current/counts entry), the same bound as values
+        shared inside one memoized current()/counts() computation.
+        """
+        db = self.learning._db
+        if not self.active or db.in_transaction:
+            return None
+        key = ("personal_settings",)
+        # The change counter as StudyStore.read_revision counts it (the token's first part), without its SQL.
+        changes = db.total_changes - getattr(self.learning.store, "_untracked_changes", 0)
+        if self._depth == 0 and (key not in self._values or changes != self._token[0]):
+            self._usable()
+        if key not in self._values:
+            from .personal_content_versions import SettingIndex
+            self._values[key] = SettingIndex(db)
+        return self._values[key]
+
+    def seed(self, key, value, revision):
+        """Publish a value computed elsewhere (a worker connection) for ``key``.
+
+        Accepted only while this connection's revision still equals the
+        ``revision`` the value was requested at and no transaction is open;
+        returns False otherwise (the caller then computes inline as usual).
+        The key gets the same practice-round suffix as result().
+        """
+        from copy import deepcopy
+        from .practice_round import course_order_token
+        if not self._usable() or self._depth or self._token != tuple(revision):
+            return False
+        self._values[(*key, course_order_token(self.learning.store))] = deepcopy(value)
+        return True
+
+    def result(self, key, compute):
+        """Memoize a dispatch/count result for this revision and practice-round plan."""
+        from copy import deepcopy
+        from .practice_round import course_order_token
+        if not self._usable():
+            return compute()
+        key = (*key, course_order_token(self.learning.store))
+        if key not in self._values:
+            before = self._token
+            self._depth += 1
+            try:
+                value = compute()
+            finally:
+                self._depth -= 1
+            # The plan can change while computing (first freeze); key it after.
+            # Never publish a value computed across a revision change.
+            key = (*key[:-1], course_order_token(self.learning.store))
+            if self._usable() and self._token == before:
+                self._values[key] = deepcopy(value)
+            return value
+        return deepcopy(self._values[key])
 
 
 def _dump(value):
@@ -165,6 +307,67 @@ def tables_present(db):
     return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='learning_meta'").fetchone() is not None
 
 
+def _attached_read(store):
+    read = getattr(store, "_learning_read", None)
+    return read if read is not None and read.active else None
+
+
+_DICTIONARY_WORDS = {}  # (lexicon path, word id) -> bool; the dictionary layer is a process constant
+
+
+def _word_lookup(store):
+    """Dictionary-layer existence check through the store's bound content repository."""
+    repo = getattr(store, "_material_resources", (None, None))[0]
+    if repo is None or not callable(getattr(repo, "get_word", None)):
+        return None
+    key = str(getattr(repo, "path", id(repo)))
+
+    def exists(word_id):
+        cached = _DICTIONARY_WORDS.get((key, word_id))
+        if cached is None:
+            cached = _DICTIONARY_WORDS[(key, word_id)] = repo.get_word(word_id) is not None
+        return cached
+    return exists
+
+
+def availability_view(store, *, ready_ids=None):
+    """One read of content availability: catalogue, registry and learned rows.
+
+    The effective catalogue is a process constant; ``store.content_catalogue``
+    (a content_availability.Catalogue or a callable returning one) replaces it
+    for isolated stores such as synthetic test learners. Without a saved
+    registry (content_libraries_v1, written on every App start) nothing is
+    orphaned and no catalogue or row is read. No row is written.
+    """
+    from .content_availability import Catalogue, build_view
+    from .content_library_service import availability_catalogue, registry_for_availability
+    registry = registry_for_availability(store)
+    if registry is None:
+        return build_view(Catalogue(), None, ())
+    source = getattr(store, "content_catalogue", None)
+    if source is None:
+        catalogue = availability_catalogue(word_exists=_word_lookup(store))
+    else:
+        catalogue = source() if callable(source) else source
+    db = store._db
+    rows = []
+    if tables_present(db):
+        ids = [row[0] for row in db.execute("SELECT content_id FROM learning_content ORDER BY rowid")]
+        outside = [cid for cid in ids if cid not in catalogue.ids and cid.startswith("word:")]
+        dictionary = set()
+        for start in range(0, len(outside), 400):
+            chunk = outside[start:start + 400]
+            dictionary.update(row[0] for row in db.execute(
+                "SELECT content_id FROM learning_content WHERE content_id IN (%s) "
+                "AND json_extract(content_json,'$.dictionary_only')=1" % ",".join("?" * len(chunk)), chunk))
+        rows = [{"content_id": cid, "dictionary_only": cid in dictionary} for cid in ids]
+    return build_view(catalogue, registry, rows, ready_ids=ready_ids)
+
+
+class GuidedQuestionUnavailable(LookupError):
+    """Diagnostic marker: no guided example of this kind can be built now."""
+
+
 class LearningStore:
     def __init__(self, store):
         self.store = store
@@ -183,6 +386,49 @@ class LearningStore:
         if self._db.in_transaction:
             raise RuntimeError("Learning writes require their own transaction")
         self._db.execute("BEGIN IMMEDIATE")
+
+    @contextmanager
+    def read_operation(self, *, now=None):
+        """Share course read projections inside one synchronous action only.
+
+        Pass the yielded object explicitly as ``projection=`` to current/counts
+        and their dispatch helpers. It never crosses await/threads/actions;
+        writes keep their own transactions and re-validate current rows.
+        """
+        read = _LearningRead(self, now)
+        # Personal-content readers receive the StudyStore, not this object:
+        # attach the operation there for its lifetime (nested ones restore).
+        previous = getattr(self.store, "_learning_read", None)
+        self.store._learning_read = read
+        try:
+            yield read
+        finally:
+            read.active = False
+            read._values = {}
+            self.store._learning_read = previous
+
+    def availability(self, *, projection=None):
+        """AvailabilityView of the attached/explicit read operation, else a live read."""
+        read = projection if projection is not None else _attached_read(self.store)
+        if read is not None:
+            return read.availability()
+        from .learning_dependencies import independent_ready_ids
+        return availability_view(self.store, ready_ids=lambda: independent_ready_ids(self))
+
+    def require_available(self, content_ids, items=None):
+        """Write gate (08 section 8.1): refuse unavailable content before any row changes.
+
+        Re-reads availability (live inside the caller's transaction). ``items``
+        maps content id -> snapshot for content without progress yet.
+        """
+        if isinstance(content_ids, str):
+            content_ids = (content_ids,)
+        view = self.availability()
+        for content_id in content_ids:
+            item = (items or {}).get(content_id) or {}
+            reason = view.refusal(content_id, {"dictionary_only": item.get("dictionary_only") is True})
+            if reason:
+                raise ValueError(reason)
 
     def enroll(self, items, now=None, *, selected_abilities=None,
                _after_enroll=None, _after_enroll_with_ids=None):
@@ -232,6 +478,8 @@ class LearningStore:
         added = []
         with self._db:
             self._transaction()
+            # 08 section 7.3: no enrollment or added ability for unavailable content.
+            self.require_available([item["id"] for item, _ in normalized], {item["id"]: item for item, _ in normalized})
             for item, encoded in normalized:
                 cid = item["id"]
                 exists = self._db.execute("SELECT 1 FROM learning_content WHERE content_id=?", (cid,)).fetchone()
@@ -259,12 +507,18 @@ class LearningStore:
                 _after_enroll_with_ids(self._db, tuple(added))
         return added
 
-    def admit_word_listening(self, now=None, *, daily_limit=WORD_LISTENING_DAILY_LIMIT):
+    def admit_word_listening(self, now=None, *, daily_limit=WORD_LISTENING_DAILY_LIMIT, enabled_kinds=None):
         """Give studied words their listening unit in small daily batches.
 
         Each unit starts with the same deferred teaching as any added ability,
         so nothing lands in the review queue at once and no due date moves.
+        A batch-introduced word instead needs its listening gate open (四之二):
+        every earlier admitted, enabled ability formally passed, and at least
+        one formal pass, so a word nobody answered is never "studied".
         """
+        def batch_open(content_id):
+            gate = self.batch_ability_gate(content_id, enabled_kinds)
+            return gate is not None and bool(gate['passed']) and 'listening' not in gate['closed']
         from .app_clock import localize
         now = _utc(now)
         today = localize(now).date().isoformat()
@@ -276,7 +530,10 @@ class LearningStore:
             used = state.get("count", 0) if state.get("date") == today else 0
             remaining = daily_limit - used
             admitted = []
-            for content in (_teaching.word_listening_candidates(self._db, remaining) if remaining > 0 else ()):
+            unavailable = self.availability().unavailable_ids
+            for content in (_teaching.word_listening_candidates(self._db, remaining, batch_open=batch_open) if remaining > 0 else ()):
+                if content["id"] in unavailable:
+                    continue
                 if _teaching.append(self._db, content, ["listening"], now):
                     admitted.append(content["id"])
             if admitted:
@@ -339,7 +596,6 @@ class LearningStore:
         teaching flow without pretending that it was a previously learned card.
         Replaying the original choice is harmless, even after real review began.
         """
-        from .learning_dependencies import has_started_answer
         now = _utc(now)
         if type(title_answer_exposed) is not bool:
             raise ValueError("Title exposure must be a boolean")
@@ -354,6 +610,7 @@ class LearningStore:
                 raise KeyError(content_id)
             if expected_introduction_id is not None and expected_introduction_id != row["introduction_id"]:
                 raise ValueError("The introduction is no longer current")
+            self.require_available(content_id)
             abilities = set(_teaching.abilities(self._db, row))
             if set(levels) != abilities:
                 raise ValueError("Choose familiarity separately for every enrolled ability")
@@ -363,15 +620,12 @@ class LearningStore:
                 if previous.get("levels") != levels:
                     raise ValueError("Initial familiarity has already been saved")
                 return self.instruction_item(content_id, instruction_scope)
-            if row["stage"] != "intro" or checkpoint.get("guide_answer") is not None or any(self._db.execute(
-                    "SELECT 1 FROM learning_event WHERE unit_id=? LIMIT 1", (_unit_id(content_id, a),)).fetchone() for a in abilities):
+            # The same rule as the batch cards (_intro_started): what a check of this lesson left is not a start.
+            has_events, has_draft = self._intro_started(content_id, abilities)
+            if row["stage"] != "intro" or checkpoint.get("guide_answer") is not None or has_events:
                 raise ValueError("This content has already started learning")
-            for pending in self._db.execute("""SELECT q.draft_json,q.result_json,u.ability FROM learning_question q
-                    JOIN learning_unit u ON u.unit_id=q.unit_id WHERE u.content_id=? AND q.status='pending'""", (content_id,)):
-                if pending['ability'] not in abilities:
-                    continue
-                if pending["result_json"] is not None or has_started_answer(_load(pending["draft_json"])):
-                    raise ValueError("An existing answer or draft must be preserved")
+            if has_draft:
+                raise ValueError("An existing answer or draft must be preserved")
             route = ("full" if "new" in levels.values() else "compact" if "some" in levels.values()
                      or checkpoint.get("instruction_exposed_at_utc")
                      or checkpoint.get("supports_initial_familiarity") is not True else "diagnostic")
@@ -417,6 +671,461 @@ class LearningStore:
             _teaching.update(self._db, row, checkpoint_json=_dump(checkpoint))
         return self.instruction_item(content_id, instruction_scope)
 
+    # Batch introduction (dormant): intro_batch owns the rules,
+    # intro_batch_state the cursor setting; this store owns each transaction.
+
+    def _intro_started(self, content_id, abilities):
+        """Any real event, submitted result or started draft in this scope.
+
+        What a check of the lesson left behind is not a start (检查掌握情况 on
+        a lesson that is enrolled but not yet begun): the check's own question
+        (id ``diagnostic:…``) with an unscheduled observation, or still
+        pending with an answer or a draft. Those rows stay exactly as they
+        are; counting them refused the first familiarity choice for good, and
+        继续学习 kept returning to a page that could not be completed
+        (native12). A scheduled review is a start whoever asked the question.
+        """
+        db = self._db
+        from .learning_dependencies import has_started_answer
+        if any(db.execute("""SELECT 1 FROM learning_event WHERE unit_id=?
+                AND NOT (role<>'primary' AND substr(question_id,1,11)='diagnostic:') LIMIT 1""",
+                          (_unit_id(content_id, a),)).fetchone() for a in abilities):
+            return True, False
+        for pending in db.execute("""SELECT q.draft_json,q.result_json,u.ability FROM learning_question q
+                JOIN learning_unit u ON u.unit_id=q.unit_id WHERE u.content_id=? AND q.status='pending'
+                AND substr(q.question_id,1,11)<>'diagnostic:'""", (content_id,)):
+            if pending['ability'] in abilities and (
+                    pending["result_json"] is not None or has_started_answer(_load(pending["draft_json"]))):
+                return False, True
+        return False, False
+
+    def _intro_batch_view(self, row):
+        db = self._db
+        abilities = set(_teaching.abilities(db, row))
+        has_events, has_draft = self._intro_started(row['content_id'], abilities)
+        return {"content_id": row['content_id'], "family": row['family'],
+                "domain": _load(row['content_json']).get('domain'),
+                "instruction_scope": dict(row).get('instruction_scope'), "stage": row['stage'],
+                "checkpoint": _load(row['checkpoint_json']), "has_events": has_events,
+                "has_started_draft": has_draft,
+                "units": [{"instruction_ready": unit['instruction_ready'], "review_count": unit['review_count'],
+                           "scheduler_state": _load(unit['scheduler_state_json']), "due_at_utc": unit['due_at_utc']}
+                          for unit in db.execute('SELECT * FROM learning_unit WHERE content_id=?', (row['content_id'],))
+                          if unit['ability'] in abilities]}
+
+    def intro_batch_sizes(self):
+        from . import intro_batch_state
+        return intro_batch_state.read_sizes(self._db)
+
+    def set_intro_batch_sizes(self, sizes):
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        sizes = intro_batch.validate_sizes(sizes)
+        with db:
+            self._transaction()
+            intro_batch_state.write_sizes(db, sizes)
+        return sizes
+
+    def intro_batch(self):
+        from . import intro_batch_state
+        return intro_batch_state.read(self._db)
+
+    def _intro_batch_entry(self, state, content_id):
+        entry = next((e for e in (state or {}).get('entries', ()) if e['content_id'] == content_id), None)
+        if entry is None:
+            raise ValueError('This item is not in the current introduction batch')
+        return entry
+
+    def intro_batch_candidates(self, enabled_kinds, head_content_id, *, now=None, fair_new=False):
+        """Read-only: the dispatched head plus later eligible heads of its family.
+
+        Later heads come from current(teaching_only=True) probes restricted to
+        the remaining eligible items, so dispatch order and every head filter
+        (kinds, pauses, prerequisites, material blocks, timing) stay owned by
+        current(). Nothing is written; start_intro_batch re-validates.
+        """
+        from . import intro_batch
+        from .assessment_policy import teaching_allowed
+        now = _utc(now)
+
+        def eligible(content_id):
+            row = self.instruction_row(content_id)
+            return row is not None and intro_batch.eligible(self._intro_batch_view(row)), row
+
+        ok, head = eligible(head_content_id)
+        if (not ok or not teaching_allowed(self.instruction_item(head_content_id), store=self.store)
+                or self.prerequisite_status(head_content_id)["blocked"]):
+            return []
+        family = head['family']
+        chosen = [head_content_id]
+        size = self.intro_batch_sizes()[family]
+        pool = set()
+        unavailable = self.availability().unavailable_ids
+        if head_content_id in unavailable:
+            return []
+        if size > 1:
+            for (cid,) in self._db.execute("""SELECT content_id FROM learning_content
+                    WHERE family=? AND stage='intro' AND content_id<>? ORDER BY rowid""",
+                    (family, head_content_id)).fetchall():
+                if cid not in unavailable and eligible(cid)[0]:
+                    pool.add(cid)
+        while len(chosen) < size and pool:
+            probe = self.current(enabled_kinds, now, fair_new=fair_new, teaching_only=True,
+                                 teaching_content_ids=frozenset(pool))
+            if not probe or probe.get("type") != "instruction":
+                break
+            content = probe["content"]
+            pool.discard(content["id"])
+            if content.get("instruction_scope") is None and teaching_allowed(content, store=self.store):
+                chosen.append(content["id"])
+        return chosen
+
+    def start_intro_batch(self, content_ids, *, family, now=None):
+        """Open one batch from already chosen eligible heads; no question or schedule."""
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        from .explicit_learning_start import claim
+        now = _utc(now)
+        if (not isinstance(content_ids, (list, tuple)) or not content_ids
+                or any(not isinstance(cid, str) for cid in content_ids) or len(set(content_ids)) != len(content_ids)):
+            raise ValueError('Choose distinct items for the introduction batch')
+        if family not in intro_batch.SIZE_RANGES:
+            raise ValueError('Batch introduction supports only words and grammar')
+        with db:
+            self._transaction()
+            if intro_batch_state.read(db) is not None:
+                raise ValueError('Another introduction batch is still open')
+            size = intro_batch_state.read_sizes(db)[family]
+            if len(content_ids) > size:
+                raise ValueError('The introduction batch is larger than its setting')
+            self.require_available(content_ids)
+            entries = []
+            for cid in content_ids:
+                row = self.instruction_row(cid)
+                if row is None:
+                    raise KeyError(cid)
+                if row['family'] != family or not intro_batch.eligible(self._intro_batch_view(row)):
+                    raise ValueError('This item has already started its own introduction')
+                first = intro_batch.first_ability(family, _teaching.original_abilities(db, cid))
+                _teaching.separate_untouched(db, row, first_ability=first)
+                row = self.instruction_row(cid)
+                checkpoint = _load(row['checkpoint_json'])
+                checkpoint[intro_batch.ROUTE_KEY] = intro_batch.ROUTE
+                _teaching.update(db, row, checkpoint_json=_dump(checkpoint))
+                claim(db, cid, introduction_id=row['introduction_id'], now=now)
+                entries.append({'content_id': cid, 'introduction_id': row['introduction_id'], 'ability': first})
+            state = {'version': 1, 'batch_id': uuid4().hex, 'family': family, 'created_at_utc': now.isoformat(),
+                     'size': size, 'entries': entries, 'phase': 'cards', 'card_index': 0, 'checks': [],
+                     'quiz_queue': []}
+            intro_batch_state.write(db, state)
+        return intro_batch_state.read(db)
+
+    def choose_intro_card(self, content_id, choice, *, expected_introduction_id, now=None, fair_new=False):
+        """"Next" or "I already know it": a self-report, never a review."""
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        from .explicit_learning_start import claim
+        now = _utc(now)
+        if choice not in intro_batch.CHOICES:
+            raise ValueError('Unknown introduction card choice')
+        with db:
+            self._transaction()
+            row = self.instruction_row(content_id)
+            if row is None:
+                raise KeyError(content_id)
+            if row['introduction_id'] != expected_introduction_id:
+                raise ValueError('The introduction is no longer current')
+            self.require_available(content_id)
+            abilities = list(_teaching.abilities(db, row))
+            levels = {a: 'new' if choice == 'next' else 'familiar' for a in abilities}
+            checkpoint = _load(row['checkpoint_json'])
+            previous = checkpoint.get('initial_familiarity')
+            if previous is not None:
+                if previous.get('levels') != levels or previous.get('source') != intro_batch.CARD_SOURCE:
+                    raise ValueError('Initial familiarity has already been saved')
+                return intro_batch_state.read(db)
+            state = intro_batch_state.read(db)
+            entry = self._intro_batch_entry(state, content_id)
+            if entry['introduction_id'] != expected_introduction_id:
+                raise ValueError('The introduction is no longer current')
+            if checkpoint.get(intro_batch.ROUTE_KEY) != intro_batch.ROUTE:
+                raise ValueError('This item keeps its original introduction route')
+            has_events, has_draft = self._intro_started(content_id, set(abilities))
+            if row['stage'] != 'intro' or checkpoint.get('guide_answer') is not None or has_events:
+                raise ValueError('This content has already started learning')
+            if has_draft:
+                raise ValueError('An existing answer or draft must be preserved')
+            state = intro_batch.card_done(state, content_id, choice)
+            route = 'full' if choice == 'next' else 'diagnostic'
+            profile = {'version': 1, 'evidence': 'self_report', 'levels': levels, 'route': route,
+                       'selected_at_utc': now.isoformat(),
+                       'diagnostic_state': 'active' if route == 'diagnostic' else 'not_requested',
+                       'source': intro_batch.CARD_SOURCE}
+            if route == 'diagnostic':
+                # The card itself showed the answer: reuse the exposure gate.
+                profile['title_answer_exposed'] = True
+            checkpoint['initial_familiarity'] = profile
+            checkpoint.pop('familiarity_draft', None)
+            _teaching.update(db, row, checkpoint_json=_dump(checkpoint))
+            claim(db, content_id, introduction_id=row['introduction_id'], now=now)
+            if route == 'diagnostic':
+                _teaching.update(db, row, stage='bridge', guided_at_utc=now.isoformat(),
+                    retrieval_at_utc=(now + timedelta(seconds=RETRIEVAL_DELAY_SECONDS)).isoformat())
+                _teaching.ready_units(db, row)
+                if fair_new:
+                    from .new_dispatch import completed
+                    completed(db, "course")
+            intro_batch_state.write(db, state)
+        return state
+
+    def start_intro_quiz(self, questions_by_content, *, rng=None):
+        """Freeze caller-built guided questions and move quiz items to guide."""
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        if not isinstance(questions_by_content, dict):
+            raise ValueError('Batch quiz questions must be grouped by item')
+        with db:
+            self._transaction()
+            state = intro_batch_state.read(db)
+            if state is None:
+                raise ValueError('No introduction batch is open')
+            if state['phase'] == 'quiz':
+                return state
+            if state['card_index'] != len(state['entries']):
+                raise ValueError('Finish every introduction card before the batch quiz')
+            if set(questions_by_content) != set(intro_batch.quiz_items(state)):
+                raise ValueError('Batch quiz questions do not match its items')
+            ids = {}
+            for cid in intro_batch.quiz_items(state):
+                entry = self._intro_batch_entry(state, cid)
+                row = self.instruction_row(cid)
+                if row is None or row['introduction_id'] != entry['introduction_id'] or row['stage'] != 'intro':
+                    raise ValueError('The introduction is no longer current')
+                if self.prerequisite_status(cid)["blocked"]:
+                    raise ValueError("请先学习前置内容，或明确选择已有前置知识。")
+                item = intro_batch.validate_item_state({'version': 1, 'batch_id': state['batch_id'],
+                    'questions': questions_by_content[cid], 'answers': {}, 'correct': False, 'draft': {}},
+                    content_id=cid)
+                checkpoint = _load(row['checkpoint_json'])
+                checkpoint[intro_batch.ITEM_KEY] = item
+                # Same transition body as advance_instruction('intro_done').
+                checkpoint['last_checkpoint'] = 'intro_done'
+                _teaching.update(db, row, stage='guide', checkpoint_json=_dump(checkpoint))
+                ids[cid] = [question['id'] for question in item['questions']]
+            state = intro_batch.start_quiz(state, ids, rng)
+            intro_batch_state.write(db, state)
+        return state
+
+    def _intro_quiz_row(self, state, content_id):
+        from . import intro_batch
+        if state is None or state['phase'] != 'quiz' or content_id not in intro_batch.quiz_items(state):
+            raise ValueError('This item has no open batch quiz')
+        entry = self._intro_batch_entry(state, content_id)
+        row = self.instruction_row(content_id)
+        if row is None or row['introduction_id'] != entry['introduction_id'] or row['stage'] != 'guide':
+            raise ValueError('The introduction is no longer current')
+        checkpoint = _load(row['checkpoint_json'])
+        item = intro_batch.validate_item_state(checkpoint.get(intro_batch.ITEM_KEY), content_id=content_id)
+        if item['batch_id'] != state['batch_id']:
+            raise ValueError('Batch quiz checkpoint belongs to another batch')
+        return row, checkpoint, item
+
+    def save_intro_quiz_draft(self, content_id, question_id, draft):
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        if not isinstance(draft, dict):
+            raise ValueError('Batch quiz draft must be an object')
+        with db:
+            self._transaction()
+            row, checkpoint, item = self._intro_quiz_row(intro_batch_state.read(db), content_id)
+            item['draft'] = {'question_id': question_id, 'state': dict(draft)}
+            checkpoint[intro_batch.ITEM_KEY] = intro_batch.validate_item_state(item, content_id=content_id)
+            _teaching.update(db, row, checkpoint_json=_dump(checkpoint))
+        return checkpoint[intro_batch.ITEM_KEY]
+
+    def answer_intro_quiz(self, content_id, question_id, *, answered_text, correct, now=None):
+        """Guided evidence only: no learning_question, event or scheduler write."""
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        now = _utc(now)
+        with db:
+            self._transaction()
+            state = intro_batch_state.read(db)
+            row, checkpoint, item = self._intro_quiz_row(state, content_id)
+            state, item = intro_batch.record_answer(state, item, content_id, question_id, correct, now,
+                                                    answer=answered_text, orientation=self.arrangement_orientation())
+            checkpoint[intro_batch.ITEM_KEY] = item
+            _teaching.update(db, row, checkpoint_json=_dump(checkpoint))
+            intro_batch_state.write(db, state)
+        return state, item
+
+    def complete_intro_batch(self, *, now=None, fair_new=False):
+        """Move every quiz item to bridge at once, as advance_instruction('guide_correct').
+
+        Design 12 Q2: an item settled without a correct answer (breadth first)
+        moves the same way with the 'bridge' checkpoint, as a passed guide does.
+        """
+        db = self._db
+        from . import intro_batch, intro_batch_state
+        now = _utc(now)
+        with db:
+            self._transaction()
+            state = intro_batch_state.read(db)
+            if state is None:
+                raise ValueError('No introduction batch is open')
+            rows = {cid: self._intro_quiz_row(state, cid) for cid in intro_batch.quiz_items(state)} \
+                if state['phase'] == 'quiz' else {}
+            if not intro_batch.finished(state, {cid: value[2] for cid, value in rows.items()}):
+                raise ValueError('Every batch item needs one correct quiz answer first')
+            for cid, (row, checkpoint, item) in rows.items():
+                if self.prerequisite_status(cid)["blocked"]:
+                    raise ValueError("请先学习前置内容，或明确选择已有前置知识。")
+                checkpoint['last_checkpoint'] = 'guide_correct' if item['correct'] else 'bridge'
+                _teaching.update(db, row, stage='bridge', guided_at_utc=now.isoformat(),
+                    retrieval_at_utc=(now + timedelta(seconds=RETRIEVAL_DELAY_SECONDS)).isoformat(),
+                    checkpoint_json=_dump(checkpoint))
+                _teaching.ready_units(db, row)
+            if fair_new and rows:
+                from .new_dispatch import completed
+                completed(db, "course")
+            intro_batch_state.clear(db)
+        return list(rows)
+
+    def batch_ability_gate(self, content_id, enabled_kinds=None):
+        """Read-only 四之二 ability gate of a batch_v1 item; None for every other item.
+
+        'closed' lists abilities (in intro_batch.ability_order) not yet open;
+        'closed_kinds' the reading kinds not yet offered (written reading
+        before one formal reading choice); 'passed' the abilities with formal
+        evidence. Formal is the learning_ready_evidence predicate: primary,
+        correct, unassisted and rated above Again. An ability whose unit
+        already has any event stays open, so re-enabling an earlier kind never
+        hides started work or due reviews. Nothing is written here.
+        """
+        from . import intro_batch
+        from .learning_questions import KIND_ABILITIES, question_kinds
+        db = self._db
+        row = db.execute('SELECT * FROM learning_content WHERE content_id=?', (content_id,)).fetchone()
+        if row is None or _load(row['checkpoint_json']).get(intro_batch.ROUTE_KEY) != intro_batch.ROUTE:
+            return None
+        units = db.execute('SELECT unit_id,ability,suspended FROM learning_unit WHERE content_id=?',
+                           (content_id,)).fetchall()
+        # A paused ability is skipped like a disabled one: it cannot be answered.
+        admitted = {unit['ability'] for unit in units if not unit['suspended']}
+        started = {unit['ability'] for unit in units if db.execute(
+            'SELECT 1 FROM learning_event WHERE unit_id=? LIMIT 1', (unit['unit_id'],)).fetchone()}
+        try:
+            available = question_kinds(self._item(row, []))
+        except (ValueError, KeyError, TypeError):
+            available = []
+        wanted = None if enabled_kinds is None else set(enabled_kinds)
+        enabled = [kind for kind in available if wanted is None or kind in wanted]
+        evidence = db.execute("""SELECT DISTINCT u.ability,q.kind FROM learning_event e
+            JOIN learning_unit u ON u.unit_id=e.unit_id JOIN learning_question q ON q.question_id=e.question_id
+            WHERE u.content_id=? AND e.role='primary' AND e.outcome='correct' AND e.assisted=0
+            AND e.rating>1""", (content_id,)).fetchall()
+        passed = {value[0] for value in evidence}
+        enabled_abilities = {KIND_ABILITIES[kind] for kind in enabled if kind in KIND_ABILITIES}
+        closed = {ability for ability in intro_batch.ability_order(row['family']) if ability not in started
+                  and not intro_batch.ability_open(row['family'], ability, admitted=admitted,
+                                                   enabled_abilities=enabled_abilities, formally_correct=passed)}
+        reading = [kind for kind in available if KIND_ABILITIES.get(kind) == 'reading']
+        closed_kinds = set(reading) - set(intro_batch.reading_kinds_open(
+            reading, enabled_kinds=enabled, formally_correct_kinds={value[1] for value in evidence}))
+        return {'closed': frozenset(closed), 'closed_kinds': frozenset(closed_kinds), 'passed': frozenset(passed)}
+
+    def _batch_gate_reader(self, enabled_kinds):
+        """One dispatch/count pass: is this pending row a not-yet-open ability?
+
+        A gated row is "not yet open": it is neither waiting nor disabled.
+        A submitted answer or a started draft is never hidden.
+        """
+        from . import intro_batch
+        from .learning_dependencies import has_started_answer
+        marked = {value[0] for value in self._db.execute(
+            "SELECT content_id FROM learning_content WHERE json_extract(checkpoint_json,'$.intro_route')=?",
+            (intro_batch.ROUTE,))}
+        gates = {}
+
+        def closed(row):
+            cid = row['content_id']
+            if cid not in marked or row['result_json'] is not None or has_started_answer(_load(row['draft_json'])):
+                return False
+            if cid not in gates:
+                gates[cid] = self.batch_ability_gate(cid, enabled_kinds)
+            return gates[cid] is not None and row['ability'] in gates[cid]['closed']
+        return closed
+
+    def is_batch_route(self, content_id):
+        """The item was introduced by batch cards (marker on its original row)."""
+        from . import intro_batch
+        row = self._db.execute('SELECT checkpoint_json FROM learning_content WHERE content_id=?',
+                               (content_id,)).fetchone()
+        return row is not None and _load(row['checkpoint_json']).get(intro_batch.ROUTE_KEY) == intro_batch.ROUTE
+
+    def open_batch_ability(self, content_id, *, instruction_scope, expected_introduction_id, enabled_kinds=None,
+                           now=None, fair_new=False):
+        """First appearance of a later ability of a batch item (四之二 item 4).
+
+        No intro page and no familiarity picker: write the same self-report
+        shape a "下一项" card writes (levels new, route full, source card) and
+        open the scope for its first formal question. Guards match
+        choose_intro_card. The transition body is the "known" path's
+        (bridge, guided_at, ready_units), but retrieval_at is now rather than
+        +60 s: this step shows no answer-bearing teaching, so there is no new
+        exposure to space. retrieval_ready stays honest because nothing was
+        exposed here; the sibling exposure cooldown (exposure_times) and the
+        说明卡 assisted rule keep guarding any card the learner does open.
+        """
+        db = self._db
+        from . import intro_batch
+        from .explicit_learning_start import claim
+        now = _utc(now)
+        if not instruction_scope:
+            raise ValueError('Only a later ability opens without its own introduction')
+        with db:
+            self._transaction()
+            row = self.instruction_row(content_id, instruction_scope)
+            if row is None:
+                raise KeyError(content_id)
+            if row['introduction_id'] != expected_introduction_id:
+                raise ValueError('The introduction is no longer current')
+            self.require_available(content_id)
+            original = db.execute('SELECT checkpoint_json FROM learning_content WHERE content_id=?',
+                                  (content_id,)).fetchone()
+            if _load(original[0]).get(intro_batch.ROUTE_KEY) != intro_batch.ROUTE:
+                raise ValueError('This item keeps its original introduction route')
+            levels = {instruction_scope: 'new'}
+            checkpoint = _load(row['checkpoint_json'])
+            previous = checkpoint.get('initial_familiarity')
+            if previous is not None:
+                if previous.get('levels') != levels or previous.get('source') != intro_batch.CARD_SOURCE:
+                    raise ValueError('Initial familiarity has already been saved')
+                return self.instruction_item(content_id, instruction_scope)
+            gate = self.batch_ability_gate(content_id, enabled_kinds)
+            if gate is not None and instruction_scope in gate['closed']:
+                raise ValueError('This ability opens after the earlier one is answered correctly')
+            has_events, has_draft = self._intro_started(content_id, {instruction_scope})
+            if (row['stage'] != 'intro' or has_events
+                    or any(key.startswith('guide_') for key in checkpoint)):
+                raise ValueError('This content has already started learning')
+            if has_draft:
+                raise ValueError('An existing answer or draft must be preserved')
+            if self.prerequisite_status(content_id, instruction_scope)['blocked']:
+                raise ValueError("请先学习前置内容，或明确选择已有前置知识。")
+            checkpoint['initial_familiarity'] = {'version': 1, 'evidence': 'self_report', 'levels': levels,
+                'route': 'full', 'selected_at_utc': now.isoformat(), 'diagnostic_state': 'not_requested',
+                'source': intro_batch.CARD_SOURCE}
+            checkpoint.pop('familiarity_draft', None)
+            _teaching.update(db, row, checkpoint_json=_dump(checkpoint))
+            claim(db, content_id, introduction_id=row['introduction_id'], now=now)
+            _teaching.update(db, row, stage='bridge', guided_at_utc=now.isoformat(), retrieval_at_utc=now.isoformat())
+            _teaching.ready_units(db, row)
+            if fair_new:
+                from .new_dispatch import completed
+                completed(db, "course")
+        return self.instruction_item(content_id, instruction_scope)
+
     def ensure_prerequisites(self, catalogue=None, now=None):
         """Append missing prerequisites of already enrolled, untouched lessons.
 
@@ -439,30 +1148,45 @@ class LearningStore:
         if bundled and getattr(self, "_closed_prerequisite_membership", None) == membership_key():
             return {"added": [], "target_ids": [], "ordered_ids": [], "unresolved": []}
         saved = self.list_items()
+        unavailable = self.availability().unavailable_ids
         candidates = [item for item in saved
-                      if item["stage"] != "done" and not preserves_existing_route(self, item)
+                      if item["id"] not in unavailable  # 08 section 7.3: no prerequisite overlay
+                      and item["stage"] != "done" and not preserves_existing_route(self, item)
                       and item.get("checkpoint", {}).get("prerequisite_acknowledged") is not True]
         from .personal_graph import dependency_override
         for item in saved:
             revised = dependency_override(self, item)
+            if item['id'] in unavailable:
+                continue
             if revised and not revised['pending'] and not (item.get('checkpoint', {}).get('prerequisite_acknowledged') is True
                     and item.get('checkpoint', {}).get('prerequisite_version') == revised['version_id']):
                 candidates.append(item)
         extra_targets = {cid for cid, value in _teaching.state_map(self._db).items()
-            if any(row['stage'] != 'done' and _load(row['checkpoint_json']).get('prerequisite_acknowledged') is not True
+            if cid not in unavailable and any(row['stage'] != 'done' and _load(row['checkpoint_json']).get('prerequisite_acknowledged') is not True
                    for row in value['additions'].values())}
         candidates = list({item['id']: item for item in [*candidates, *(row for row in saved if row['id'] in extra_targets)]}.values())
         if not candidates:
             return {"added": [], "target_ids": [], "ordered_ids": [], "unresolved": []}
         if catalogue is None:
-            from .learning_content import learning_items
-            catalogue = learning_items()
+            # Views: the plan copies (deepcopy) only the lessons it would enrol.
+            from .learning_content import learning_item_views
+            catalogue = learning_item_views()
         from types import SimpleNamespace
         projected = [{**row, 'depends_on': effective_dependencies(self,
             {**row, 'checkpoint': {}}, preserved=False)} if row['id'] in extra_targets else row for row in saved]
-        view = SimpleNamespace(_db=self._db, queries=self.queries, list_items=lambda: projected, get_item=self.get_item)
+        view = SimpleNamespace(_db=self._db, store=self.store, queries=self.queries,
+                               list_items=lambda: projected, get_item=self.get_item)
         plan = build_dependency_plan([item["id"] for item in candidates], catalogue, view,
                                      allow_unresolved=True)
+        view = self.availability()
+        unresolved = list(plan["unresolved"])
+        enrollable = []
+        for item in plan["items"]:
+            if view.available(item["id"], {"dictionary_only": item.get("dictionary_only") is True}):
+                enrollable.append(item)
+            else:
+                unresolved.append({"id": item["id"], "reason": "unavailable", "path": [item["id"]]})
+        plan = {**plan, "items": enrollable, "unresolved": unresolved}
         added = self.enroll(plan["items"], now=now)
         if bundled:
             originals = {item["id"]: item for item in saved}
@@ -487,6 +1211,7 @@ class LearningStore:
                 raise KeyError(content_id)
             if expected_introduction_id is not None and expected_introduction_id != row["introduction_id"]:
                 raise ValueError("The introduction is no longer current")
+            self.require_available(content_id)
             checkpoint = _load(row["checkpoint_json"])
             if row["stage"] in {"intro", "guide"} and "instruction_exposed_at_utc" not in checkpoint:
                 from .explicit_learning_start import claim
@@ -502,15 +1227,21 @@ class LearningStore:
                 and unit['ability'] in profile.get('levels', {})
                 and unit["review_count"] == 0 and unit["scheduler_state_json"] is None)
 
+    def arrangement_orientation(self):
+        """The learner's study orientation (design 12); a missing setting is THOROUGH."""
+        from .arrangement.services.preferences import ArrangementPreferences
+        return ArrangementPreferences(self.store).orientation()
+
     def prerequisite_status(self, content_id, instruction_scope=None, *, ready_ids=None):
         from .learning_dependencies import prerequisite_status
         if not instruction_scope:
             return prerequisite_status(self, content_id, ready_ids=ready_ids)
-        from .learning_dependencies import effective_dependencies, independent_ready_ids, _status
+        from .learning_dependencies import TaughtRule, effective_dependencies, independent_ready_ids, _status
         item = self.instruction_item(content_id, instruction_scope)
         dependencies = effective_dependencies(self, item, preserved=False)
         ready_ids = independent_ready_ids(self) if ready_ids is None else ready_ids
-        entries = [_status(self, cid, ready_ids) for cid in dependencies]
+        taught = TaughtRule(self)
+        entries = [_status(self, cid, ready_ids, taught=taught) for cid in dependencies]
         missing = [entry for entry in entries if not entry['ready']]
         waived = item['checkpoint'].get('prerequisite_acknowledged') is True
         from .personal_graph import dependency_override
@@ -625,6 +1356,22 @@ class LearningStore:
         return [self._item(row, units.get(row["content_id"], [])) for row in self._db.execute(
             "SELECT * FROM learning_content ORDER BY rowid")]
 
+    def withdrawn_pending_ids(self):
+        """Unanswered queued questions of a task form the app no longer asks, the soonest answerable first.
+
+        learning_questions.withdrawn_task as one query: the heard-word kind
+        with a kana-spelling variant number. Read only; the caller exchanges
+        them through LearningReplacementStore, a bounded number per pass,
+        so those without a stored earliest time and then the earliest stored
+        times come first (the order is a priority, not a schedule).
+        """
+        from .word_sound_questions import AUDIO_WORD, KANA_VARIANT_BASE
+        return [row[0] for row in self._db.execute(
+            """SELECT question_id FROM learning_question WHERE status='pending' AND result_json IS NULL
+               AND kind=? AND json_extract(snapshot_json,'$.variant')>=?
+               ORDER BY not_before_utc IS NOT NULL,not_before_utc,rowid""",
+            (AUDIO_WORD, KANA_VARIANT_BASE))]
+
     def items_needing_questions(self):
         """Read only lessons with a missing ability snapshot, in enrollment order.
 
@@ -639,7 +1386,9 @@ class LearningStore:
                 AND NOT EXISTS (SELECT 1 FROM learning_question q
                     WHERE q.unit_id=u.unit_id AND q.status='pending'))
             ORDER BY c.rowid""").fetchall()
-        return [self.get_item(row[0]) for row in rows]
+        # No new question snapshot for unavailable content (08 section 7.3).
+        unavailable = self.availability().unavailable_ids
+        return [self.get_item(row[0]) for row in rows if row[0] not in unavailable]
 
     def set_suspended(self, content_id, ability, suspended):
         """Pause an ability without replacing a question or rescheduling it."""
@@ -663,11 +1412,12 @@ class LearningStore:
             row = self.instruction_row(content_id, instruction_scope)
             if row is None:
                 raise KeyError(content_id)
+            self.require_available(content_id)
             if checkpoint in {"intro_done", "guide", "guide_correct", "bridge", "check"} and self.prerequisite_status(content_id, instruction_scope)["blocked"]:
                 raise ValueError("请先学习前置内容，或明确选择已有前置知识。")
             draft = _load(row["checkpoint_json"])
             from .learning_replacement import guide_write_guard
-            guide_write_guard(draft, state, checkpoint)
+            guide_write_guard(draft, state, checkpoint, orientation=self.arrangement_orientation)
             if state is not None:
                 if not isinstance(state, dict):
                     raise ValueError("Instruction checkpoint must be an object")
@@ -700,13 +1450,17 @@ class LearningStore:
                     from .new_dispatch import completed
                     completed(self._db, "course")
             elif checkpoint == "check" and row["stage"] == "bridge":
-                if self._retrieval_ready(row, now):
+                if self.retrieval_ready(row, now):
                     _teaching.update(self._db, row, stage='check')
             draft["last_checkpoint"] = checkpoint
             _teaching.update(self._db, row, checkpoint_json=_dump(draft))
         return self.instruction_item(content_id, instruction_scope)
 
-    def _retrieval_ready(self, row, now):
+    def retrieval_ready(self, row, now):
+        """Read only: whether a bridge-stage teaching row (``row``) may face its retrieval check at ``now``.
+
+        Public since design 13 S3 (the home's unqueued preview and the records page read it too).
+        """
         if row["retrieval_at_utc"] and datetime.fromisoformat(row["retrieval_at_utc"]) <= now:
             return True
         # An intervening independent target, rather than another tap in this
@@ -716,12 +1470,13 @@ class LearningStore:
             AND e.role='primary' AND e.occurred_at_utc>? LIMIT 1""",
             (row["content_id"], row["guided_at_utc"])).fetchone())
 
-    def append_questions(self, questions, now=None):
+    def append_questions(self, questions, now=None, *, exposure_tables=None):
+        """``exposure_tables``: exposure_tables() of the queue pass this append belongs to."""
         with self._db:
             self._transaction()
-            return self._append_questions_in_transaction(questions, now=now)
+            return self._append_questions_in_transaction(questions, now=now, exposure_tables=exposure_tables)
 
-    def _append_questions_in_transaction(self, questions, now=None):
+    def _append_questions_in_transaction(self, questions, now=None, *, exposure_tables=None):
         if not self._db.in_transaction:
             raise RuntimeError("Caller must own the learning transaction")
         """One active snapshot per ability; additions cannot replace a draft."""
@@ -737,6 +1492,7 @@ class LearningStore:
             cid = _identifier(q.get("target_id", q.get("content_id")))
             ability = _ability(q.get("ability", q.get("dimension")))
             kind = _identifier(q.get("kind"))
+            self.require_available(cid)
             unit = self._db.execute("SELECT * FROM learning_unit WHERE content_id=? AND ability=?", (cid, ability)).fetchone()
             if unit is None:
                 raise ValueError("Question must target an explicitly enrolled ability")
@@ -771,11 +1527,12 @@ class LearningStore:
             q["assessment"] = assessment_decision(_load(content["content_json"]), q, store=self.store)
             self._db.execute("INSERT INTO learning_question VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (qid, unit["unit_id"], kind, _dump(q), "pending", "{}", None, now.isoformat(),
-                 self.question_not_before(unit, q), content["exposure_group"]))
+                 self.question_not_before(unit, q) if exposure_tables is None else
+                 self.question_not_before(unit, q, tables=exposure_tables), content["exposure_group"]))
             added.append(qid)
         return added
 
-    def question_not_before(self, unit, question, *, now=None, exposure_times=None):
+    def question_not_before(self, unit, question, *, now=None, exposure_times=None, tables=None):
         """Read the same effective due/cooldown for a preview or an append."""
         latest = self._db.execute("""SELECT result_json,occurred_at_utc FROM learning_event
             WHERE unit_id=? ORDER BY rowid DESC LIMIT 1""", (unit["unit_id"],)).fetchone()
@@ -795,7 +1552,7 @@ class LearningStore:
             cooldown = _latest_due(cooldown, (datetime.fromisoformat(latest["occurred_at_utc"])
                 + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)).isoformat())
         return _latest_due(self.effective_question_due(unit, question, now=now,
-            exposure_times=exposure_times), effective_due, cooldown)
+            exposure_times=exposure_times, tables=tables), effective_due, cooldown)
 
     def content_exposure_times(self, now=None):
         """Read active feedback delays once per queue pass, without rewriting due dates."""
@@ -807,6 +1564,9 @@ class LearningStore:
                 until = _utc(datetime.fromisoformat(value)) + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)
                 if until > now:
                     result[row["content_id"]] = until.isoformat()
+        return self._with_exposure_tables(result, now)
+
+    def _with_exposure_tables(self, result, now):
         from .tutor_store import exposure_times as tutor_exposure_times
         result.tutor = tutor_exposure_times(self.store, now)
         from .retention_check import exposure_times as retention_exposure_times
@@ -816,7 +1576,20 @@ class LearningStore:
         result.additional_teaching = _teaching.exposure_times(self._db, now)
         return result
 
-    def effective_question_due(self, unit, question, now=None, *, exposure_times=None):
+    def exposure_tables(self, now=None):
+        """The exposure records every question of one queue pass is checked against, read once.
+
+        The tutor, check, confirmation and added-teaching tables of
+        content_exposure_times, without its map of feedback exposures: an
+        append (question_not_before with ``tables``) still reads each lesson's
+        own feedback exposure itself, exactly as it does without them. Reading
+        these tables again for every appended question scanned every saved
+        exposure record each time. Valid for one synchronous pass that writes
+        no exposure.
+        """
+        return self._with_exposure_tables(_ExposureTimes(), _utc(now))
+
+    def effective_question_due(self, unit, question, now=None, *, exposure_times=None, tables=None):
         """Keep another ability of just-seen content out of independent assessment.
 
         This is a short queue guard, not a new memory observation or an FSRS
@@ -848,27 +1621,73 @@ class LearningStore:
             from .tutor_store import exposure_times as tutor_exposure_times
             tutor = getattr(exposure_times, "tutor", None)
             if tutor is None:
+                tutor = getattr(tables, "tutor", None)  # exposure_tables() of the caller's queue pass
+            if tutor is None:
                 tutor = tutor_exposure_times(self.store, now)
             exposure = _latest_due(exposure, tutor.get(unit["content_id"]))
             from .retention_check import exposure_times as retention_exposure_times
             retention = getattr(exposure_times, 'retention', None)
             if retention is None:
+                retention = getattr(tables, 'retention', None)
+            if retention is None:
                 retention = retention_exposure_times(self.store, _utc(now))
             exposure = _latest_due(exposure, retention.get((unit['content_id'], unit['ability'])))
             additional = getattr(exposure_times, 'additional_teaching', None)
+            if additional is None:
+                additional = getattr(tables, 'additional_teaching', None)
             if additional is None:
                 additional = _teaching.exposure_times(self._db, _utc(now))
             exposure = _latest_due(exposure, additional.get((unit['content_id'], unit['ability'])))
         scheduled = _ability_due(unit, question)
         floor = question.get("not_before_utc") or unit.get("not_before_utc")
+        due = self.scheduled_question_due(unit, question, now, exposure_times=exposure_times, tables=tables)
+        if due != scheduled:   # an earlier active confirmation replaced the schedule, and its exact floor
+            if floor and datetime.fromisoformat(floor) == datetime.fromisoformat(scheduled): floor = None
+            scheduled = due
+        return _latest_due(scheduled, floor, exposure)
+
+    def scheduled_question_due(self, unit, question, now=None, *, exposure_times=None, tables=None):
+        """The unit's due as the dispatch schedules it, without the independence guards.
+
+        The ability's due with this question (_ability_due: the stored due,
+        which carries any bounded auxiliary adjustment, or an earlier
+        free-retrieval probe) or an earlier active confirmation
+        (retention_schedule.active_due), whichever is earlier. The floors
+        (not_before) and the feedback, tutor, retention and teaching exposure
+        waits are left out: they delay serving a question, they do not make a
+        due unit "not due" (design 12 E3). effective_question_due adds them on
+        top of this value. ``exposure_times``/``tables``: a queue pass's tables,
+        read for their confirmation map only.
+        """
+        scheduled = _ability_due(unit, question)
         from .retention_schedule import active_due
         confirmation = getattr(exposure_times, 'confirmation', None)
+        if confirmation is None: confirmation = getattr(tables, 'confirmation', None)
         if confirmation is None: confirmation = active_due(self.store, _utc(now))
         earlier = confirmation.get(unit.get('unit_id'))
         if earlier and scheduled and datetime.fromisoformat(earlier) < datetime.fromisoformat(scheduled):
-            if floor and datetime.fromisoformat(floor) == datetime.fromisoformat(scheduled): floor = None
-            scheduled = earlier
-        return _latest_due(scheduled, floor, exposure)
+            return earlier
+        return scheduled
+
+    def record_practice_exposure(self, event_id, question, result, *, now=None):
+        """A practice-only answer showed this lesson's answer (design 12 E5, 10 (6), AC17).
+
+        In its own transaction: the lesson's feedback exposure (the stamp a
+        submitted answer sets, which effective_question_due turns into the
+        existing short wait before any formal question of the lesson) and one
+        evidence row "见过" (source course, role exposure, weight 0, never
+        eligible). No unit, question, event or due is written.
+        """
+        now = _utc(now)
+        if self._db.execute("SELECT 1 FROM learning_content WHERE content_id=?",
+                            (question.get("target_id"),)).fetchone() is None:
+            raise ValueError("Unknown learning content")
+        from .learning_evidence import LearningEvidenceStore
+        with self._db:
+            self._transaction()
+            self._mark_feedback_exposed(question["target_id"], now)
+            LearningEvidenceStore(self.store).record_attempt(event_id, dict(question), result,
+                                                             source="course", role="exposure", now=now)
 
     def _mark_feedback_exposed(self, content_id, now):
         """Called inside the answer transaction; revisiting a queue never extends it."""
@@ -907,6 +1726,10 @@ class LearningStore:
 
     def guided_question(self, item, kind, *, variant=1):
         """Resume the example actually answered, without changing its progress.
+
+        Returns None when an unopened guide of this kind has only a retired
+        example and no replacement whose background is ready; other invalid
+        data still raises.
 
         Old introductions saved only the answer/result. Reconstruct those from
         their enrolled content, not newly overlaid templates. New introductions
@@ -959,12 +1782,20 @@ class LearningStore:
                               retired_practice_variants(target, templates))
             if is_retired or not available(question, system_japanese=system_input):
                 from .learning_practice_policy import practice_candidates
+                from .course_planning import known_ids
                 for candidate in practice_candidates(target, [kind],
-                        known_background_ids=self.store.queries.instruction_ready_ids(),
+                        known_background_ids=known_ids(self.store.queries),
                         system_japanese=system_input):
+                    if candidate.get('relaxed') or candidate.get('top_up'):
+                        continue  # A guide never shows unmet material nor the formal top-up (design 11, D4).
                     return build_learning_question(target, kind, guided=True, variant=candidate['variant'])
                 if is_retired:
-                    raise ValueError('这道旧例题已停用，目前没有前置知识已就绪的替代题。')
+                    # Not bad data: this kind's example was retired and every
+                    # replacement still needs unlearned background. The caller
+                    # tries its next guide kind or offers direct practice.
+                    from .diagnostic_events import record_error
+                    record_error("learning_guide", "read", GuidedQuestionUnavailable(kind))
+                    return None
         return question
 
     def guided_sequence(self, item, kinds, *, known_background_ids=()):
@@ -1004,7 +1835,12 @@ class LearningStore:
                             "item": self.instruction_item(content_id, instruction_scope)}
                 raise ValueError("This guided question is not current")
             if grade_learning_answer(question, checkpoint.get("guide_answer", "")).get("status") != "correct":
-                raise ValueError("Complete this guided example first")
+                # Design 12 Q1 (c): under breadth first a step with a recorded
+                # wrong answer may be marked seen; the shape stays the same.
+                from .arrangement.rules.gates import guide_may_continue
+                if not (checkpoint.get("guide_answer") is not None
+                        and guide_may_continue(self.arrangement_orientation(), answered_wrong=True)):
+                    raise ValueError("Complete this guided example first")
             index = checkpoint["guide_index"]
             ids = [value["id"] for value in sequence]
             checkpoint["guide_completed_ids"] = ids[:index + 1]
@@ -1048,34 +1884,39 @@ class LearningStore:
             self._db.execute("UPDATE learning_question SET draft_json=? WHERE question_id=?", (_dump(old), question_id))
         return self.get_question(question_id)
 
-    def _pending(self, enabled_kinds=None):
+    def _pending(self, enabled_kinds=None, *, projection=None):
         """Internal compatibility alias; external readers use the public API."""
-        yield from self.iter_pending_questions(enabled_kinds)
+        yield from self.iter_pending_questions(enabled_kinds, projection=projection)
 
-    def iter_pending_questions(self, enabled_kinds=None):
+    def iter_pending_questions(self, enabled_kinds=None, *, projection=None):
         """Full pending rows in insertion order, excluding paused/reserved units.
 
+        Rows of unavailable content (08 section 7.2: orphaned, blocked by a
+        missing library dependency, retired) are skipped; they stay pending.
         No questions are generated or decoded. The iterator belongs to this
         connection/thread and must be consumed before closing the store.
         """
         kinds = set(enabled_kinds) if enabled_kinds is not None else None
+        unavailable = self.availability(projection=projection).unavailable_ids
         for row in self._db.execute("""SELECT q.*,u.content_id,u.ability,u.suspended,u.instruction_ready,
                 u.due_at_utc,u.probe_due_at_utc,u.review_count,u.scheduler_state_json
                 FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
                 WHERE q.status='pending' AND NOT EXISTS (SELECT 1 FROM app_setting a
                     WHERE a.key='retention_reservation_v1:' || q.unit_id) ORDER BY q.rowid"""):
-            if row["suspended"] or kinds is not None and row["kind"] not in kinds:
+            if row["suspended"] or kinds is not None and row["kind"] not in kinds or row["content_id"] in unavailable:
                 continue
             yield row
 
-    def _dispatch_pending(self, enabled_kinds=None):
+    def dispatch_pending(self, enabled_kinds=None, *, projection=None):
         """Read small sort fields; hydrate only the selected question later.
 
         Preserve absent-vs-explicit-null input_mode, since the former falls
         back to response. Queue snapshots, drafts and result bytes are never
         changed by this projection; _pending stays the full-row reader.
+        Read only; public since design 13 S3 (the home's unqueued preview reads it).
         """
         kinds = set(enabled_kinds) if enabled_kinds is not None else None
+        unavailable = self.availability(projection=projection).unavailable_ids
         for row in self._db.execute("""SELECT q.question_id,q.unit_id,q.kind,q.status,
                 q.draft_json,q.result_json,q.created_at_utc,q.not_before_utc,q.exposure_group,
                 CASE WHEN json_type(q.snapshot_json,'$.practice') IS NOT NULL THEN
@@ -1093,12 +1934,13 @@ class LearningStore:
                 FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
                 WHERE q.status='pending' AND NOT EXISTS (SELECT 1 FROM app_setting a
                     WHERE a.key='retention_reservation_v1:' || q.unit_id) ORDER BY q.rowid"""):
-            if row['suspended'] or kinds is not None and row['kind'] not in kinds:
+            if row['suspended'] or kinds is not None and row['kind'] not in kinds or row['content_id'] in unavailable:
                 continue
             yield row
 
     def current(self, enabled_kinds=None, now=None, *, fair_new=False, teaching_only=False,
-                teaching_content_ids=None, include_unassessed=False, prefer_unassessed=False) -> LearningCurrent | None:
+                teaching_content_ids=None, include_unassessed=False, prefer_unassessed=False,
+                projection=None, skip_teaching_ids=None, scope_content_ids=None) -> LearningCurrent | None:
         """Read a tagged dispatch state without consuming or rebuilding questions.
 
         Normal mode returns a course head or an explicit blocking/wait state;
@@ -1107,24 +1949,103 @@ class LearningStore:
         include_unassessed requires teaching_only and unrestricted content IDs;
         prefer_unassessed chooses between its additional/introduction pools.
         fair_new changes dispatch priority, never saved order or due times.
+        projection (read_operation) shares unchanged reads within one action;
+        without it every read is live, exactly as before.
+        skip_teaching_ids: content IDs whose intro/guide head the learner chose
+        to pass over for now (process-local UI choice); their reviews stay.
+        scope_content_ids: the learner's focus scope (design 12 H3; content
+        ids), None for no scope. It adds one component (0 inside, 1 outside)
+        after the tier to the key that orders the course lane when a round is
+        collected (tiers 3 and up; an opened teaching block counts as inside),
+        and between the two new-work pools of an include_unassessed probe the
+        pool whose head is inside goes first. The frozen cross-lane priority
+        (dispatch_priority) never has it. Once the round is sealed or finished
+        the order is frozen, so it is dropped (also from the read_operation
+        key, so a worker's seeded result keeps matching), except for the
+        include_unassessed pool choice.
         """
+        skip = frozenset(skip_teaching_ids or ())
+        if include_unassessed and (not teaching_only or teaching_content_ids is not None):
+            raise ValueError("New-ability service requires an unrestricted teaching probe")
+        scope = self._effective_scope(scope_content_ids, include_unassessed)
+        if projection is not None:
+            now = projection.moment(now)
+            key = self.current_key(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
+                teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
+                prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, scope_content_ids=scope)
+            return projection.result(key, lambda: self._current(enabled_kinds, now, fair_new=fair_new,
+                teaching_only=teaching_only, teaching_content_ids=teaching_content_ids,
+                include_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed,
+                projection=projection, skip_teaching_ids=skip, focus_scope=scope))
+        return self._current(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
+            teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
+            prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, focus_scope=scope)
+
+    def _effective_scope(self, scope_content_ids, include_unassessed):
+        """The focus scope where it can still act: None without one, or once the course order is frozen."""
+        if scope_content_ids is None:
+            return None
+        from .practice_round import finished, sealed
+        if not include_unassessed and (sealed(self.store) or finished(self.store)):
+            return None
+        return frozenset(scope_content_ids)
+
+    @staticmethod
+    def current_key(enabled_kinds, now, *, fair_new=False, teaching_only=False, teaching_content_ids=None,
+                    include_unassessed=False, prefer_unassessed=False, skip_teaching_ids=None,
+                    scope_content_ids=None):
+        """read_operation key of one current() call (see _LearningRead.seed).
+
+        ``scope_content_ids`` is the effective scope of that call (current() drops it once the order is frozen).
+        """
+        key = ("current", None if enabled_kinds is None else tuple(enabled_kinds), _utc(now).isoformat(),
+               bool(fair_new), bool(teaching_only),
+               None if teaching_content_ids is None else frozenset(teaching_content_ids),
+               bool(include_unassessed), bool(prefer_unassessed))
+        # Unchanged key without a skip or a scope, so seeded worker results still match.
+        key = key + (frozenset(skip_teaching_ids),) if skip_teaching_ids else key
+        return key + (("scope", frozenset(scope_content_ids)),) if scope_content_ids is not None else key
+
+    @classmethod
+    def reader(cls, store):
+        """Read-only view on a worker connection; never creates tables or takes a write lock.
+
+        The UI connection already ran ensure_schema; a missing table raises
+        instead of being created here.
+        """
+        names = {row[0] for row in store._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (%s)" % ",".join("?" * len(TABLES)),
+            TABLES)}
+        if names != set(TABLES):
+            raise RuntimeError("Learning tables are not initialized on this database")
+        view = cls.__new__(cls)
+        view.store = store
+        return view
+
+    def _dispatch_content_rows(self):
+        """Small per-content stage fields read once per dispatch pass."""
+        return {content["content_id"]: content for content in self._db.execute(
+            """SELECT content_id,stage,checkpoint_json,retrieval_at_utc,guided_at_utc
+               FROM learning_content""")}
+
+    def _current(self, enabled_kinds, now, *, fair_new, teaching_only, teaching_content_ids,
+                 include_unassessed, prefer_unassessed, projection=None, skip_teaching_ids=frozenset(),
+                 focus_scope=None):
+        # focus_scope: current()'s effective focus scope (not an instruction scope, which the loop below names "scope").
         from .learning_dependencies import independent_ready_ids, prerequisite_status, has_started_answer
         from .review_dispatch import review_priority, reviews_today
         now = _utc(now)
-        if include_unassessed and (not teaching_only or teaching_content_ids is not None):
-            raise ValueError("New-ability service requires an unrestricted teaching probe")
         review_day, daily_counts = reviews_today(self.store, now, course=True)
         waiting, blocked, dependencies = [], [], {}
         blocked_material = []
-        ready_ids = independent_ready_ids(self)
-        exposure_times = self.content_exposure_times(now)
+        ready_ids = projection.ready_ids() if projection is not None else independent_ready_ids(self)
+        exposure_times = (projection.exposure_times(now) if projection is not None
+                          else self.content_exposure_times(now))
         def has_text(value):
             return isinstance(value, str) and bool(value.strip())
 
-        ability_states = _teaching.state_map(self._db)
-        content_rows = {content["content_id"]: content for content in self._db.execute(
-            """SELECT content_id,stage,checkpoint_json,retrieval_at_utc,guided_at_utc
-               FROM learning_content""")}
+        ability_states = projection.ability_states() if projection is not None else _teaching.state_map(self._db)
+        content_rows = projection.content_rows() if projection is not None else self._dispatch_content_rows()
         def content_row_for(row):
             cid = row['content_id']
             state = ability_states.get(cid)
@@ -1165,6 +2086,11 @@ class LearningStore:
             priority = dispatch_priority(row)
             from .practice_round import frozen_priority
             frozen_priority(self.store, "cross-course", row['question_id'], priority)
+            if focus_scope is not None:
+                # Design 12 H3: inside the focus scope first, in this collection key only.
+                from .arrangement.rules.focus import scoped_priority, sort_component
+                priority = scoped_priority(priority, sort_component(row['content_id'], focus_scope),
+                                           held=priority == (4, -1))
             if not include_unassessed or priority[0] < 4:
                 return (0, priority)
             category = unassessed(row)
@@ -1175,6 +2101,10 @@ class LearningStore:
             preferred = "additional" if prefer_unassessed else "introduction"
             opened = service_heads.get("introduction", {}).get("new_dispatch_continue")
             selected_pool = "introduction" if opened else preferred if preferred in service_heads else next(iter(service_heads))
+            inside = [pool for pool, head in service_heads.items() if head["content"]["id"] in (focus_scope or ())]
+            if focus_scope is not None and not opened and len(service_heads) == 2 and len(inside) == 1:
+                # Design 12 H2: of the two new-work pools, the head inside the focus scope is taught first.
+                selected_pool = inside[0]
             return {**service_heads[selected_pool], "selected_course_pool": selected_pool,
                 "service_pool_candidates": {pool: {
                     "content_id": head["content"]["id"], "question_id": head["question"]["id"],
@@ -1182,9 +2112,14 @@ class LearningStore:
                     for pool, head in service_heads.items()}}
 
         from .practice_round import freeze_course_rows
-        for row in freeze_course_rows(self.store, self._dispatch_pending(enabled_kinds), service_priority):
+        gate_closed = self._batch_gate_reader(enabled_kinds)
+        for row in freeze_course_rows(self.store, self.dispatch_pending(enabled_kinds, projection=projection),
+                                      service_priority):
             content_row = content_row_for(row)
             if _paused_practice_guide(content_row, enabled_kinds):
+                continue
+            if gate_closed(row):
+                # 四之二: a later ability of a batch item is not yet open.
                 continue
             teaching_stages = {"intro", "guide", "bridge", "check"} if teaching_content_ids is not None else {"intro", "guide"}
             if teaching_only and (content_row["stage"] not in teaching_stages and not unassessed(row)
@@ -1213,6 +2148,8 @@ class LearningStore:
                 # feedback must be saved before returning to that introduction.
                 return {**result, "type": "question", "stage": "check"}
             if content["stage"] in {"intro", "guide"}:
+                if content["id"] in skip_teaching_ids:
+                    continue
                 if teaching_only:
                     due = self.effective_question_due(row, q, now, exposure_times=exposure_times)
                     if due and datetime.fromisoformat(due) > now:
@@ -1227,7 +2164,7 @@ class LearningStore:
                 if len(service_heads) == 2:
                     return chosen_service_head()
                 continue
-            if content["stage"] == "bridge" and not self._retrieval_ready(content_row, now):
+            if content["stage"] == "bridge" and not self.retrieval_ready(content_row, now):
                 waiting.append(content["retrieval_at_utc"])
                 continue
             due = self.effective_question_due(row, q, now, exposure_times=exposure_times)
@@ -1248,21 +2185,32 @@ class LearningStore:
         if teaching_only:
             return None
         if blocked_material and not blocked and not waiting:
-            return {'type': 'content_blocked', 'question_ids': blocked_material, 'counts': self.counts(enabled_kinds, now)}
+            return {'type': 'content_blocked', 'question_ids': blocked_material, 'counts': self.counts(enabled_kinds, now, projection=projection)}
         if blocked:
-            return {**blocked[0], "type": "prerequisite", "counts": self.counts(enabled_kinds, now),
+            return {**blocked[0], "type": "prerequisite", "counts": self.counts(enabled_kinds, now, projection=projection),
                     "due_at_utc": min(waiting) if waiting else None}
         if waiting:
-            return {"type": "waiting", "due_at_utc": min(waiting), "counts": self.counts(enabled_kinds, now)}
-        counts = self.counts(enabled_kinds, now)
+            return {"type": "waiting", "due_at_utc": min(waiting), "counts": self.counts(enabled_kinds, now, projection=projection)}
+        counts = self.counts(enabled_kinds, now, projection=projection)
         if counts.get('diagnostic'):
             owned = self._db.execute("SELECT json_extract(value_json,'$.episode_id') FROM app_setting WHERE key GLOB 'retention_reservation_v1:*' LIMIT 1").fetchone()
             return {'type': 'diagnostic', 'episode_id': owned[0], 'counts': counts}
         if counts["disabled"] or counts["unavailable_content"]:
             return {"type": "disabled", "counts": counts}
+        if counts["library_unavailable"]:
+            # 08 section 8.2: only content of a disabled/missing library is left.
+            return {"type": "content_blocked", "question_ids": [], "reason": "library_disabled", "counts": counts}
         return None
 
-    def counts(self, enabled_kinds=None, now=None):
+    def counts(self, enabled_kinds=None, now=None, *, projection=None):
+        """Home/dispatch counts; projection shares one action's unchanged reads."""
+        if projection is not None:
+            now = projection.moment(now)
+            key = ("counts", None if enabled_kinds is None else tuple(enabled_kinds), now.isoformat())
+            return projection.result(key, lambda: self._counts(enabled_kinds, now, projection=projection))
+        return self._counts(enabled_kinds, now)
+
+    def _counts(self, enabled_kinds, now, *, projection=None):
         from .learning_dependencies import independent_ready_ids, prerequisite_status
         from functools import lru_cache
         from types import SimpleNamespace
@@ -1275,27 +2223,50 @@ class LearningStore:
         def dependency_item(content_id):
             content = content_row(content_id)
             return None if content is None else self._item(content, [])
-        dependencies_view = SimpleNamespace(_db=self._db, queries=self.queries, get_item=dependency_item)
+        # store: personal_graph.dependency_override reads head/hold settings
+        # through it (same per-key reads; an attached read operation applies).
+        dependencies_view = SimpleNamespace(_db=self._db, store=self.store, queries=self.queries,
+                                            get_item=dependency_item)
         now = _utc(now)
+        # 08 section 8.2: unavailable content (library disabled/missing,
+        # dependency missing, retired) is neither ready, waiting, teaching,
+        # disabled nor unavailable_content; it is counted on its own.
+        availability = self.availability(projection=projection)
+        library_unavailable = availability.unavailable_ids
+        unfinished_without_pending = [row[0] for row in self._db.execute("""SELECT c.content_id FROM learning_content c
+                    WHERE c.stage<>'done' AND NOT EXISTS (SELECT 1 FROM learning_question q JOIN learning_unit u
+                    ON u.unit_id=q.unit_id WHERE u.content_id=c.content_id AND q.status='pending')""")]
         counts = {"ready": 0, "waiting": 0, "instruction": 0, "pending": 0, "disabled": 0,
                   "blocked": 0, "blocked_content": 0, "blocked_material": 0, "blocked_input": 0,
                   "content": self._db.execute("SELECT COUNT(*) FROM learning_content").fetchone()[0], "next_due_at_utc": None,
-                  "unavailable_content": self._db.execute("""SELECT COUNT(*) FROM learning_content c
-                    WHERE c.stage<>'done' AND NOT EXISTS (SELECT 1 FROM learning_question q JOIN learning_unit u
-                    ON u.unit_id=q.unit_id WHERE u.content_id=c.content_id AND q.status='pending')""").fetchone()[0]}
-        visible = {row["question_id"]: row for row in self._pending(enabled_kinds)}
+                  "unavailable_content": sum(cid not in library_unavailable for cid in unfinished_without_pending)}
+        visible = {row["question_id"]: row for row in self._pending(enabled_kinds, projection=projection)}
         counts["pending"] = self._db.execute("SELECT COUNT(*) FROM learning_question WHERE status='pending'").fetchone()[0]
-        reserved = self._db.execute("""SELECT COUNT(*) FROM learning_question q WHERE q.status='pending'
-            AND EXISTS (SELECT 1 FROM app_setting a WHERE a.key='retention_reservation_v1:' || q.unit_id)""").fetchone()[0]
+        reserved = hidden = 0
+        for content_id, is_reserved in self._db.execute("""SELECT u.content_id,
+                EXISTS (SELECT 1 FROM app_setting a WHERE a.key='retention_reservation_v1:' || q.unit_id)
+                FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id WHERE q.status='pending'"""):
+            if is_reserved:
+                reserved += 1
+            elif content_id in library_unavailable:
+                hidden += 1
         if reserved: counts['diagnostic'] = reserved
-        counts["disabled"] = counts["pending"] - len(visible) - reserved
+        counts["library_unavailable"] = len(library_unavailable)
+        counts["orphaned"] = len(availability.orphaned_ids)
+        counts["library_unavailable_pending"] = hidden
+        counts["disabled"] = counts["pending"] - len(visible) - reserved - hidden
         teaching, blocked_content, dependencies = set(), set(), {}
-        ready_ids = independent_ready_ids(self)
-        exposure_times = self.content_exposure_times(now)
-        ability_states = _teaching.state_map(self._db)
+        ready_ids = projection.ready_ids() if projection is not None else independent_ready_ids(self)
+        exposure_times = (projection.exposure_times(now) if projection is not None
+                          else self.content_exposure_times(now))
+        ability_states = projection.ability_states() if projection is not None else _teaching.state_map(self._db)
         from .answer_input import available, system_japanese_enabled
         system_input = system_japanese_enabled(self.store)
+        gate_closed = self._batch_gate_reader(enabled_kinds)
         for row in visible.values():
+            if gate_closed(row):
+                # Not yet open (四之二): neither ready, waiting nor disabled.
+                continue
             # Decode only if this row reaches a consumer, at most once per row.
             # These three readers do not mutate the persisted question snapshot.
             snapshot = None
@@ -1332,7 +2303,7 @@ class LearningStore:
                 counts['blocked_input'] += 1
                 continue
             due = self.effective_question_due(row, question(), now, exposure_times=exposure_times)
-            if content["stage"] == "bridge" and not self._retrieval_ready(content, now):
+            if content["stage"] == "bridge" and not self.retrieval_ready(content, now):
                 due = max(due or "", content["retrieval_at_utc"])
             if due and datetime.fromisoformat(due) > now and row["result_json"] is None:
                 counts["waiting"] += 1
@@ -1344,21 +2315,113 @@ class LearningStore:
         counts["blocked_content"] = len(blocked_content)
         return counts
 
+    def _stored_kind_disabled(self, kind):
+        """The stored course kind switches turn this question kind off (the check submit makes)."""
+        enabled = self.store.get_setting("learning_preferences_v1", {})
+        from .learning_questions import stored_enabled_kinds
+        return isinstance(enabled, dict) and isinstance(enabled.get("enabled"), list) and kind not in stored_enabled_kinds(enabled)
+
+    def independence_wait(self, unit, question, floor, *, now=None):
+        """When a rating ahead of the schedule may be given: the independence guard, or None.
+
+        The latest of the question's floor (unless it equals the scheduled
+        due: only that exact floor is the schedule's) and the feedback,
+        tutor, retention and teaching exposure waits, read as
+        question_not_before of the unit with its due removed. Shared by the
+        mastery check (retention_session.formal_ready) and the early course
+        channel (early_ready, design 12 K13). ``now``: the instant the exposure
+        records are read at (None: the current time).
+        """
+        scheduled = _ability_due(unit, question)
+        if floor and scheduled and datetime.fromisoformat(floor) == datetime.fromisoformat(scheduled):
+            floor = None
+        detached = {**dict(unit), "due_at_utc": None, "probe_due_at_utc": None, "not_before_utc": floor}
+        return self.question_not_before(detached, {**question, "not_before_utc": floor}, now=now)
+
+    def early_ready(self, unit, question, floor, now):
+        """May this unit be rated early at ``now`` (design 12 K13)?
+
+        PracticeCredit says FORMAL_EARLY (not due, not inside a step, 24 hours
+        or more since its last formal rating) and the independence guard
+        (independence_wait, ``floor``: the pending question's not_before_utc)
+        is not later than ``now``. The other conditions (suspension, kind,
+        availability, teaching, prerequisites, reservation) are the caller's:
+        submit checks them as for any answer, early_head before showing one.
+        """
+        from .arrangement.assembly import practice_credit
+        from .arrangement.model import Credit
+        now = _utc(now)
+        if practice_credit(self.store, self).course(unit["content_id"], unit["ability"], now) is not Credit.FORMAL_EARLY:
+            return False
+        guard = self.independence_wait(unit, question, floor, now=now)
+        return not guard or datetime.fromisoformat(guard) <= now
+
+    def answer_ready(self, unit, row, content_id, question_id, now):
+        """The conditions of an independent answer of ``unit`` besides its due and its guards: the unit and
+        its teaching ``row`` (ability_instruction_row) exist, not suspended, teaching done (ready, not
+        intro/guide, a bridge past its retrieval wait), ``question_id`` not handed off, prerequisites not
+        blocked. Shared by the mastery check (retention_session.formal_ready) and early_head."""
+        from .retention_session import handoff
+        return not (unit is None or row is None or unit["suspended"] or not unit["instruction_ready"]
+                    or handoff(self.store, question_id) is not None
+                    or row["stage"] in {"intro", "guide"}
+                    or self.prerequisite_status(content_id, dict(row).get("instruction_scope"))["blocked"]
+                    or row["stage"] == "bridge" and not self.retrieval_ready(row, now))
+
+    def early_head(self, content_id, ability, now=None):
+        """The unit's own pending question as a head (the shape current() gives a question), when the unit
+        may be rated early at ``now`` (design 12 K13); otherwise None.
+
+        Conditions: learned and not suspended; no retention reservation and no
+        hand-off; its first pending question unanswered, of an enabled kind,
+        not an observation-only replacement, its material not blocked; the
+        content available; teaching done (ready, not intro/guide, a bridge past
+        its retrieval wait); prerequisites not blocked; early_ready. Read-only.
+        Submit it with early=True.
+        """
+        now = _utc(now)
+        unit = self.get_unit(content_id, ability)
+        if unit is None or unit["suspended"] or not unit["review_count"] or not unit["instruction_ready"]:
+            return None
+        from .retention_session import reservation
+        question_id = self.queries.first_pending_question_id(unit["unit_id"])
+        if question_id is None or reservation(self.store, unit["unit_id"]) is not None:
+            return None
+        from .learning_replacement import observation_only
+        q = self.get_question(question_id)
+        if (q is None or q["status"] != "pending" or q["result"] is not None or self._stored_kind_disabled(q["kind"])
+                or observation_only(self.store, question_id) or content_id in self.availability().unavailable_ids):
+            return None
+        row = self.ability_instruction_row(content_id, unit["ability"])
+        if not self.answer_ready(unit, row, content_id, question_id, now):
+            return None
+        content = self.instruction_item(content_id, dict(row).get("instruction_scope"))
+        if self.content_question_blocked(content, q) or not self.early_ready(unit, q, q["not_before_utc"], now):
+            return None
+        return {"content": content, "question": q, "draft": q["draft"], "result": q["result"],
+                "type": "question", "stage": "check"}
+
     def content_question_blocked(self, item, question):
         from .personal_content_versions import question_blocked
         from .material_validity import blocked_question
-        guide = item.get('checkpoint', {}).get('guide_question') if item.get('stage') == 'guide' else None
+        checkpoint = item.get('checkpoint', {})
+        # Frozen batch-quiz questions block like the single frozen guide.
+        guides = [checkpoint.get('guide_question'),
+                  *(checkpoint.get('intro_batch') or {}).get('questions', ())] if item.get('stage') == 'guide' else ()
         return (question_blocked(self.store, item, question) or blocked_question(self.store, item, question)
-                or bool(guide and (question_blocked(self.store, item, guide) or blocked_question(self.store, item, guide))))
+                or any(guide and (question_blocked(self.store, item, guide) or blocked_question(self.store, item, guide))
+                       for guide in guides))
 
     def submit(self, question_id, answered_text="", correct=None, *, assisted=False,
-               outcome=None, now=None, duration_ms=0, presentation=None):
+               outcome=None, now=None, duration_ms=0, presentation=None, early=False):
+        """Freeze the first answer. ``early``: the learner asked to be rated before the unit is due
+        (extra practice, design 12 K13); let through only while early_ready holds at ``now``."""
         with self._db:
             self._transaction()
-            return self._submit_in_transaction(question_id, answered_text, correct, assisted=assisted, outcome=outcome, now=now, duration_ms=duration_ms, presentation=presentation)
+            return self._submit_in_transaction(question_id, answered_text, correct, assisted=assisted, outcome=outcome, now=now, duration_ms=duration_ms, presentation=presentation, early=early)
 
     def _submit_in_transaction(self, question_id, answered_text="", correct=None, *, assisted=False,
-               outcome=None, now=None, duration_ms=0, presentation=None, diagnostic_context=None):
+               outcome=None, now=None, duration_ms=0, presentation=None, diagnostic_context=None, early=False):
         if not self._db.in_transaction:
             raise RuntimeError("Caller must own the learning transaction")
         """Freeze first answer. No scheduling until explicit finalization."""
@@ -1382,19 +2445,22 @@ class LearningStore:
         if row["result_json"] is not None:
             return _load(row["result_json"])
         unit = self._db.execute("SELECT * FROM learning_unit WHERE unit_id=?", (row["unit_id"],)).fetchone()
+        self.require_available(unit["content_id"])
         content = self.ability_instruction_row(unit['content_id'], unit['ability'])
         scope = dict(content).get('instruction_scope')
         if not diagnostic and self.prerequisite_status(unit["content_id"], scope)["blocked"]:
             raise ValueError("请先学习前置内容，或明确选择已有前置知识。")
-        if not diagnostic and (not unit["instruction_ready"] or content["stage"] in {"intro", "guide"} or content["stage"] == "bridge" and not self._retrieval_ready(content, now)):
+        if not diagnostic and (not unit["instruction_ready"] or content["stage"] in {"intro", "guide"} or content["stage"] == "bridge" and not self.retrieval_ready(content, now)):
             raise ValueError("Complete teaching and interleaving before independent assessment")
         snapshot = _load(row["snapshot_json"])
-        enabled = self.store.get_setting("learning_preferences_v1", {})
-        from .learning_questions import stored_enabled_kinds
-        if isinstance(enabled, dict) and isinstance(enabled.get("enabled"), list) and row["kind"] not in stored_enabled_kinds(enabled):
+        if self._stored_kind_disabled(row["kind"]):
             raise ValueError("This question type is currently disabled")
         due = self.effective_question_due({**dict(unit), **dict(row)}, snapshot, now)
-        if unit["suspended"] or not diagnostic and due and datetime.fromisoformat(due) > now:
+        # The early permit lets through an ordinary first answer only: an observation-only replacement or a
+        # hand-off that appeared after early_head is refused as not due, as before extra practice.
+        if unit["suspended"] or not diagnostic and due and datetime.fromisoformat(due) > now and not (
+                early and not transferred
+                and self.early_ready({**dict(unit), **dict(row)}, snapshot, row["not_before_utc"], now)):
             raise ValueError("This ability is not currently due")
         draft = _load(row["draft_json"])
         assisted = assisted or any(draft.get(k) for k in ("assisted", "answer_revealed", "hint_used"))
@@ -1437,6 +2503,13 @@ class LearningStore:
         result = {"answered_text": answered_text, "correct": correct, "assisted": bool(assisted),
             "outcome": outcome, "duration_ms": duration_ms, "submitted_at_utc": now.isoformat(),
             "presentation": presentation or {}, **spelling_diagnosis}
+        if outcome == "unresolved" and not assisted and answered_text:
+            # Rederived from the frozen snapshot, never taken from the page.
+            from .learning_questions import grade_learning_answer
+            from .assessment_policy import UNRESOLVED_REASON_MESSAGES
+            reason = grade_learning_answer(snapshot, answered_text).get("unresolved_reason")
+            if reason in UNRESOLVED_REASON_MESSAGES:
+                result["unresolved_reason"] = reason
         from .assessment_policy import assessment_decision
         from .retention_sources import guarded, assessment_item
         source_guard = guarded(self.store, question_id)
@@ -1523,6 +2596,7 @@ class LearningStore:
         from .assessment_contract import validate_result
         validate_result(_load(row["snapshot_json"]), answer)
         unit = self._db.execute("SELECT * FROM learning_unit WHERE unit_id=?", (row["unit_id"],)).fetchone()
+        self.require_available(unit["content_id"])  # 08 section 7.3: no grading while unavailable
         content = self._db.execute("SELECT content_json FROM learning_content WHERE content_id=?", (unit["content_id"],)).fetchone()
         snapshot = _load(row["snapshot_json"])
         from .assessment_policy import settlement_decision
@@ -1584,12 +2658,20 @@ class LearningStore:
             "due_at_utc": after["due"] if after else None,
             "review_count": unit["review_count"] + int(scheduled), "answer": answer,
             "finalized_at_utc": now.isoformat(), "assessment": decision}
-        result["attempt_count"] = self._db.execute("SELECT COUNT(*) FROM learning_event WHERE unit_id=?", (unit["unit_id"],)).fetchone()[0] + 1
+        # One read: the prior attempt count and the unit's latest event (F5-B retry rule).
+        prior = self._db.execute("""SELECT COUNT(*),
+            (SELECT role FROM learning_event WHERE unit_id=?1 ORDER BY rowid DESC LIMIT 1) AS role,
+            (SELECT outcome FROM learning_event WHERE unit_id=?1 ORDER BY rowid DESC LIMIT 1) AS outcome
+            FROM learning_event WHERE unit_id=?1""", (unit["unit_id"],)).fetchone()
+        result["attempt_count"] = prior[0] + 1
         if not scheduled and event_outcome in {"unresolved", "device_failure", "invalid"}:
             # Feedback has exposed a model answer. A new variant may be
             # queued, but cannot immediately turn copying into a successful
             # independent review. This is a queue delay, not an FSRS update.
-            result["retry_not_before_utc"] = (now + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)).isoformat()
+            previous = prior if prior[0] else None
+            result["retry_not_before_utc"] = _retry_not_before(self.store.zone, previous, event_outcome, answer, now)
+        if event_outcome == "unresolved" and answer.get("unresolved_reason"):
+            result["unresolved_reason"] = answer["unresolved_reason"]
         event_id = uuid4().hex
         self._db.execute("INSERT INTO learning_event VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (event_id, question_id, unit["unit_id"], (submitted_at if scheduled else now).isoformat(), rating,
@@ -1635,8 +2717,10 @@ class LearningStore:
             ) e JOIN learning_question q ON q.question_id=e.question_id
             ORDER BY e.sequence_number""", (unit_id, limit)).fetchall()
         result = []
+        # Everything learning_practice_policy._fingerprint reads: a heard task is told apart
+        # by its audio text, a generated sound task by its options.
         fields = ("target_id", "revision", "ability", "kind", "variant", "input_mode",
-                  "prompt", "task", "answer", "practice")
+                  "prompt", "task", "answer", "practice", "audio_text", "choices")
         for row in rows:
             snapshot, event = _load(row["snapshot_json"]), _load(row["result_json"])
             answer = event.get("answer") or {}
@@ -1647,6 +2731,23 @@ class LearningStore:
                 "scheduled": bool(event.get("scheduled")),
                 "question": {key: snapshot[key] for key in fields if key in snapshot}})
         return result
+
+
+def _retry_not_before(zone, previous, event_outcome, answer, now):
+    """Queue floor only; due_at_utc and the FSRS card are untouched.
+
+    `previous` is the unit's latest event row before this one (or None).
+    """
+    if event_outcome != "unresolved" or answer.get("diagnostic_needs_teaching"):
+        # Device/input failures and a placement routed back to teaching
+        # keep the short feedback-exposure pause.
+        return (now + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)).isoformat()
+    until = now + timedelta(seconds=UNRESOLVED_RETRY_SECONDS)
+    if previous is not None and previous["role"] == "unresolved" and previous["outcome"] == "unresolved":
+        # A second consecutive unresolved waits for the store's next local day.
+        midnight = datetime.combine(now.astimezone(zone).date() + timedelta(days=1), datetime.min.time(), zone)
+        until = max(until, _utc(midnight))
+    return until.isoformat()
 
 
 def validate_backup_rows(db):
@@ -1682,6 +2783,11 @@ def validate_backup_rows(db):
         from .learning_practice_policy import validate_practice_guide
         validate_practice_guide(row["content_id"], row["revision"], checkpoint, item=item,
                                 validate_result=False)
+        from . import intro_batch
+        if intro_batch.ITEM_KEY in checkpoint:
+            intro_batch.validate_item_state(checkpoint[intro_batch.ITEM_KEY], content_id=row["content_id"])
+        if intro_batch.ROUTE_KEY in checkpoint:
+            intro_batch.validate_route(checkpoint[intro_batch.ROUTE_KEY])
         if "supports_initial_familiarity" in checkpoint and type(checkpoint["supports_initial_familiarity"]) is not bool:
             raise ValueError("Invalid initial familiarity support")
         if "instruction_exposed_at_utc" in checkpoint:
@@ -1705,6 +2811,10 @@ def validate_backup_rows(db):
             _utc(datetime.fromisoformat(profile["selected_at_utc"]))
             if "title_answer_exposed" in profile and type(profile["title_answer_exposed"]) is not bool:
                 raise ValueError("Invalid diagnostic title exposure")
+            if "source" in profile and (profile["source"] != intro_batch.CARD_SOURCE
+                    or set(profile["levels"].values()) - {"new", "familiar"}
+                    or len(set(profile["levels"].values())) != 1):
+                raise ValueError("Invalid introduction card self-report")
             if profile["diagnostic_state"] == "needs_teaching":
                 if profile.get("diagnostic_ability") not in abilities or profile["route"] != "full":
                     raise ValueError("Invalid diagnostic teaching checkpoint")
@@ -1760,6 +2870,10 @@ def validate_backup_rows(db):
             raise ValueError("Invalid learning draft")
         from .assessment_contract import validate_result
         validate_result(q, result)
+        if result is not None and "unresolved_reason" in result:
+            from .assessment_policy import UNRESOLVED_REASON_MESSAGES
+            if result["unresolved_reason"] not in UNRESOLVED_REASON_MESSAGES or result.get("outcome") != "unresolved":
+                raise ValueError("Invalid unresolved reason")
         from .pitch_practice import validate_snapshot, validate_draft
         validate_snapshot(q)
         validate_draft(q, draft)
@@ -1784,16 +2898,30 @@ def validate_backup_rows(db):
             if finalized < submitted or finalized < datetime.fromisoformat(row["occurred_at_utc"]):
                 raise ValueError("Finalization precedes answer")
         if "retry_not_before_utc" in result:
-            expected = datetime.fromisoformat(row["occurred_at_utc"]) + timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS)
+            # Legacy records hold exactly +60 s; unresolved ones now hold
+            # +4 h or the next local midnight. Accept the bounded window.
+            occurred = datetime.fromisoformat(row["occurred_at_utc"])
+            delay = datetime.fromisoformat(result["retry_not_before_utc"]) - occurred
             if (row["role"] != "unresolved" or row["outcome"] not in {"unresolved", "device_failure", "invalid"}
-                    or datetime.fromisoformat(result["retry_not_before_utc"]) != expected):
+                    or not timedelta(seconds=FEEDBACK_COOLDOWN_SECONDS) <= delay
+                    <= timedelta(seconds=RETRY_COOLDOWN_MAX_SECONDS)):
                 raise ValueError("Invalid answer-feedback cooldown")
+        if "unresolved_reason" in result:
+            if (row["role"] != "unresolved" or row["outcome"] != "unresolved"
+                    or result["unresolved_reason"] != (result.get("answer") or {}).get("unresolved_reason")):
+                raise ValueError("Invalid unresolved reason")
         if row["rating"] is not None:
             Card.from_dict(_load(row["state_after_json"]))
             if (row["assisted"] or row["outcome"] in {"incorrect", "revealed"}) and row["rating"] != 1:
                 raise ValueError("Assisted answer cannot be a successful independent review")
         elif row["state_before_json"] != row["state_after_json"]:
             raise ValueError("Unresolved evidence cannot alter the schedule")
+    from .intro_batch_state import validate_database as validate_intro_batch
+    validate_intro_batch(db)
+    from .content_library_rules import REGISTRY_SETTING, validate_registry
+    for (raw,) in db.execute("SELECT value_json FROM app_setting WHERE key=?", (REGISTRY_SETTING,)):
+        # Shape only (08 §7.1): library files need not exist on this device.
+        validate_registry(_load(raw))
     from .learning_replacement import validate_database as validate_replacements
     retired = validate_replacements(db)
     from .practice_archive import validate_database as validate_round_archives

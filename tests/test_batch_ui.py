@@ -8,6 +8,7 @@ import pytest
 
 from support.app_fixtures import CHOICE, WORD, FULL, app_module, set_mode, setup_app, question_app
 from support.fake_ui import View, descendants, text_of
+from support.study_home_support import home_page
 from kanamemory.app import KanaMemory
 from kanamemory.domain import Question
 
@@ -169,7 +170,7 @@ def test_home_groups_learning_actions_without_duplicate_navigation(setup_app):
     for name in ("show_practice_setup", "show_new_batch", "show_kana", "show_free_ink", "show_progress", "show_cards", "show_tutor_center"):
         setattr(app, name, Mock())
     KanaMemory.show_home.__wrapped__(app)
-    assert app.body.children[:2] == [app.home_action_slot, app.home_secondary_slot]
+    assert app.body.children[:2] == [home_page(app).action_slot, home_page(app).secondary_slot]
     buttons = [item for item in descendants(app.body) if item.on_press]
     # The retention check entry joined the home with 561fa07.
     assert [item.text for item in buttons] == ["针对性练习 · 问 AI", "检查掌握情况", "学习记录"]

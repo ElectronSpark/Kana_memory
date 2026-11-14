@@ -1,0 +1,171 @@
+"""StoreArrangement: the study arrangement put together for one learner store (design 12 WP-B3, WP-B6, WP-H).
+
+The composition root of the sub-package: the learner's preferences, the
+study clock read from the store, the dispatcher that joins them, the memo
+of fruitless new-content probes, what this launch has already shown once
+(launch notes), the focus scope catalogue and focus service, the presenter
+of the arrangement's display models, and what one answer counts as
+(PracticeCredit; practice_credit and practice_sitting build it and the
+memory of one sitting of extra practice for code that has no
+StoreArrangement, such as the mastery check), and the practice side of the
+kana queue (QueuePractice: the practice-only answers of reinforce batches
+and the misses held for the deck at the end of a batch; practice_deck builds
+a deck over this store), and extra practice (ExtraSession: the 加练 mode,
+its pool of learned states read through sources/extra_states and its
+sitting). Built lazily by its user and replaced together with the store
+object (a restore or reset swaps the connection): the clock's memory and
+the extra-practice mode belong to one store.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+
+from .services import ArrangementPreferences, ArrangementPresenter, FocusService, LaunchNotes, ShareDispatcher
+from .model import DeckItem
+from .services.extra_session import ExtraSession
+from .services.kana_depth import KanaDepthSetting
+from .services.practice import PracticeCredit
+from .services.practice_deck import PracticeDeck
+from .services.practice_sitting import PracticeSitting
+from .services.queue_practice import QueuePractice
+from .services.probe_memo import ProbeMemo
+from .sources.deck_course import CourseDeckLane
+from .sources.deck_kana import KanaDeckLane
+from .sources.deck_questions import StoreDeckQuestions
+from .sources.due_reviews import DueReviews
+from .sources.events import StoreEventSource
+from .sources.extra_states import StoreExtraStates
+from .sources.practice_exposure import StorePracticeExposure
+from .sources.practice_moves import StorePracticeMoves
+from .sources.scope_catalog import StoreScopeCatalog
+from .sources.states import StoreStates
+
+
+@dataclass(frozen=True)
+class StoreArrangement:
+    store: object
+    preferences: ArrangementPreferences
+    events: StoreEventSource
+    dispatcher: ShareDispatcher
+    probe_memo: ProbeMemo   # fruitless new-content probes of this store's current round
+    launch_notes: LaunchNotes   # once-per-launch prompts (B10 first continue, fresh-install orientation)
+    presenter: ArrangementPresenter
+    catalog: StoreScopeCatalog   # focus scope -> content, title, next section, choices
+    focus: FocusService          # the focus for the scheduling; change() is the one rearrangement
+    credit: PracticeCredit       # what one answer counts as (design 12 E3)
+    practice: QueuePractice      # the kana queue's practice-only answers and held deck items (E3, E4)
+    extra: ExtraSession          # extra practice (加练), memory only (E1-E8)
+
+    @classmethod
+    def for_store(cls, store, *, routes: Callable[[], object] | None = None,
+                  repository: Callable[[], object] | None = None,
+                  kana_kinds: Callable[[], Iterable[str]] | None = None,
+                  course_kinds: Callable[[], Iterable[str]] | None = None,
+                  japanese_input: Callable[[], bool] | None = None) -> StoreArrangement:
+        """``routes``: a callable giving the app's current StudyPathService (route and node scopes need it).
+
+        Without it route and node scopes resolve to None (as if no scope
+        were set); library and family scopes still resolve. ``repository``:
+        a callable giving the app's content repository, asked only when the
+        practice deck builds a kana question on the spot. ``kana_kinds`` /
+        ``course_kinds`` / ``japanese_input``: the kana question kinds the
+        main lane uses now, the enabled course kinds and whether the system
+        Japanese input is on, as the app has them (asked by extra practice at
+        each pool read and deck); without them the stored preferences decide
+        and no system input is assumed.
+        """
+        preferences = ArrangementPreferences(store)
+        events = StoreEventSource(store)
+        dispatcher = ShareDispatcher(preferences, events)
+        launch_notes = LaunchNotes()
+        catalog = StoreScopeCatalog(store, routes)
+        focus = FocusService(preferences, catalog, restart=lambda: _restart_main_round(store))
+        return cls(store, preferences, events, dispatcher, ProbeMemo(), launch_notes,
+                   ArrangementPresenter(store, preferences, events, dispatcher, launch_notes, focus=focus,
+                                        due=DueReviews(store)),
+                   catalog, focus, practice_credit(store), queue_practice(store, repository=repository),
+                   extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
+                                 course_kinds=course_kinds, japanese_input=japanese_input))
+
+    def serves(self, store) -> bool:
+        return self.store is store
+
+    def scope_contents(self) -> frozenset[str] | None:
+        """The focus scope's content for the scheduling (one settings read without a scope); None for none."""
+        return self.focus.scope_contents()
+
+
+def practice_credit(store, learning=None) -> PracticeCredit:
+    """PracticeCredit over ``store`` (``learning``: the caller's LearningStore of it, else a new one)."""
+    return PracticeCredit(StoreStates(store, learning))
+
+
+def practice_sitting(store, learning=None) -> PracticeSitting:
+    """A new, empty sitting of extra practice over ``store``: marks and positions in memory only."""
+    states = StoreStates(store, learning)
+    return PracticeSitting(states, StorePracticeMoves(store, states))
+
+
+def practice_deck(store, items: Iterable[DeckItem], *, sitting: PracticeSitting | None = None, learning=None,
+                  repository: Callable[[], object] | None = None, course_kinds: Iterable[str] = (),
+                  system_japanese_input: bool = False) -> PracticeDeck:
+    """A practice deck of ``items`` over ``store`` (design 12 E5).
+
+    ``sitting``: the sitting it belongs to (a new one when None);
+    ``repository``: the content repository, for kana questions built on the
+    spot; ``course_kinds``: the learner's enabled course kinds, for course
+    questions built on the spot (none: no course question is built).
+    """
+    states = StoreStates(store, learning)
+    sitting = sitting or PracticeSitting(states, StorePracticeMoves(store, states))
+    questions = StoreDeckQuestions(KanaDeckLane(store, repository),
+                                   CourseDeckLane(store, states.learning if course_kinds else learning, course_kinds,
+                                                  system_japanese_input=system_japanese_input))
+    return PracticeDeck(items, credit=PracticeCredit(states), sitting=sitting, questions=questions,
+                        exposure=StorePracticeExposure(store, learning))
+
+
+def queue_practice(store, *, repository: Callable[[], object] | None = None) -> QueuePractice:
+    """The kana queue's practice side over ``store``; checkpoint moves go through StudyStore.save_session_progress."""
+    states = StoreStates(store)
+
+    def checkpoint(session_id: str, index: int, session_right: int, assisted: Sequence[int]) -> None:
+        store.save_session_progress(session_id, index, session_right, list(assisted), {})
+
+    def new_deck(items: Sequence[DeckItem], sitting: PracticeSitting) -> PracticeDeck:
+        return practice_deck(store, items, sitting=sitting, repository=repository)
+
+    return QueuePractice(PracticeCredit(states), new_sitting=lambda: practice_sitting(store),
+                         new_deck=new_deck, exposure=StorePracticeExposure(store), checkpoint=checkpoint,
+                         advanced_at=StorePracticeMoves(store, states).last_advanced)
+
+
+def extra_session(store, *, scope: Callable[[], frozenset[str] | None] = lambda: None,
+                  repository: Callable[[], object] | None = None,
+                  kana_kinds: Callable[[], Iterable[str]] | None = None,
+                  course_kinds: Callable[[], Iterable[str]] | None = None,
+                  japanese_input: Callable[[], bool] | None = None) -> ExtraSession:
+    """Extra practice over ``store`` (design 12 E1-E8): the pool reader, a new sitting per start, decks over it."""
+    kana_kinds = kana_kinds or (lambda: KanaDepthSetting.kinds_in_force(KanaDepthSetting(store).preferences()))
+    course_kinds = course_kinds or (lambda: _stored_course_kinds(store))
+    japanese_input = japanese_input or (lambda: False)
+    states = StoreExtraStates(store, kana_kinds=kana_kinds, course_kinds=course_kinds, scope=scope)
+
+    def new_deck(items: Sequence[DeckItem], sitting: PracticeSitting) -> PracticeDeck:
+        return practice_deck(store, items, sitting=sitting, repository=repository, course_kinds=course_kinds(),
+                             system_japanese_input=japanese_input())
+
+    return ExtraSession(states, new_sitting=lambda: practice_sitting(store), new_deck=new_deck)
+
+
+def _stored_course_kinds(store) -> tuple[str, ...]:
+    """The learner's enabled course kinds as stored (the list LearningStore.submit checks)."""
+    from ..learning_questions import stored_enabled_kinds
+    return tuple(stored_enabled_kinds(store.get_setting("learning_preferences_v1", {})))
+
+
+def _restart_main_round(store) -> None:
+    """One new scheduling pass of the main lane (design 12 H4, 1.7(3))."""
+    from ..practice_round import restart
+    restart(store, lane="main")

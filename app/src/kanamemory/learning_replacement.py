@@ -61,8 +61,13 @@ def observation_only(store, question_id):
     return observation_only(store, prior)
 
 
-def guide_write_guard(checkpoint, state, transition):
-    """A callback from an old page cannot restore its old guide or finish a new one."""
+def guide_write_guard(checkpoint, state, transition, *, orientation=None):
+    """A callback from an old page cannot restore its old guide or finish a new one.
+
+    orientation: an optional zero-argument callable giving the learner's study
+    orientation, read only when a replaced guide with a recorded wrong answer
+    asks for 'bridge' (design 12 Q1 (a): gates.guide_may_continue decides).
+    """
     if not checkpoint.get('guide_replacement_id'):
         return
     if state and any(k in state for k in ('guide_source_item', 'guide_replacement_id')):
@@ -73,7 +78,11 @@ def guide_write_guard(checkpoint, state, transition):
         from .learning_questions import grade_learning_answer
         q, answer = checkpoint.get('guide_question'), checkpoint.get('guide_answer')
         if not q or answer is None or grade_learning_answer(q, answer).get('status') != 'correct':
-            raise ValueError('请先完成当前引导题。')
+            # Only "seen, go on" after an actual recorded wrong answer, never before one.
+            from .arrangement.rules.gates import guide_may_continue
+            if not (transition == 'bridge' and q and answer is not None and orientation is not None
+                    and guide_may_continue(orientation(), answered_wrong=True)):
+                raise ValueError('请先完成当前引导题。')
         if checkpoint.get('guide_sequence') and checkpoint.get('guide_completed_ids') != [q['id'] for q in checkpoint['guide_sequence']]:
             raise ValueError('请先完成当前引导题组。')
 
@@ -107,8 +116,10 @@ class LearningReplacementStore:
         enabled = stored_enabled_kinds(prefs)
         admitted = [ability] if ability else item['enrolled_abilities']
         kinds = [k for k in question_kinds(item) if k in enabled and KIND_ABILITIES[k] in admitted]
-        known = {item['id'], *(r[0] for r in self.db.execute(
-            'SELECT DISTINCT content_id FROM learning_unit WHERE instruction_ready=1'))}
+        # The guide's known set is the dependency gate's (design 11 section 5,
+        # D5): instruction-ready items plus introduced kana, as the original guide.
+        from .course_planning import known_ids
+        known = {item['id'], *known_ids(self.store.queries)}
         return kinds, {'known_background_ids': known, 'system_japanese_input': system_japanese_enabled(self.store)}
 
     def _eligible(self, source, q, *, guided=False):
@@ -131,7 +142,10 @@ class LearningReplacementStore:
             raise ValueError('请先结束正在进行的掌握检查。')
         return item, _source(self.learning, cid, scope)
 
-    def prepare_question(self, question_id, *, now=None, diagnostic_retirement=None):
+    def prepare_question(self, question_id, *, now=None, diagnostic_retirement=None, withdrawn=False):
+        """withdrawn: also accept an unanswered task of a form the app no longer asks
+        (learning_questions.withdrawn_task); such a task needs no blocked material to be exchanged.
+        The receipt and every other check are those of an ordinary replacement."""
         from .learning_store import _utc, _latest_due
         from .learning_questions import build_learning_question
         from .learning_practice_policy import select_practice_plan
@@ -161,7 +175,12 @@ class LearningReplacementStore:
         from .ability_teaching import scope_for
         scope = scope_for(self.db, unit['content_id'], unit['ability'])
         item, source = self._context(unit['content_id'], scope, replacing_unit=unit['unit_id'])
-        if unit['suspended'] or not (diagnostic_retirement or self.learning.content_question_blocked(item, self.learning.get_question(question_id))):
+        current = self.learning.get_question(question_id)
+        if withdrawn:
+            from .learning_questions import withdrawn_task
+            withdrawn = withdrawn_task(current)
+        if unit['suspended'] or not (diagnostic_retirement or withdrawn
+                                     or self.learning.content_question_blocked(item, current)):
             raise ValueError('这道题无需替换，或对应能力已暂停。')
         if item['stage'] == 'guide' and item['checkpoint'].get('guide_question'):
             if self.learning.content_question_blocked(item, item['checkpoint']['guide_question']):
@@ -214,6 +233,8 @@ class LearningReplacementStore:
         if q is None:
             for ability in item['enrolled_abilities']:
                 for candidate in _candidate_questions(source, ability, kinds, state):
+                    if candidate.get('relaxed') or candidate.get('top_up'):
+                        continue  # A guide never shows unmet material nor the formal top-up (design 11, D4).
                     built = build_learning_question(source, candidate['kind'], variant=candidate['variant'], guided=True)
                     if self._eligible(source, built, guided=True):
                         q = built; break

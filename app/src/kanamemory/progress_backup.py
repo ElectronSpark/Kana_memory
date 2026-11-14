@@ -40,6 +40,33 @@ def _fail(message):
     raise ValueError("备份无效：" + message)
 
 
+def _library_rules():
+    from . import content_library_rules
+    return content_library_rules
+
+
+def _with_device_registry(rows, device_registry):
+    """Backup app_setting rows with this device's content library registry (review B-02).
+
+    The backup's content_libraries_v1 (else its own restored hint) becomes the
+    read-only content_libraries_restored_hint_v1; the device's registry, read
+    before the replacement, is written back (none stays none).
+    """
+    rules = _library_rules()
+    kept = {}
+    for row in rows:
+        if row["key"] in (rules.REGISTRY_SETTING, rules.RESTORED_HINT_SETTING):
+            kept[row["key"]] = row["value_json"]
+            continue
+        yield row
+    hint = kept.get(rules.REGISTRY_SETTING) or kept.get(rules.RESTORED_HINT_SETTING)
+    if hint is not None:
+        yield {"key": rules.RESTORED_HINT_SETTING, "value_json": hint}
+    if device_registry is not None:
+        yield {"key": rules.REGISTRY_SETTING,
+               "value_json": json.dumps(device_registry, ensure_ascii=False, allow_nan=False)}
+
+
 def _integer(value, minimum=0, maximum=10**12):
     if type(value) is not int or not minimum <= value <= maximum:
         _fail("数值超出允许范围。")
@@ -354,6 +381,7 @@ def _validated_payload(store, payload, *, cancel_check=None):
     _date(payload.get("created_at_utc"))
     tables = payload["tables"]
     from . import learning_evidence, tutor_memory
+    from .arrangement.services import preferences as arrangement_preferences
     from .record_schema import create_base
     all_tables = (*TABLES, *LEARNING_TABLES, *_teaching_tables())
     if not isinstance(tables, dict) or set(tables) != set(all_tables):
@@ -412,9 +440,25 @@ def _validated_payload(store, payload, *, cancel_check=None):
             if row["key"] == "explicit_learning_start_v1":
                 from .explicit_learning_start import validate
                 validate(setting)
+            from . import intro_batch
+            if row["key"] == intro_batch.SIZE_SETTING:
+                intro_batch.validate_sizes(setting)
+            if row["key"] == intro_batch.STATE_SETTING:
+                intro_batch.validate_state(setting)
             if row["key"] == "study_path_v1":
                 from .study_path import validate_path_state
                 validate_path_state(setting)
+            if row["key"] == _library_rules().RESTORED_HINT_SETTING:
+                # Read-only hint of another registry (review B-02): shape only.
+                _library_rules().validate_registry(setting)
+            if row["key"] in arrangement_preferences.KEYS:
+                # Study orientation and focus (design 12 section 10): strict shape.
+                arrangement_preferences.validate_stored(row["key"], setting)
+            if row["key"] == "study_routes_v1":
+                # Shape only: a route whose library is not installed here stays
+                # (design 10 section 7.2); the page reads it as unavailable.
+                from .study_routes import validate_routes_state
+                validate_routes_state(setting)
             if row["key"] == "kana_context_words_v1":
                 from .kana_context_words import validate_state
                 validate_state(setting)
@@ -969,11 +1013,16 @@ def _import_validated(store, tables, summary, schemas, *, cancel_check=None, on_
         for kind, name, sql in schemas:
             if store._db.execute('SELECT 1 FROM sqlite_master WHERE type=? AND name=?', (kind,name)).fetchone() is None:
                 store._db.execute(sql)
+        # The content library registry is device configuration (design 08 Q7,
+        # review B-02): this device's row survives the restore; the backup's
+        # registry is kept only as a read-only hint and installs nothing.
+        device_registry = store.get_setting(_library_rules().REGISTRY_SETTING, None)
         for name in reversed((*TABLES, *LEARNING_TABLES, *_teaching_tables())):
             store._db.execute("DELETE FROM " + name)
         for name in (*TABLES, *LEARNING_TABLES, *_teaching_tables()):
             check()
-            for index, row in enumerate(tables[name]):
+            rows = tables[name] if name != "app_setting" else _with_device_registry(tables[name], device_registry)
+            for index, row in enumerate(rows):
                 if index % 256 == 0:
                     check()
                 columns = list(row)

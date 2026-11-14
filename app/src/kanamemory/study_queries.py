@@ -3,12 +3,23 @@
 This reader never opens/closes a connection, starts a transaction, caches rows,
 or writes. Call it on the owning thread. Each method documents its filters;
 pending headers deliberately differ from eligible pending learning questions.
+
+Library availability (design 08 section 8.2) is never embedded in SQL: the
+candidate readers take an optional ``exclude`` set of content ids (the
+caller's AvailabilityView.unavailable_ids) and drop those rows in Python
+after the unchanged query; the default excludes nothing.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from datetime import datetime
 import sqlite3
+
+
+def _without(rows, exclude):
+    """Rows whose content_id is not in exclude (the same list when nothing is excluded)."""
+    exclude = frozenset(exclude)
+    return rows if not exclude else [row for row in rows if row["content_id"] not in exclude]
 
 
 class StudyQueries:
@@ -53,10 +64,21 @@ class StudyQueries:
         rows = self.course_progress_rows() if rows is None else rows
         return tuple(dict.fromkeys(row['content_id'] for row in rows if row['stage'] != 'done'))
 
-    def active_review_units(self) -> list[sqlite3.Row]:
+    def active_review_units(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
         """Scored, unsuspended abilities, regardless of pending/reservation state."""
-        return self._connection.execute(
-            "SELECT * FROM learning_unit WHERE suspended=0 AND review_count>0").fetchall()
+        return _without(self._connection.execute(
+            "SELECT * FROM learning_unit WHERE suspended=0 AND review_count>0").fetchall(), exclude)
+
+    def review_unit_queue_rows(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
+        """active_review_units (unit_id, content_id, ability, due_at_utc) with ``queued``.
+
+        ``queued``: whether a pending question of any kind holds the ability's
+        queue place (also a paused, reserved or disabled one, as
+        unqueued_course_ids decides "unqueued").
+        """
+        return _without(self._connection.execute("""SELECT u.unit_id,u.content_id,u.ability,u.due_at_utc,
+            EXISTS (SELECT 1 FROM learning_question q WHERE q.unit_id=u.unit_id AND q.status='pending') AS queued
+            FROM learning_unit u WHERE u.suspended=0 AND u.review_count>0""").fetchall(), exclude)
 
     def pending_course_headers(self, enabled: Iterable[str]) -> list[sqlite3.Row]:
         """Visible course queue headers; includes retained diagnostic reservations."""
@@ -94,6 +116,19 @@ class StudyQueries:
     def instruction_ready_ids(self) -> set[str]:
         return {row[0] for row in self._connection.execute(
             "SELECT DISTINCT content_id FROM learning_unit WHERE instruction_ready=1")}
+
+    def introduced_kana_ids(self) -> set[str]:
+        """Kana the learner has met, as "kana:<kana id>:<script>" (design 11 section 5, D5).
+
+        A kana card row exists once a kana has been studied in that script
+        (suspended rows included: pausing does not unlearn a glyph); word
+        skills are not kana. The id form is the study path's kana entry id,
+        which question_dependencies "kana" lists use. One read, no write.
+        """
+        return {f"kana:{row[0]}:{row[1]}" for row in self._connection.execute(
+            """SELECT DISTINCT content_id,script FROM study_card
+            WHERE script IN ('hiragana','katakana')
+            AND skill NOT IN ('word_kana','word_meaning_kana','word_romaji')""")}
 
     def course_count(self) -> int:
         return self._connection.execute("SELECT COUNT(*) FROM learning_content").fetchone()[0]
@@ -140,14 +175,22 @@ class StudyQueries:
             "SELECT question_id FROM learning_question WHERE unit_id=? AND status='pending'", (unit_id,)).fetchone()
         return row[0] if row else None
 
-    def diagnostic_scope_rows(self) -> list[sqlite3.Row]:
-        return self._connection.execute("""SELECT c.content_id,c.family,
+    def diagnostic_scope_rows(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
+        """Lessons with an unsuspended ability, in the order they were introduced.
+
+        The abilities are summed per lesson BEFORE the lesson row is joined: grouping the join
+        itself puts every lesson's whole content_json into SQLite's sorter once per ability, and a
+        few large lessons then need a temp file ("disk I/O error" on Android, native8).
+        """
+        return _without(self._connection.execute("""SELECT c.content_id,c.family,
             json_extract(c.content_json,'$.title') AS title,
             json_extract(c.content_json,'$.domain') AS domain,
-            SUM(u.review_count) AS reviews,
-            COALESCE(AVG(json_extract(u.scheduler_state_json,'$.stability')),0) AS stability
-            FROM learning_content c JOIN learning_unit u ON u.content_id=c.content_id
-            WHERE u.suspended=0 GROUP BY c.content_id ORDER BY c.introduced_at_utc,c.content_id""").fetchall()
+            u.reviews,u.stability
+            FROM learning_content c JOIN (
+                SELECT content_id,SUM(review_count) AS reviews,
+                COALESCE(AVG(json_extract(scheduler_state_json,'$.stability')),0) AS stability
+                FROM learning_unit WHERE suspended=0 GROUP BY content_id) u ON u.content_id=c.content_id
+            ORDER BY c.introduced_at_utc,c.content_id""").fetchall(), exclude)
 
     def recent_evidence_rows(self) -> list[sqlite3.Row]:
         """Bounded raw 64-row tail; callers keep eligibility/retraction policy."""
@@ -173,15 +216,15 @@ class StudyQueries:
             """SELECT q.kind,u.ability FROM learning_question q JOIN learning_unit u USING(unit_id)
             WHERE u.content_id=? AND q.status='pending'""", (content_id,))}
 
-    def assessed_course_candidates(self) -> list[sqlite3.Row]:
-        return self._connection.execute("""SELECT c.content_id FROM learning_content c
+    def assessed_course_candidates(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
+        return _without(self._connection.execute("""SELECT c.content_id FROM learning_content c
         WHERE EXISTS (
             SELECT 1 FROM learning_unit u WHERE u.content_id=c.content_id
             AND u.suspended=0 AND u.instruction_ready<>0 AND u.review_count>0
             AND EXISTS (SELECT 1 FROM learning_event e WHERE e.unit_id=u.unit_id
                 AND e.role='primary' AND e.assisted=0
                 AND e.outcome IN ('correct','incorrect')))
-        ORDER BY c.rowid""").fetchall()
+        ORDER BY c.rowid""").fetchall(), exclude)
 
     def course_independent_evidence(self) -> Iterator[sqlite3.Row]:
         return (row for row in self._connection.execute("""
@@ -301,7 +344,8 @@ class StudyQueries:
             AND EXISTS(SELECT 1 FROM review_event assessed WHERE assessed.card_id=c.card_id)
         GROUP BY c.content_id,c.script""", kinds))
 
-    def tutor_material_candidates(self, message: str, terms: Iterable[str], candidate_limit: int) -> list[sqlite3.Row]:
+    def tutor_material_candidates(self, message: str, terms: Iterable[str], candidate_limit: int, *,
+                                  exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
         """Scalar matching against independently attempted, unsuspended content."""
         direct = "((length(title)>=2 AND instr(?,title)>0) OR (length(reading)>=2 AND instr(?,reading)>0) OR instr(?,content_id)>0)"
         params = [message, message, message]
@@ -309,7 +353,7 @@ class StudyQueries:
         for term in terms:
             clauses.append('(instr(title,?)>0 OR reading=? OR content_id=?)')
             params.extend([term, term, term])
-        return self._connection.execute("""SELECT c.content_id,c.family,
+        return _without(self._connection.execute("""SELECT c.content_id,c.family,
             json_extract(c.content_json,'$.title') AS title,
             json_extract(c.content_json,'$.reading') AS reading
             FROM learning_content c WHERE ("""
@@ -321,8 +365,114 @@ class StudyQueries:
             ORDER BY (instr(?,content_id)>0) DESC,
                 (length(title)>=2 AND instr(?,title)>0) DESC,
                 (length(reading)>=2 AND instr(?,reading)>0) DESC,c.rowid LIMIT ?""",
-            [*params, message, message, message, candidate_limit]).fetchall()
+            [*params, message, message, message, candidate_limit]).fetchall(), exclude)
+
+    def course_scope_rows(self) -> list[sqlite3.Row]:
+        """Every enrolled lesson's content_id, family, domain and saved depends_on (JSON text or None).
+
+        For the focus scope (design 12 WP-H): one read of small fields, the
+        lesson JSON is not decoded in Python. depends_on is the saved
+        snapshot's list, before any overlay of the stored lesson views.
+        """
+        return self._connection.execute("""SELECT content_id,family,
+            json_extract(content_json,'$.domain') AS domain,
+            json_extract(content_json,'$.depends_on') AS depends_on
+            FROM learning_content ORDER BY rowid""").fetchall()
 
     def course_content_json(self, content_id: str) -> sqlite3.Row | None:
         return self._connection.execute(
             'SELECT content_json FROM learning_content WHERE content_id=?', (content_id,)).fetchone()
+
+    def latest_review_ratings(self, course: bool, limit: int, skills: Iterable[str] = (), *,
+                              reach: int) -> list[int]:
+        """Ratings (1-4) of the latest ``limit`` formal reviews among the latest ``reach`` log rows, newest first.
+
+        Records page, design 12 UI4. A review is a formal answer on a
+        scheduling state that had been reviewed before (its state_before_json
+        has a last_review); a first rating is not one. Course: learning_event
+        rows of role primary with a rating, among the latest ``reach`` primary
+        rows. Kana: review_event rows whose routed skill (ability_route.skill,
+        else the card's skill) is in ``skills``, word cards left out, among
+        the latest ``reach`` review_event rows (word cards included in the
+        reach). Newest by the answer's own instant: the reach is read through
+        the time indexes (learning_events_day, reviews_time) and stops after
+        ``reach`` rows, so the cost does not grow with the history even when
+        a direction has fewer than ``limit`` reviews.
+        """
+        if course:
+            return [row[0] for row in self._connection.execute("""SELECT rating FROM (
+                SELECT rowid AS row,occurred_at_utc,rating,state_before_json FROM learning_event
+                WHERE role='primary' ORDER BY occurred_at_utc DESC,rowid DESC LIMIT ?)
+                WHERE rating IS NOT NULL AND json_extract(state_before_json,'$.last_review') IS NOT NULL
+                ORDER BY occurred_at_utc DESC,row DESC LIMIT ?""", (int(reach), int(limit)))]
+        skills = sorted(set(skills))
+        marks = ",".join("?" for _ in skills)
+        return [row[0] for row in self._connection.execute(f"""SELECT e.rating FROM (
+            SELECT rowid AS row,card_id,occurred_at_utc,rating,review_log_json,state_before_json FROM review_event
+            ORDER BY occurred_at_utc DESC,rowid DESC LIMIT ?) e
+            JOIN study_card c USING(card_id)
+            WHERE c.skill NOT IN ('word_kana','word_meaning_kana','word_romaji')
+            AND COALESCE(json_extract(e.review_log_json,'$.ability_route.skill'),c.skill) IN ({marks})
+            AND json_extract(e.state_before_json,'$.last_review') IS NOT NULL
+            ORDER BY e.occurred_at_utc DESC,e.row DESC LIMIT ?""", (int(reach), *skills, int(limit)))] if skills else []
+
+    def card_adjustment_moves(self, card_kind: str, card_id: str) -> list[sqlite3.Row]:
+        """The card's effective auxiliary adjustments: occurred_at_utc, before_due_at_utc, after_due_at_utc.
+
+        Design 12 E3 (10 (6)): whether a state's due was already brought
+        forward within 24 hours is read from these rows. Retracted rows are
+        left out; every source (tutor, word spelling, practice) is included.
+        Through the index evidence_adjustment_anchor; empty without the table.
+        """
+        if not self._connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='learning_aux_adjustment'").fetchone():
+            return []
+        return self._connection.execute("""SELECT occurred_at_utc,before_due_at_utc,after_due_at_utc
+            FROM learning_aux_adjustment WHERE card_kind=? AND card_id=? AND retracted=0""",
+            (card_kind, card_id)).fetchall()
+
+    def practice_exposures(self, content_ids: Iterable[str], since: str) -> list[sqlite3.Row]:
+        """Kana practice answers that showed an answer after ``since``: target_id, ability, latest occurred_at_utc.
+
+        Design 12 E5 (10 (6), AC17): a practice-only kana answer writes no
+        review event; its one evidence row (source kana, role exposure, event id
+        "practice:...") is what the queue's feedback wait reads instead. One
+        row per (target, ability); ability is "<script>:<skill>". Through the
+        index evidence_target_time; empty without the evidence table.
+        """
+        ids = list(dict.fromkeys(content_ids))
+        if not ids or not self._connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='learning_evidence'").fetchone():
+            return []
+        marks = ",".join("?" for _ in ids)
+        return self._connection.execute(f"""SELECT target_id,ability,MAX(occurred_at_utc) AS occurred_at_utc
+            FROM learning_evidence WHERE target_id IN ({marks}) AND occurred_at_utc>? AND source='kana'
+            AND role='exposure' AND retracted=0 AND event_id LIKE 'practice:%' GROUP BY target_id,ability""",
+            (*ids, since)).fetchall()
+
+    def practised_positions(self, session_id: str) -> set[int]:
+        """Queue positions of a kana session whose practice-only answer was moved past (design 12 E3, E4).
+
+        Each writes one evidence row "见过" with the event id
+        "practice:<session_id>:<position>" when the learner leaves its result
+        page. Read by an index-usable range on the primary key event_id;
+        empty without the evidence table.
+        """
+        if not self._connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='learning_evidence'").fetchone():
+            return set()
+        prefix = f"practice:{session_id}:"
+        result = set()
+        for (event_id,) in self._connection.execute(
+                "SELECT event_id FROM learning_evidence WHERE event_id>=? AND event_id<?",
+                (prefix, prefix[:-1] + ";")):
+            position = event_id[len(prefix):]
+            if position.isdigit():
+                result.add(int(position))
+        return result
+
+    def answered_positions(self, session_id: str) -> set[int]:
+        """Queue positions of a kana session with a durable answer (a formal review or a word-spelling attempt)."""
+        return {row[0] for row in self._connection.execute("""SELECT question_index FROM session_answer
+            WHERE session_id=? UNION SELECT question_index FROM word_spelling_attempt WHERE session_id=?""",
+            (session_id, session_id))}

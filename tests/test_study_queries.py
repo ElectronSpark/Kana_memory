@@ -46,6 +46,25 @@ def test_visible_headers_and_eligible_pending_have_different_reservation_filters
     assert store._db.total_changes == changes
 
 
+def test_introduced_kana_are_kana_cards_by_script_without_word_skills(stores):
+    store, _ = stores
+    assert store.queries.introduced_kana_ids() == set()
+    for content_id, skill, script, suspended in (("kana-3042", "kana_choice", "hiragana", 0),
+                                                 ("kana-3042", "kana_romaji", "hiragana", 0),
+                                                 ("kana-30a2", "romaji_kana", "katakana", 1),
+                                                 ("word-neko", "word_meaning_kana", "hiragana", 0)):
+        store._db.execute("""INSERT INTO study_card(card_id,content_id,content_version,skill,script,
+            scheduler_state_json,scheduler_version,due_at_utc,introduced_at_utc,review_count,suspended)
+            VALUES (?,?,?,?,?,'{}','v',?,?,1,?)""",
+            (f"{content_id}:{skill}:{script}", content_id, "1", skill, script, START.isoformat(),
+             START.isoformat(), suspended))
+    store._db.commit()
+    before, changes = tuple(store._db.iterdump()), store._db.total_changes
+    # The study path's kana entry id form, which question_dependencies "kana" lists use.
+    assert store.queries.introduced_kana_ids() == {"kana:kana-3042:hiragana", "kana:kana-30a2:katakana"}
+    assert tuple(store._db.iterdump()) == before and store._db.total_changes == changes
+
+
 def test_session_headers_keep_completed_prefix_and_disabled_kinds_without_hydration(stores, monkeypatch):
     store, _ = stores
     questions = [Question("kana-a", "kana_choice", "hiragana", "あ", "a", ["a", "i"]),

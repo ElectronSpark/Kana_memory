@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from check_architecture import Edge, check_edges, check_tree, scan_source
+from check_architecture import Edge, check_edges, check_pages, check_tree, scan_page_coupling, scan_source, tree_report
 
 
 def policy_for(edges):
@@ -182,3 +182,151 @@ def test_tree_scan_never_executes_application_or_resource_code(tmp_path):
     (engine / "resources/irrelevant.py").write_text("not python !", "utf-8")
     errors = check_tree(tmp_path, policy_for(Counter()))
     assert len(errors) == 1 and "New dependency" in errors[0]
+
+
+# --- design 13 G1-G3: one shrinking number per file that creates controls ----------------------
+
+PAGE = "app/src/kanamemory/page_ui.py"
+
+
+def page(body, header="from . import ui_components as ui\n", file=PAGE, owners=()):
+    return scan_page_coupling(header + body, file, owners)
+
+
+@pytest.mark.parametrize("body", [
+    "def show(self):\n    return self.store.get_setting('x')",                  # a call through the store
+    "def show(self):\n    return self.learning_store.queries.course_count()",   # a member of the store, called
+    "def helper(app):\n    return app.store.summary()",                         # through a passed app object
+    "def show(self):\n    return fetch(self.store)",                            # the store as an argument
+    "def show(self):\n    return fetch(1, store=self.learning_store)",          # ... or as a keyword
+    "def show(self):\n    return fetch([self.store])",                          # ... inside a list
+    "def show(self):\n    return fetch((1, self.store))",                       # ... inside a tuple
+    "def show(self):\n    return fetch(*[self.store])",                         # ... starred
+    "def show(self):\n    return getattr(self.store, 'practice_lane', 'main')",  # constant getattr
+    "def show(self):\n    return hasattr(self.store, 'load_session_progress')",
+    "def show(self):\n    store = self.store\n    return store.get_setting('x')",   # a local alias
+    "def show(self):\n    queries = self.store.queries\n    return queries.x()",       # a bare read kept in a local
+    "def show(self):\n    return self.store is None",                           # a comparison
+    "def show(self):\n    self.store.practice_lane = 'main'",                   # a member set on the store
+    "def show(self, learning):\n    return learning.store.get_setting('x')",   # any base, not only self and app
+    "def show(self):\n    return self.window.app.store.zone",
+    "def show(self):\n    return fetch(self.learning_store.store)",             # a chain is one reference
+    "def show(self):\n    return self.learning_store.store.queries.x()",
+])
+def test_every_store_reference_counts_once(body):
+    assert page(body).store_access == 1
+    assert page(body, header="import toga\n").store_access == 1
+
+
+@pytest.mark.parametrize("body", [
+    "def show(self):\n    return id(self.store), isinstance(self.store, object), type(self.learning_store)",
+    "def show(self):\n    return self.repo.lookup('x'), self.stores, self.store_name",
+    "def setup(self):\n    self.store = Store()\n    self.learning_store = LearningStore(None)",   # assigned, not read
+])
+def test_identity_checks_assignments_and_other_names_are_not_counted(body):
+    assert page(body).store_access == 0
+
+
+def test_only_a_direct_argument_of_a_listed_owner_call_is_exempt():
+    owners = {"practice_round.restart": "round owner"}
+    named = "from .practice_round import restart, sealed\ndef go(self):\n    restart(self.store)\n    return sealed(self.store)"
+    assert page(named, owners=owners).store_access == 1          # sealed reads: the page fetches data
+    assert page(named).store_access == 2
+    module = "from . import practice_round as pr\ndef go(self):\n    pr.restart(self.store, store=self.learning_store)"
+    assert page(module, owners=owners).store_access == 0
+    wrapped = "from . import practice_round as pr\ndef go(self):\n    pr.restart([self.store], *[app.store])"
+    assert page(wrapped, owners=owners).store_access == 2        # not directly an argument
+    used = "from . import practice_round as pr\ndef go(self):\n    pr.restart(self.store.queries)"
+    assert page(used, owners=owners).store_access == 1           # the argument is a store member, not the store
+    nested = "from ...practice_round import restart\ndef go(app):\n    restart(app.store)"
+    assert page(nested, file="app/src/kanamemory/x/y.py", owners=owners).store_access == 0
+    # The page packages (arrangement/ui, admission/ui): no exemption, every reference counts.
+    assert page(nested, file="app/src/kanamemory/arrangement/ui/x.py", owners=owners).store_access == 1
+    assert page(nested, file="app/src/kanamemory/admission/ui/x.py", owners=owners).store_access == 1
+    sibling = nested.replace("...", "..")   # arrangement.practice_round, a different module
+    assert page(sibling, file="app/src/kanamemory/arrangement/services/x.py", owners=owners).store_access == 1
+
+
+def test_files_that_create_no_controls_are_not_scanned_and_arrangement_pages_always_are():
+    body = "def go(self):\n    return self.store.get_setting('x')"
+    assert page(body, header="") is None
+    assert page(body, header="", file="app/src/kanamemory/arrangement/ui/page.py").store_access == 1
+    assert page(body, header="", file="app/src/kanamemory/admission/ui/page.py").store_access == 1
+    assert page(body, header="", file="app/src/kanamemory/admission/page.py") is None   # only its ui package
+    assert page(body, header="from toga.style import Pack\n").store_access == 1
+    assert page(body, header="from .ui_components import label\n").store_access == 1
+
+
+def test_private_store_members_count_once_and_are_listed():
+    body = ("def show(self):\n    self.store._session_lane()\n    rows = self.learning_store._dispatch_pending\n"
+            "    return getattr(self.store, '_db', None), getattr(self.store, 'zone', None)")
+    coupling = page(body)
+    assert coupling.store_access == 4
+    assert coupling.private == [f"{PAGE}:3 self.store._session_lane", f"{PAGE}:4 self.learning_store._dispatch_pending",
+                                f"{PAGE}:5 getattr(self.store, '_db', None)"]
+
+
+def test_private_members_of_any_base_and_of_a_chain_are_listed_once():
+    body = "def show(self):\n    return self.learning_store.store._db, app.store._pending\n"
+    coupling = page(body)
+    assert coupling.store_access == 2
+    assert coupling.private == [f"{PAGE}:3 self.learning_store.store._db", f"{PAGE}:3 app.store._pending"]
+
+
+def test_attributes_set_on_the_app_are_distinct_names():
+    body = ("class PageMixin:\n    def show(self):\n        self.a = 1\n        self.a += 1\n        self.b: int = 2\n"
+            "        self.c, other = 3, 4\n        setattr(self, 'd', 5)\n"
+            "        [self.f, *self.g] = 6, 7\n        *self.h, other = 8, 9\n"
+            "        for self.i in range(2):\n            pass\n"
+            "        with open('x') as self.j, open('y') as (self.k, other):\n            pass\n"
+            "    async def run(self):\n        async for self.l in source():\n            pass\n"
+            "        async with lock() as self.m:\n            pass\n"
+            "class Model:\n    def __init__(self):\n        self.not_app = 1\n        for self.not_app_either in ():\n"
+            "            pass\n"
+            "def helper(app):\n    app.e = 1\n    for app.n in ():\n        pass\n")
+    assert page(body).app_state == set("abcdefghijklmn")
+
+
+def coupling_policy(store=None, state=None):
+    return {"page_coupling": {"owner_calls": {}, "store_access": store or {}, "app_state": state or {}}}
+
+
+def test_ceilings_reject_growth_require_lowering_and_new_files_start_at_zero():
+    two = page("class PageMixin:\n    def show(self):\n        self.a = self.store.x()\n        return self.store.y()")
+    assert check_pages({PAGE: two}, coupling_policy({PAGE: 2}, {PAGE: 1}), {PAGE}) == []
+    above = check_pages({PAGE: two}, coupling_policy({PAGE: 1}, {PAGE: 1}), {PAGE})
+    assert above == [f"New page store access (2 > 1): {PAGE}"]
+    below = check_pages({PAGE: two}, coupling_policy({PAGE: 3}, {PAGE: 2}), {PAGE})
+    assert below == [f"Lower page store access ceiling (2 < 3): {PAGE}",
+                     f"Lower app attributes set by pages ceiling (1 < 2): {PAGE}"]
+    new = check_pages({PAGE: two}, coupling_policy(), {PAGE})
+    assert new == [f"New page store access (2 > 0): {PAGE}", f"New app attributes set by pages (1 > 0): {PAGE}"]
+    # A removed or migrated file must drop its entry; the public export skips files it does not ship.
+    assert check_pages({}, coupling_policy({PAGE: 2}), set()) == [f"Lower page store access ceiling (0 < 2): {PAGE}"]
+    assert check_pages({}, coupling_policy({PAGE: 2}), set(), public_subset=True) == []
+
+
+@pytest.mark.parametrize("ceilings", [{PAGE: 0}, {PAGE: "3"}, {"app/src/kanamemory/arrangement/ui/page.py": 1},
+                                      {"app/src/kanamemory/admission/ui/add_page.py": 1}])
+def test_ceiling_entries_are_positive_and_never_for_arrangement_pages(ceilings):
+    with pytest.raises(ValueError):
+        check_pages({}, coupling_policy(ceilings), set())
+
+
+def test_tree_report_lists_private_members_and_checks_ceilings(tmp_path):
+    engine = tmp_path / "app/src/kanamemory"
+    engine.mkdir(parents=True)
+    (engine / "page_ui.py").write_text("import toga\ndef show(self):\n    return getattr(self.store, '_db', None)\n", "utf-8")
+    (engine / "rules.py").write_text("def plain(self):\n    return self.store._db\n", "utf-8")
+    policy = {**policy_for(Counter()), **coupling_policy({PAGE: 1})}
+    errors, summary = tree_report(tmp_path, policy)
+    assert all("page_ui" not in error for error in errors)   # rules.py's _db is the private_storage rule's
+    assert summary[1] == f"  private store member: {PAGE}:3 getattr(self.store, '_db', None)"
+    assert any("New page store access (1 > 0)" in error for error in tree_report(tmp_path, policy_for(Counter()))[0])
+
+
+def test_an_app_base_imported_by_name_is_the_app_class_too():
+    source = "from toga import App\n\nclass Main(App):\n    def start(self):\n        self.window_state = 1\n"
+    assert scan_page_coupling(source, "app/src/kanamemory/main_ui.py").app_state == {"window_state"}
+    other = "import toga\nfrom somewhere import App\n\nclass Main(App):\n    def start(self):\n        self.x = 1\n"
+    assert scan_page_coupling(other, "app/src/kanamemory/main_ui.py").app_state == set()

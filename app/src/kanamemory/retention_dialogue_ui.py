@@ -41,7 +41,7 @@ class DiagnosticDialogueUIMixin:
         view['field'] = field
         field._feedback_fragment = {'kind': 'diagnostic_dialogue_input', 'episode_id': episode,
                                     'entry_id': entry, 'form_id': form['id'], 'question': deepcopy(row['question'])}
-        field.on_change = lambda w, **kw: self._save_diagnostic_dialogue(view)
+        field.on_change = lambda w, **kw: self._type_diagnostic_dialogue(view)
         view['send'] = u.button('发送', lambda w: self.request_diagnostic_dialogue(view), primary=True)
         children = [context['budget'], field, view['send'], context['status']]
         if row['result'] is not None:
@@ -56,11 +56,51 @@ class DiagnosticDialogueUIMixin:
         if self.ai_connection_status().get('ready'):
             self.request_diagnostic_dialogue(view, mode='starters')
 
+    def _type_diagnostic_dialogue(self, view):
+        """on_change: the same save_form as before, at most 0.25 s later.
+
+        Send, explain, starters, back and every page change (app.flush_drafts)
+        save explicitly first, so the form revision is current before a request.
+        """
+        if self.page != 'diagnostic_dialogue' or self._diagnostic_dialogue is not view: return
+        from .tutor_ui import page_draft_debouncer
+        draft = page_draft_debouncer(self, '_diagnostic_dialogue_draft',
+                                     lambda: DiagnosticDialogueUIMixin.flush_diagnostic_dialogue_draft(self))
+        if draft is None:
+            self._save_diagnostic_dialogue(view); return
+        draft.accept(view['form']['id'], view['field'].value or '')
+
+    def flush_diagnostic_dialogue_draft(self):
+        """Synchronously persist a pending typed question; None if none pending."""
+        draft = getattr(self, '_diagnostic_dialogue_draft', None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None: return None
+        view = getattr(self, '_diagnostic_dialogue', None)
+        if view is None or view['form']['id'] != pending[0]:
+            return None  # Unreachable: leaving this page saves explicitly and stops on failure.
+        return DiagnosticDialogueUIMixin._persist_diagnostic_dialogue(self, view, pending[1])
+
     def _save_diagnostic_dialogue(self, view=None):
         view = view or getattr(self, '_diagnostic_dialogue', None)
         if self.page != 'diagnostic_dialogue' or view is None or self._diagnostic_dialogue is not view: return True
+        draft = getattr(self, '_diagnostic_dialogue_draft', None)
+        if draft is not None:
+            draft.flush_now()  # Superseded by the current field written below.
+        return DiagnosticDialogueUIMixin._persist_diagnostic_dialogue(self, view, view['field'].value or '')
+
+    def _persist_diagnostic_dialogue(self, view, text):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        status = view['context']['status']
+        def busy():
+            status.text = '数据库正忙，提问草稿暂未保存；继续输入或操作时会自动重试。'
         try:
-            view['form'] = self.diagnostic_dialogue().save_form(view['form'], view['field'].value or '')
+            form = persist_with_lock_notice(lambda: self.diagnostic_dialogue().save_form(view['form'], text),
+                record=lambda exc: record_error('retention_dialogue_draft', 'save', exc),
+                debouncer=getattr(self, '_diagnostic_dialogue_draft', None), key=view['form']['id'], value=text,
+                notice=busy)
+            if form is False: return False
+            view['form'] = form
             return True
         except ValueError:
             view['context']['status'].text = '提问草稿未保存，请缩短输入后重试。'
@@ -155,8 +195,14 @@ class DiagnosticDialogueUIMixin:
         if job['request']['mode'] == 'ask':
             view['send'].enabled = True
             view['context']['status'].text = '' if saved and saved['status'] == 'completed' else '回复未完成，问题已保存。'
-            # Never erase text typed while the network request was pending.
-            if saved and saved['status'] == 'completed' and view['form']['revision'] == job['request']['form_revision']:
+            # Never erase text typed while the network request was pending:
+            # a debounced edit must reach the form revision before comparing.
+            typed = getattr(self, '_diagnostic_dialogue_draft', None)
+            if typed is not None and typed.pending is not None:
+                self.flush_diagnostic_dialogue_draft()
+            unsaved = typed is not None and typed.pending is not None
+            if (saved and saved['status'] == 'completed' and not unsaved
+                    and view['form']['revision'] == job['request']['form_revision']):
                 view['field'].value = ''; self._save_diagnostic_dialogue(view)
         self._render_diagnostic_dialogue(view)
 

@@ -191,16 +191,26 @@ def _admissible(content):
     return abilities | {'listening'} if content.get('family') == 'word' else abilities
 
 
-def word_listening_candidates(db, limit):
-    """Oldest actually studied words without a listening unit, in insertion order."""
+def word_listening_candidates(db, limit, *, batch_open=None):
+    """Oldest actually studied words without a listening unit, in insertion order.
+
+    For a batch-introduced word (四之二) the caller's batch_open(content_id)
+    replaces "any review": listening is admitted only once its ability gate
+    is open. Without that reader such words keep the original rule.
+    """
     from .learning_store import _load
+    from .intro_batch import ROUTE
     result = []
-    for row in db.execute("""SELECT content_id,content_json FROM learning_content c
+    for row in db.execute("""SELECT content_id,content_json,
+            json_extract(checkpoint_json,'$.intro_route') IS ? AS batch_route,
+            EXISTS (SELECT 1 FROM learning_unit u WHERE u.content_id=c.content_id
+                AND u.suspended=0 AND u.review_count>0) AS reviewed
+            FROM learning_content c
             WHERE family='word' AND NOT EXISTS (SELECT 1 FROM learning_unit u
                 WHERE u.content_id=c.content_id AND u.ability='listening')
-            AND EXISTS (SELECT 1 FROM learning_unit u WHERE u.content_id=c.content_id
-                AND u.suspended=0 AND u.review_count>0)
-            ORDER BY c.rowid"""):
+            ORDER BY c.rowid""", (ROUTE,)):
+        if not (batch_open(row['content_id']) if row['batch_route'] and batch_open is not None else row['reviewed']):
+            continue
         content = _load(row['content_json'])
         if (row['content_id'].startswith('local:') or content.get('ai_generated')
                 or not content.get('title') or not content.get('reading')

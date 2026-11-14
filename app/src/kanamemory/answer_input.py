@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from .question_kinds import REGISTRY
+
 SETTING = "answer_input_preferences_v1"
 TEXT_MODES = frozenset({"text", "typing", "free_text"})
 BASIC = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん"
@@ -16,6 +18,8 @@ VOICED = "がぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷ�
 SMALL = "ぁぃぅぇぉゃゅょっゎゕゖ"
 SYMBOLS = "ー、。！？「」『』（）・〜…：；＝＋／0123456789"
 EXTRA = "ゐゑゝゞヷヸヹヺヽヾㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ"
+# Latin letters that start a romaji composition (ASCII, full-width, macrons).
+LATIN_LETTER = re.compile(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ]")
 
 
 def katakana(text):
@@ -38,16 +42,31 @@ def japanese_text(question):
     return learning_text_role(question, "input") == "study"
 
 
+def _romaji_style(question):
+    """"reading" (whole draft), "runs" (Latin runs only) or None (no romaji).
+
+    Each kind's style is its registered input_mode_policy (question_kinds/
+    vocab_text, grammar_cloze, grammar_production); no policy means no romaji.
+    """
+    spec = REGISTRY.get(question.get("kind"))
+    if spec is not None and spec.input_mode_policy is not None:
+        return spec.input_mode_policy(question)
+    return None
+
+
 def romaji_reading_input(question):
     """Free reading/grammar composition; retain the original shared API name.
 
     Kana selection and pronunciation analysis are separate response contracts.
     Eligibility depends only on the public task, never its expected answer.
     """
-    return (question.get("kind") in {"vocab_reading", "vocab_recall", "grammar_cloze",
-            "grammar_transform", "grammar_reorder", "targeted_correction",
-            "controlled_sentence_production"} and japanese_text(question)
+    return (_romaji_style(question) is not None and japanese_text(question)
             and not question.get("choices") and not question.get("options"))
+
+
+def has_latin(value):
+    """Whether a draft holds a Latin letter (romaji, an ABC-keyboard word)."""
+    return isinstance(value, str) and LATIN_LETTER.search(value) is not None
 
 
 def reading_input_conversion(question, value):
@@ -58,17 +77,17 @@ def reading_input_conversion(question, value):
     """
     if not romaji_reading_input(question) or not isinstance(value, str):
         return None
-    if not re.search(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ]", value):
+    if not has_latin(value):
         return None
     if len(value) > 10000:
         return {"text": "", "pending": "输入过长", "complete": False}
     from .romaji_input import convert_romaji
-    if question.get("kind") != "vocab_reading":
-        # A grammar draft may include public kanji, digits or existing kana.
+    if _romaji_style(question) != "reading":
+        # A word or grammar draft may include public kanji, digits or existing kana.
         # Convert only Latin runs; do not guess kanji or rewrite other text.
         output, end = [], 0
         for match in re.finditer(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ'’＇\-－]+", value):
-            if not re.search(r"[a-zA-Zａ-ｚＡ-ＺāīūēōĀĪŪĒŌ]", match.group()):
+            if not has_latin(match.group()):
                 continue
             output.append(value[end:match.start()])
             result = convert_romaji(match.group(), convention="keyboard", final=True)

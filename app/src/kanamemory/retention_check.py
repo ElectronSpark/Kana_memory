@@ -200,7 +200,7 @@ class RetentionCheckStore:
 
     def start(self, target_ids, enabled_kinds, request_id, *, exposed_ids=(), now=None):
         from .learning_content import get_learning_item
-        from .learning_practice_policy import practice_candidates
+        from .learning_practice_policy import not_relaxed, practice_candidates
         from .learning_questions import build_learning_question
         from .answer_input import system_japanese_enabled
         from .learning_evidence import reviewed_question
@@ -222,13 +222,16 @@ class RetentionCheckStore:
             stamp=now or app_clock.utc_now()
             known = self.store.queries.instruction_ready_ids()
             system_japanese = system_japanese_enabled(self.store)
+            availability = self.store.library_availability()  # 08 section 8.2, read inside this transaction
             for cid in target_ids:
                 item=get_learning_item(cid)
                 if item is None:
                     raise ValueError('这项材料尚无可核验的本地题。')
                 candidates=[]
+                # A check never takes the relaxed tier (design 11 section 5, D4).
                 for candidate in practice_candidates(item, enabled_kinds,
-                        known_background_ids=known, system_japanese=system_japanese):
+                        known_background_ids=known, system_japanese=system_japanese, availability=availability,
+                        admit=not_relaxed):
                     q=build_learning_question(item,candidate['kind'],variant=candidate['variant'])
                     if q.get('input_mode','choice') not in ('choice','text','typing','free_text') or q.get('audio_text'):
                         continue

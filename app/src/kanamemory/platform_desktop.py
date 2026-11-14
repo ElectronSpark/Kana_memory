@@ -212,6 +212,24 @@ class DesktopPlatform:
             return data
         return await asyncio.to_thread(read)
 
+    async def import_library_pack(self):
+        """Pick one content library pack (.zip) through the backup import channel."""
+        import toga
+        from .content_library_rules import MAX_PACK_BYTES
+        window = toga.App.app.current_window
+        if self._closed or window is None:
+            return None
+        path = await window.dialog(toga.OpenFileDialog("选择内容库文件", file_types=["zip"]))
+        if path is None or self._closed:
+            return None
+        def read():
+            with Path(path).open("rb") as stream:
+                data = stream.read(MAX_PACK_BYTES + 1)
+            if len(data) > MAX_PACK_BYTES:
+                raise PlatformError("内容库文件超过 256 MiB 限制。")
+            return data
+        return await asyncio.to_thread(read)
+
     def pending_material_shares(self):
         return []
 

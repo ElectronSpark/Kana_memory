@@ -201,9 +201,9 @@ def grade(question, answer, normal):
 
 
 def rows_for(store, target_id):
-    from .personal_content_versions import HEAD, PREFIX, validate, head_key
+    from .personal_content_versions import HEAD, PREFIX, validate, head_key, setting_rows
     from .personal_content_compensation import HOLD, PREFIX as WITHDRAWAL, hold_key
-    heads = {k: json.loads(v) for k, v in store._db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (HEAD + '*',))}
+    heads = setting_rows(store, HEAD)
     rows, seen = [], set()
     def add(event, pending=False):
         event = validate(event)
@@ -216,8 +216,7 @@ def rows_for(store, target_id):
                 rows.append({'row': row, 'event': {'id': event['id'], 'generation': event['generation']}, 'pending': pending})
                 seen.add(marker)
     for identity in set(heads.values()) - {None}: add(store.get_setting(PREFIX + identity, None))
-    for key, raw in store._db.execute('SELECT key,value_json FROM app_setting WHERE key GLOB ?', (HOLD + '*',)):
-        identity = json.loads(raw)
+    for key, identity in setting_rows(store, HOLD).items():
         if not identity: continue
         withdrawal = store.get_setting(WITHDRAWAL + identity, None)
         event = store.get_setting(PREFIX + withdrawal['adoption_id'], None)

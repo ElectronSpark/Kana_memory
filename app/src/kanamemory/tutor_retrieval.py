@@ -87,7 +87,8 @@ def retrieve_question_material(store, message, *, limit=MAX_MATCHES):
     # sentence would retrieve every one-character particle it happens to use.
     terms = [term for term in terms if 1 < len(term) <= 160
              or any(term == text for text, _, _ in quoted)]
-    rows = queries.tutor_material_candidates(message, terms, MAX_CANDIDATES)
+    # 08 section 8.2: content of a disabled/missing library is no background.
+    rows = queries.tutor_material_candidates(message, terms, MAX_CANDIDATES, exclude=store.library_unavailable_ids())
     ranked = [(match, row['content_id']) for row in rows if (match := _matches(message, row, quoted))]
     ranked.sort(key=lambda pair: (pair[0][:3], pair[1]), reverse=True)
     selected, spans = [], []

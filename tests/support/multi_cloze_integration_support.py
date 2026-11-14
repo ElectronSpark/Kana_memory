@@ -50,8 +50,12 @@ def cloze_case(tmp_path, monkeypatch, request):
     # qualification or scheduler check with a mock result.
     monkeypatch.setattr(learning_content, "_ITEMS", {CID: deepcopy(authored), BACKGROUND: deepcopy(background)})
     monkeypatch.setattr(learning_questions, "_PRACTICE", {"schema_version": 1, "items": {}})
-    from kanamemory import learning_conditions, learning_dependencies
-    for cached in (learning_conditions._reviewed_index, learning_dependencies._bundled_dependency_signature):
+    from kanamemory import learning_conditions, learning_dependencies, question_support, structured_lessons
+    # Every process-wide projection of the catalogue: computed from the synthetic one here, it must not be what a
+    # later test reads (the background word senses leaked into whichever test ran next and asked for them first).
+    for cached in (learning_conditions._reviewed_index, learning_dependencies._bundled_dependency_signature,
+                   learning_dependencies._bundled_fingerprint, question_support._background_word_senses,
+                   learning_questions._word_pool, structured_lessons.catalogue):
         cached.cache_clear()
         request.addfinalizer(cached.cache_clear)
     path = tmp_path / "learner"

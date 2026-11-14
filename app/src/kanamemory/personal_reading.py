@@ -94,7 +94,12 @@ def reading_qualification(store, source, question, event):
     elif kind == 'vocab_audio_meaning':
         if question['audio_text'] != reading or question['answer'] != source['meaning']: return None
     elif kind == 'vocab_audio_word':
-        if question['audio_text'] != reading or question['answer'] != source['title']: return None
+        from .word_sound_questions import is_kana_variant, normal_reading
+        taught = {source['title']}
+        if is_kana_variant(question.get('variant')):
+            # A kana-spelling variant answers with the reading itself; a kana title is its own spelling.
+            taught = {reading} if normal_reading(source['title']) != normal_reading(reading) else {reading, source['title']}
+        if question['audio_text'] != reading or question['answer'] not in taught: return None
     elif kind == 'vocab_reading_choice':
         if question['answer'] != reading or question['prompt'] != source['title']: return None
     elif question['answer'] != source['title'] or reading not in question['prompt']:

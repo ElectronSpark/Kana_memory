@@ -6,7 +6,12 @@ from .domain import SKILLS, WORD_SKILLS, SCRIPTS
 from .kana_learning_intro import _saved, should_introduce
 
 
-def teaching_state(store, now, start, end):
+def taught_introductions(store, now=None):
+    """{(content_id, script): introduced instant} of every real kana introduction.
+
+    Read-only; with ``now`` only introductions at or before it. Familiarity and
+    legacy answer-exposure routes are not teaching and are left out.
+    """
     introduced = {}
     for key, row in _saved(store)['introduced'].items():
         if (not isinstance(row,dict) or not row.get('introduced_at_utc')
@@ -17,8 +22,13 @@ def teaching_state(store, now, start, end):
         script=row.get('script') or (fallback[1] if len(fallback)==2 else None)
         if cid and script in SCRIPTS:
             at=datetime.fromisoformat(row['introduced_at_utc'])
-            if at<=now:
+            if now is None or at<=now:
                 introduced[cid,script]=at
+    return introduced
+
+
+def teaching_state(store, now, start, end):
+    introduced = taught_introductions(store, now)
     kinds=sorted(SKILLS-WORD_SKILLS)
     first={}
     for row in store.teaching_queries.kana_first_primary_events(kinds):
@@ -44,16 +54,31 @@ def teaching_state(store, now, start, end):
             'initial_unscored_today':len(attempts)}
 
 
-def probe(store, kana_kinds, now, *, slots=None, new_only=False, include_unassessed=False, prefer_unassessed=False):
+def opened_block(store, question, now):
+    """Whether ``question``'s kana is an opened teaching block: introduced, its first primary rating not yet given.
+
+    teaching_state's "started" for this one slot (design 12 H4: such a block goes on). Read-only.
+    """
+    return (question.content_id, question.script) in teaching_state(store, now, now, now)['started']
+
+
+def probe(store, kana_kinds, now, *, slots=None, new_only=False, include_unassessed=False, prefer_unassessed=False,
+          scope=None):
+    """The kana teaching head (a dry-run prepare_next_question), or None.
+
+    ``scope``: the learner's focus scope (StudyStore.prepare_next_question's
+    scope_contents), None for no scope: the introductions inside it first.
+    """
     if getattr(store,'practice_lane','main')!='main' or not kana_kinds:
         return None
     pending=store.load_session_progress(lane='main',lazy_questions=True)
     if not pending or (not new_only and not slots):
         return None
+    scoped = {} if scope is None else {'scope_contents': scope}
     preview=store.prepare_next_question(pending['session_id'],now=now,lazy_questions=True,
         fair_new=True,teaching_only=True,dry_run=True,teaching_kinds=kana_kinds,
         teaching_targets=None if new_only else slots,
-        teaching_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed)
+        teaching_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed, **scoped)
     if preview is None:
         return None
     index=preview['question_index']

@@ -13,7 +13,7 @@ KanaMemory 现行设计规范
 学习数据管理和构建交付。它不是一次功能发布，也不授权执行暂停的测试目标。
 
 产品源基线：8c3b9a9ec95bf10ebbd040e443d87e1454cfeaff。
-App 版本由 app/pyproject.toml 和 app/src/kanamemory/build_info.py 共同给出：0.28.2 / build 280200。
+App 版本由 app/pyproject.toml 和 app/src/kanamemory/build_info.py 共同给出，当前版本以 build_info 为准（本文整理时的基线为 0.28.2 / build 280200）。
 这些是冻结参考，不会因以后提交本套文档而改成新的运行时基线。
 
 所有章节采用两个独立维度，不能把实现与验证混为一谈：
@@ -33,6 +33,9 @@ docs/design_current/01_overview.txt：产品原则、架构与跨模块边界。
 docs/design_current/02_product_ui.txt：全部主要流程、页面和题型行为。
 docs/design_current/03_learning_scheduler.txt：现行记忆单位、证据、队列与调度。
 docs/design_current/04_data_ai_interfaces.txt：持久化、内容包、AI、反馈与安全边界。
+docs/design_current/08_importable_libraries.txt：可导入学习库设计与阶段实现记录（标 I 处已实现，其余 P）。
+docs/design_current/09_runtime_plan_and_question_kind_plugins.txt：卡死对策、题型插件与 WP1–WP7 实现记录。
+docs/design_current/10_parallel_study_routes.txt：平行学习路线设计与 WP-R1–R5 实现记录。
 
 待实现设计作为本套规范的独立P层，不混入当前实现：
 docs/knowledge_evidence_design_20261101.txt：知识点关系、观察归因与统一能力。
@@ -60,6 +63,13 @@ docs/ai_feedback_correction_design_20261101.txt：AI内容纠错、关联影响�
 [I+U] 已有课程覆盖与语言审校的阶段记录，但没有“全部现代日语语法均已穷尽”
 的完成证明。支持的题型不等于每个学习项都有全部题型；具有十例也不自动证明
 这些例子均准确、互相独立且适用于每一种考法。课程覆盖详见02与05。
+
+[I+U] 学习安排（2026-11-12/13，0.35.0；做过一轮原生核对，未覆盖全部页面）：学习者可以选学习取向——“广度优先”让新内容与复习按时间份额交替、
+复习做不完就往后放，引导题、批小测与前置课不以答对为放行条件；“扎实”即原来先复习完再学新的方式，没有选过时按扎实运行。
+学习取向一屏上还有“假名练到哪一步”（题型开关的预设）与学习重点（新内容与复习、复习里假名的偏重；路线、小节、内容库或一类内容的范围，
+范围内的先做、范围外的不藏）。排好的内容做完之后可以“继续加练”：没到期而隔满24小时的提前正式评分，24小时内评过分的只算练习，
+同一坐里连续两次答错才把下次复习提前一点。页面见02第二节与“三之二”，记分、关卡与份额见03第2、5、7节，模型出题背景的选取见04第四节第2项；
+代码在子包app/src/kanamemory/arrangement（分层见07）。
 
 [P] 云同步、公开商店发布、完整句子跟读诊断与发音评分不属于当前已交付能力。
 TTS 播放和 ML Kit 笔迹识别不能被称作语音识别或口语评分。
@@ -100,6 +110,8 @@ TTS 播放和 ML Kit 笔迹识别不能被称作语音识别或口语评分。
   pitch_sequence.py、word_spelling.py：生成/选择/判定题目及其支持条件。
 - learning_evidence.py、learning_conditions.py、learning_harness.py、
   tutor_store.py、word_interval.py、kana_rule_evidence.py：有限证据与针对性安排。
+- arrangement/（子包，2026-11-12/13）：学习取向、时间份额、关卡、学习重点与加练的规则（rules，纯）、
+  服务、数据来源与页面；extra_practice_runtime.py 是加练的接线。现有模块只经薄的调用点接入，见07。
 - content.py、content_pack.py、learning_content.py、example_store.py：
   内容读取、版本/身份、共享例句和个人新增内容接口。
 - learning_records.py、record_schema.py、record_transport.py、record_validation.py、

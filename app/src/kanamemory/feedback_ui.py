@@ -18,6 +18,8 @@ STATUSES = {"待处理": "open", "已解决": "resolved", "已归档": "archived
 FILTERS = {"全部状态": None, **STATUSES}
 PAGE_SIZE = 12
 EXPORT_FORMATS = {"ZIP 文件（含截图）": "zip", "复制到剪贴板": "text"}
+# Export progress -> registered diagnostic stage; "idle" (finished or superseded) is not recorded.
+EXPORT_DIAGNOSTIC_STAGES = {"preparing": "read", "delivery": "commit", "archiving": "cleanup"}
 
 
 def _caption(mapping, value, default):
@@ -553,8 +555,10 @@ class FeedbackUIMixin(FeedbackAnalysisUIMixin):
                     else:
                         self.alert(message)
             except Exception as exc:
-                from .diagnostic_events import record_error
-                record_error("feedback_export", self._feedback_export_state["stage"], exc)
+                stage = EXPORT_DIAGNOSTIC_STAGES.get(self._feedback_export_state["stage"])
+                if stage is not None:
+                    from .diagnostic_events import record_error
+                    record_error("feedback_export", stage, exc)
                 if current_page():
                     self.alert("未能导出反馈：" + str(exc))
             finally:

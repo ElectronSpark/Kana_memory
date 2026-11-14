@@ -14,7 +14,7 @@ from support.fake_ui import View, descendants
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
 from kanamemory.learning_content import get_learning_item
-from kanamemory.learning_questions import AUDIO_WORD_KIND, SOUND_PREFERENCE_VERSION, WORD_KINDS, build_learning_question
+from kanamemory.learning_questions import AUDIO_WORD_KIND, PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION, WORD_KINDS, build_learning_question
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_ui import LearningUIMixin, LEARNING_PREFS
 from kanamemory import learning_store as store_module
@@ -68,6 +68,22 @@ def click(app, caption):
     widget.on_press(widget)
     return widget
 
+def option_caption(app, question, raw, known=None):
+    """The caption a page shows for a raw option: inline kana while the options carry
+    an unlearned word (question_readings rule 4: all options or none), else raw.
+
+    known defaults to the learner's course_planning.known_ids, which the question
+    pages pass; pages that add ids (intro batch quiz, guide) pass their own set.
+    """
+    from kanamemory.course_planning import known_ids
+    from kanamemory.question_support import option_labels
+    known = known_ids(app.store.queries) if known is None else known
+    return option_labels(question, known).get(raw, raw)
+
+def click_option(app, question, raw, known=None):
+    """Press the button showing raw option raw; the callback must still submit the raw string."""
+    return click(app, option_caption(app, question, raw, known))
+
 def use_real_detail_back(app):
     """Route "详细"/"返回结果" through the production page history.
 
@@ -109,6 +125,7 @@ def finish_guided_learning(app, limit=8):
     Reviewed lessons may guide more than one task ("跟着练习"), and each
     ability is scoped separately: a later ability asks familiarity, then
     guides without repeating the shared introduction (0.29.3, 7ce729d).
+    Untouched words/grammar open batch cards ("下一项") and a batch quiz.
     """
     for _ in range(limit):
         if app.page == "learning_guide":
@@ -116,9 +133,32 @@ def finish_guided_learning(app, limit=8):
             click(app, "继续")
         elif app.page == "learning_familiarity":
             click(app, "初学")
+        elif app.page == "learning_card":
+            click(app, "下一项")
+        elif app.page == "learning_batch_quiz":
+            if app._intro_quiz_question is not None:
+                click(app, app._intro_quiz_question["answer"])
+            click(app, "继续")
         else:
             return app.page
     raise AssertionError("guided learning did not finish")
+
+def legacy_picker(app, content_id):
+    """Mark an enrolled, untouched lesson as opened in the pre-四之二 picker.
+
+    An (empty) saved familiarity draft is a started old-route state, so the
+    lesson keeps the familiarity picker instead of joining batch cards.
+    """
+    from kanamemory.learning_questions import KIND_ABILITIES
+    saved = app.learning_store.instruction_item(content_id)
+    enabled = {KIND_ABILITIES[k] for k in app.learning_preferences()["enabled"] if k in KIND_ABILITIES}
+    admitted = [unit["ability"] for unit in saved["units"]]
+    # Opening the old picker first separated untouched abilities (as before).
+    ability = next((a for a in admitted if a in enabled), admitted[0])
+    saved = app.learning_store.prepare_initial_familiarity(content_id,
+        expected_introduction_id=saved["introduction_id"], ability=ability)
+    app.learning_store.save_familiarity_draft(content_id, {}, expected_introduction_id=saved["introduction_id"],
+                                              instruction_scope=saved.get("instruction_scope"))
 
 def legacy_lesson_snapshot(item_id):
     """Isolate a synthetic older lesson from current bundled prerequisites.
@@ -137,7 +177,7 @@ def ready(app, kind, *, item_id=None):
     item_id = item_id or ("word:tegami:letter" if kind in WORD_KINDS else "grammar:te_iru:progressive")
     item = legacy_lesson_snapshot(item_id)
     # An explicit choice of one kind on a device that can actually present it.
-    app.store.set_setting(LEARNING_PREFS, {"enabled": [kind], SOUND_PREFERENCE_VERSION: 1})
+    app.store.set_setting(LEARNING_PREFS, {"enabled": [kind], SOUND_PREFERENCE_VERSION: PREFERENCE_VERSION})
     if kind == AUDIO_WORD_KIND:
         app.platform.tts_ready = True
     app.learning_store.enroll(item, now=NOW - timedelta(minutes=2))

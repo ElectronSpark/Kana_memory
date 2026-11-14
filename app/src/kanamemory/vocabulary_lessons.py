@@ -23,40 +23,87 @@ SOURCE_ID = _CONTENT.get('SOURCE_ID', '')
 # wrong translations. Distinct groups are used only for lexical meaning tasks.
 SEMANTIC_GROUPS = _CONTENT.get('SEMANTIC_GROUPS', {})
 
+# A lesson row key is its written form, or "form@reading" for a lesson bound to
+# one reading of a form that another lesson already teaches (人 = ひと, 人@にん).
+# The same key names the row in LESSON_ROWS, WORD_BINDINGS, SENSE_INDEXES,
+# SEMANTIC_GROUPS, LESSON_COHORTS and study_path_catalog WORD_TOPICS.
+READING_KEY_SEPARATOR = "@"
+
+
+def split_lesson_key(key):
+    """(form, reading) of a row key; reading is None for a plain form key."""
+    form, separator, reading = key.partition(READING_KEY_SEPARATOR)
+    if not separator:
+        return key, None
+    if not form or not reading or READING_KEY_SEPARATOR in reading:
+        raise ValueError("Malformed reading-specific lesson key: " + key)
+    return form, reading
+
 
 def semantic_group(form):
+    """The one distractor exclusion group that lists this row key (form or form@reading)."""
     matches = [group for group, forms in SEMANTIC_GROUPS.items() if form in forms]
     if len(matches) != 1:
         raise ValueError("Word needs exactly one distractor exclusion group: " + form)
     return matches[0]
 
-# form | narrowly taught meaning | usage note | two original, aligned examples
+# key | narrowly taught meaning | usage note | two original, aligned examples
 # {w} identifies the exact target occurrence, not arbitrary string replacement.
 # The first JMdict sense is the compatibility default. Authored overrides name
 # an exact sense index; generation still validates its pinned lexical evidence.
 LESSON_ROWS = _CONTENT.get('LESSON_ROWS', '')
 
 
+def _cohort_source(value):
+    """An expansion cohort source id: kanamemory-course-expansion-YYYYMMDD (word_cohort)."""
+    from .word_sound_questions import EXPANSION_SOURCE_PREFIX
+    date = value[len(EXPANSION_SOURCE_PREFIX):] if isinstance(value, str) else ""
+    return value.startswith(EXPANSION_SOURCE_PREFIX) and len(date) == 8 and date.isascii() and date.isdigit()
+
+
 def lesson_specs():
-    """Authoring rows; dictionary identity is resolved only by the build tool."""
-    specs = []
+    """Authoring rows; dictionary identity is resolved only by the build tool.
+
+    A plain form row keeps its historical spec. A "form@reading" row must bind
+    exactly that reading and adds key=<row key>. LESSON_COHORTS (row key ->
+    expansion source id) adds cohort=<source id> to the marked rows only.
+    """
+    specs, keys = [], set()
+    senses = _CONTENT.get('SENSE_INDEXES', {})
+    bindings = _CONTENT.get('WORD_BINDINGS', {})
+    cohorts = _CONTENT.get('LESSON_COHORTS', {})
+    if not isinstance(cohorts, dict):
+        raise ValueError("Invalid lesson cohort markers")
     for line in LESSON_ROWS.splitlines():
         columns = line.split("|")
         if len(columns) != 7:
             raise ValueError("Malformed vocabulary lesson: " + columns[0])
-        form, meaning, rule, ex1, zh1, ex2, zh2 = columns
+        key, meaning, rule, ex1, zh1, ex2, zh2 = columns
+        form, reading = split_lesson_key(key)
         if ex1.count("{w}") != 1 or ex2.count("{w}") != 1:
             raise ValueError("Each example must identify one target")
-        sense_index = _CONTENT.get('SENSE_INDEXES', {}).get(form, 0)
+        sense_index = senses.get(key, 0)
         if type(sense_index) is not int or sense_index < 0:
-            raise ValueError("Invalid authored sense index: " + form)
-        binding = _CONTENT.get('WORD_BINDINGS', {}).get(form, {})
+            raise ValueError("Invalid authored sense index: " + key)
+        binding = bindings.get(key, {})
         if (not isinstance(binding, dict) or set(binding) - {'word_id', 'reading'}
                 or binding and any(not isinstance(binding.get(k), str) or not binding[k]
                                    for k in ('word_id', 'reading'))):
-            raise ValueError("Invalid authored dictionary binding: " + form)
-        specs.append(dict(form=form, meaning=meaning, rule=rule,
-                          examples=[(ex1, zh1), (ex2, zh2)], sense_index=sense_index, **binding))
+            raise ValueError("Invalid authored dictionary binding: " + key)
+        if reading is not None and (not binding or binding['reading'] != reading):
+            raise ValueError("A reading-specific lesson must bind that reading: " + key)
+        spec = dict(form=form, meaning=meaning, rule=rule,
+                    examples=[(ex1, zh1), (ex2, zh2)], sense_index=sense_index, **binding)
+        if reading is not None:
+            spec['key'] = key
+        if key in cohorts:
+            if not _cohort_source(cohorts[key]):
+                raise ValueError("Invalid lesson cohort marker: " + key)
+            spec['cohort'] = cohorts[key]
+        keys.add(key)
+        specs.append(spec)
+    if set(cohorts) - keys:
+        raise ValueError("Lesson cohort marker without a lesson row: " + min(set(cohorts) - keys))
     return specs
 
 

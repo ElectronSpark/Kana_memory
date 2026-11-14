@@ -4,16 +4,22 @@ from .question_presentation import question_presentation
 SHOW_HINT, HIDE_HINT = "中文提示", "收起提示"
 
 
-def instruction_widgets(ui, question):
+def instruction_widgets(ui, question, known_ids=None):
     """Widgets for the public cue; the hint leaves the tree while it is closed.
 
     Opening it is display only. It writes no draft and marks no assistance, since
     this text was always on screen before it was folded behind the button.
+    With known_ids, kanji words of the cue the learner has not learned carry
+    inline kana (question_readings rule 8); the stored task is unchanged.
     """
     presentation = question_presentation(question)
     children = []
     if presentation["instruction"]:
-        children.append(ui.label(presentation["instruction"], size=13, color=ui.MUTED,
+        text = presentation["instruction"]
+        if known_ids is not None:
+            from .question_readings import instruction_label
+            text = instruction_label(question, text, known_ids) or text
+        children.append(ui.label(text, size=13, color=ui.MUTED,
                                  text_role=presentation["instruction_role"]))
     hint = presentation["folded_hint"]
     if hint:

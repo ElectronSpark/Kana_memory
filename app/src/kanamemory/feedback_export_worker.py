@@ -1,4 +1,18 @@
-"""Export preparation owns its connections; delivery remains on the UI thread."""
+"""Export preparation owns its connections; delivery remains on the UI thread.
+
+Lock-order invariant (WP5), shared with every learning write transaction:
+
+1. A thread that needs both write locks takes progress.sqlite3 first and
+   feedback.sqlite3 second (personal_content_compensation.archive_current is
+   the only nested case). No code holds the feedback write lock while waiting
+   for the progress one, so the two can never wait on each other.
+2. Long reads hold no write lock: prepare_export reads one WAL snapshot of
+   feedback.sqlite3 (deferred BEGIN); progress reads are autocommit WAL reads.
+3. Progress write transactions taken here are short and bounded: one outbox
+   mark per receipt during sync, and the archive compare-and-set (entered only
+   after a lock-free stamp pre-check). A UI learning write therefore waits at
+   most one such transaction, well under SQLITE_BUSY_TIMEOUT_SECONDS.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,6 +22,9 @@ from threading import Event
 from time import perf_counter
 
 from .feedback_store import FeedbackStore, PreparedFeedbackExport
+
+
+LOCK_ORDER = ("progress.sqlite3", "feedback.sqlite3")
 
 
 class FeedbackExportCancelled(Exception):
@@ -54,6 +71,10 @@ class FeedbackExportJob:
             synchronized = perf_counter()
             self.check()
             if receipt is not None:
+                # Lock-free pre-check: a changed content stamp needs no write lock
+                # at all. archive_current repeats the check under the lock.
+                if store is not None and export_stamp(store) != stamp:
+                    return None
                 return archive_current(store, feedback, receipt, stamp)
             stamp = export_stamp(store)
             prepared = feedback.prepare_export(self.identities, format=self.format, cancel_check=self.check)

@@ -27,7 +27,7 @@ def source_matches(item, original):
 
 @lru_cache(maxsize=1)
 def catalogue():
-    from .learning_content import learning_items
+    from .learning_content import learning_item_views
     from .structured_lessons_grammar_a import LESSONS as a
     from .structured_lessons_grammar_b import LESSONS as b
     from .structured_lessons_words import LESSONS as words
@@ -39,7 +39,8 @@ def catalogue():
         plans.update(source)
     from .material_review import reviewed_plan
     plans = {cid: reviewed_plan(cid, plan) for cid, plan in plans.items()}
-    originals = {item["id"]: item for item in learning_items()}
+    # Kept for the process: views (source_matches reads SOURCE_FIELDS only), not copies with every template.
+    originals = {item["id"]: item for item in learning_item_views()}
     for plan in plans.values():
         validate_plan(plan)
     return originals, plans

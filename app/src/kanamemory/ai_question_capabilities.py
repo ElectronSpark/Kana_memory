@@ -12,6 +12,7 @@ COURSE = {
     "vocab_zh_ja_contrast": "Chinese/Japanese meaning contrast",
     "reading_comprehension": "sentence meaning", "listening_comprehension": "heard sentence meaning",
     "vocab_audio_word": "heard word to written word choice", "vocab_reading_choice": "word to reading choice",
+    "vocab_context_choice": "Japanese-only sentence gap(s) answered from Japanese options",
     "grammar_meaning": "grammar meaning", "grammar_cloze": "grammar gap; includes multiple independently editable gaps",
     "grammar_transform": "sentence transformation", "grammar_reorder": "Chinese-to-Japanese word block ordering",
     "targeted_correction": "correct the marked error",

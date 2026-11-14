@@ -9,6 +9,7 @@
 2026-11-03增量：0.29.0学习路线/全题型接口见docs/learning_route_ai_0290_20261103.txt。
 新增26类型能力目录、公开目标语义、原生队列引用和Tutor音高输入；自由生成仍限6类。
 下文保留0.28.2基线时的设计事实；当前实现状态以代码与07_engineering_structure.txt为准。
+文中提到的“设计 12”（学习安排：学习取向、时间份额、学习重点、加练与记分）是未公开的设计文档，不随公开源码发布；相关的页面与规则以本文、02–04、07 和代码为准。
 
 ======================================
 
@@ -40,21 +41,32 @@ P=尚待实现；U=待复验或证据不足。I 不自动等于 V；测试文件
 
 2. 发布教学内容：resources/teaching_content.sqlite3，只读。
    权威入口 content_pack.py::validate_installed_pack / load_namespace；构建入口
-   tools/build_teaching_content.py，表为 metadata 与 namespace。
-   format=kanamemory-teaching-content，version=1；namespace 包另有
+   tools/build_teaching_content.py。format=kanamemory-teaching-content，App 同时接受
+   两种合同（content_pack.VERSION=1、SHARDED_VERSION=2）：
+   v1 表为 metadata 与 namespace，每个命名空间一份整体负载；
+   v2（0.31.0 起构建默认）表为 metadata、namespace(layout, structure_json) 与
+   shard(sha256, size, payload)，每个命名空间按分片保存，清单校验和写入
+   metadata.manifest_sha256（与 content_sha256 相等），分片首次访问时校验 sha256。
+   v2 包需 0.31.0+ App；layout=legacy 仍可构建 v1，v1 包照旧可读。namespace 负载另有
    kanamemory-teaching-namespace 标识。加载前检查格式、版本、profile、必需命名
-   空间、校验信息与负载边界；单命名空间最大 32 MiB。CURRENT 必需命名空间集合以
+   空间、校验信息与负载边界；单个 v1 命名空间或 v2 分片最大 64 MiB（2026-11-08 由 32 MiB 放宽：varied_practice 保留改绑 history 后导出文档 38.5 MB；库包规则 MAX_TEACHING_BYTES 同步）。CURRENT 必需命名空间集合以
    content_pack.py::PERSONAL_REQUIRED_NAMESPACES 为准，不能沿用 0.24.0 文档的
    命名空间数量作现行常量。
    learning_content.py、learning_questions.py、example_catalogue.py 等为消费
    接口；教学正文、首次学习、题模板、前置、路径、图解和例句属于独立内容数据。
    加载内容包不迁移、不重写个人记录。新内容版本不能靠改标题把旧学习身份替换掉。
+   可导入学习库：库包安装在应用数据目录的库根 libraries/ 下（每库每版本一个目录），
+   注册表是 app_setting 中的 content_libraries_v1，库根另有镜像文件 content_libraries.json
+   供 content_pack 在模块导入时读取同一注册表；进度表不随库变化，可用性是读时投影（详见 08 第 16 节与 07）。
 
 3. 个人学习：应用私有目录 progress.sqlite3，可变，独立于资源目录。
    顶层版本门是 record_schema.py::ensure_current，
    learner_record_meta.schema_version=1。下列模块的 TABLES / ensure_schema
    和 docs/progress_schema.sql 是现行表结构入口；文档 SQL 是空库结构，不能替代
    运行时校验与迁移逻辑。
+   持久性取舍：progress.sqlite3 与 feedback.sqlite3 只在 SQLite 实际进入 WAL 时设
+   synchronous=NORMAL（domain.enable_wal 与 feedback_store 各一处）；崩溃与掉电均不损坏
+   数据库，但掉电时可能丢失最后一次（或几次）已提交事务；无法进入 WAL 的连接保持 FULL。
    a) record_schema.py：learner_record_meta、app_setting、study_session、
       session_question、study_card、review_event、practice_attempt、
       session_checkpoint、session_answer、word_spelling_attempt。
@@ -155,7 +167,19 @@ span 为原文零起始、end 不含的 Unicode code-point 区间，quote 必须
 允许一引用多片段与引用重叠。仅靠子串出现不能证明应关联某词义或语法。
 validate_pack 检查结构/引用，不认证日语、翻译、读音、调号或语义关联的正确性。
 
-当前可执行限额：16 MiB 规范化保存、32 MiB 导入文本、20,000 例句、50,000 引用。
+当前可执行限额分两类（example_store.PackLimits）。学习者包（导入/导出文本、自定义保存、
+备份恢复、AI 草稿、个人版本）用 LEARNER_LIMITS，即 validate_pack 默认值：32 MiB 规范化
+保存、32 MiB 导入文本、20,000 例句、50,000 引用；超限提示“例句材料超过 32 MiB 上限；请分批
+导入。”（2026-11-09 由 16 MiB 提高到与导入文本上限相同，使含随包目录的完整导出可再导入）。
+随包例句目录与只读合并视图（随包＋学习者材料，只建索引/展示，不保存不导出）用
+BUNDLED_LIMITS：96 MiB 规范化、80,000 例句、250,000 引用，只由 ExampleStore 内部及
+personal_graph.project_pack 显式传入；导入、合并后保存、恢复与导出路径始终按学习者限额检查，
+不能借用随包额度（prepare_import 先按学习者限额合并自身材料，再检查含随包的整体视图）。
+2026-11-09 实测随包 14.13 MiB/7,727/29,128，计入 5,600 条新词例句后 17.56 MiB/13,318/34,727
+（缩进 2 的导出 24.2 MiB）；随包加满额学习者包约占随包限额一半。
+ExampleStore 自建的随包目录按输入记忆：键为构建函数本身、内容包路径与有效目录令牌、传入条目
+规范编码的 sha256；进程内只保留一份，只读共享，并发首次请求只构建一次，失败不记。另按目录
+规范编码 sha256 只做一次逐条校验（只记指纹、最多 4 个；学习者包与显式传入的包每次完整校验）。
 旧 docs/example_format.txt 的 5,000 / 30,000 数字已落后；当前以 example_store.py
 常量为准。未知辅助 JSON 字段在限额内保留但不能赋予执行或调度权限。
 ExampleStore.prepare_import 先检查全体冲突；主动导入要求 reviewed。默认导出自定义
@@ -207,6 +231,16 @@ docs/ai_provider_connections_20261101.txt。
    ID/revision、精确片段、已知目标、依赖、选项、判题及防泄题规则。
    严格 schema 通过不代表事实正确；AI 声称“safe/reviewed”不自动取得可信资格。
    题干音频、假名、调号是否泄题由本地题型规则控制，不由 AI 布尔标记放行。
+   按已学内容出题的范围 [I；2026-11-13，设计 12 P1／WP-B5 与 H2／WP-H；合成条目测试，原生未验]：
+   ai_questions.build_learning_scope 给出目标（targets，做过独立检查的课，到期的、熟悉度低的在前）与背景（background，
+   已学能力最近一次正式作答都独立答对的内容，原先按熟悉度从高到低，上限 24 条）。学习取向为“广度优先”且请求给了上限时，背景改由纯函数
+   arrangement/rules/background.select_background 排：留出至多 limit // 3 个位置（上限 24 时 8 个）给“已到期”的已知条目——该条目
+   通过现行筛选的单元里任何一个的到期时刻不晚于现在——其中熟悉度低的在前（同分保持原顺序），放在第 3、6、9……位，
+   这样超长时从末尾裁剪不会先裁掉它们；其余位置按原顺序补齐，不重复；到期条目不够时位置还给原顺序，所以列表不比原来短。
+   只改变选哪些条目、按什么次序；条目的内容与形状不变，到期标记只在本地选择时用，不写进条目，不向模型发送日期或排程状态；
+   “见过”仍不计分，辅助证据权重不动。设了学习重点的范围时（两种取向下都是），目标与背景的原顺序里范围内的条目在前（各自稳定排序），
+   P1 的留位照旧（模型出题页 ai_ui 传入范围；导师不传）。不设上限的范围（本地判断与导师 tutor_engine 用的）不读取向设置，
+   没设范围时，它与“扎实”取向下的结果都与原来逐条相同；目标的次序不受 P1 影响。
 
 3. 用户采纳。
    AIMaterialStore 保存 proposal 与每项 pending/kept/discarded 决定；keep/discard

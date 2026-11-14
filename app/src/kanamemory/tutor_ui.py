@@ -12,15 +12,33 @@ from hashlib import sha256
 import json
 
 from .navigation import page_view
-from .answer_result_ui import answer_text
+from .answer_result_ui import answer_text, shown_answer, shown_explanation
 from .question_instruction_ui import instruction_widgets
 from .question_support import (build_prompt_block, clean_prompt_preferences, learning_question_display,
-                               learning_text_role, prompt_audio_text)
+                               learning_text_role, option_labels, prompt_audio_text)
 from .typography import configure_study_ranges, configure_text_role
 from . import ui_components as u
 
 
 TUTOR_PAGES = {"tutor_center", "tutor_question", "tutor_feedback", "tutor_chat", "tutor_wait", "tutor_loading", "tutor_profile"}
+TUTOR_BUSY_STATUS = "数据库正忙，草稿暂未保存；继续输入或操作时会自动重试。"
+TUTOR_CHAT_INVALID_STATUS = '这段草稿过长或包含不支持的字符，尚未保存；请缩短或整理后再离开。'
+
+
+def page_draft_debouncer(app, attribute, on_due):
+    """The page's DraftDebouncer (WP1 pattern), or None without an event loop.
+
+    None means "persist synchronously", as before debouncing existed.
+    """
+    draft = getattr(app, attribute, None)
+    if draft is None:
+        loop = getattr(app, "loop", None)
+        if loop is None or not callable(getattr(loop, "call_later", None)):
+            return None
+        from .draft_debounce import DraftDebouncer, loop_scheduler
+        draft = DraftDebouncer(loop_scheduler(loop), on_due)
+        setattr(app, attribute, draft)
+    return draft
 
 
 def _current_question_ids(app):
@@ -238,20 +256,24 @@ class TutorUIMixin:
             actions.append(u.speaker_button(lambda w: self.play_tutor_prompt(row_id=row_id), "朗读题干"))
         children = []
         prompt = None
+        # One read per displayed question: words the learner has not learned keep their kana (display only).
+        from .course_planning import known_ids
+        course_known = known_ids(self.store.queries)
         if q.get("audio_text"):
             children.append(u.speaker_button(lambda w: self.play_tutor_prompt(row_id=row_id), "播放题目"))
         elif q.get("input_mode") not in {"pitch_fill", "pitch_identify"}:
             if q.get('input_mode') == 'multi_cloze':
                 from .multi_cloze_ui import prompt_view
                 prompt = prompt_view(self, u, q, draft,
-                    clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})))
+                    clean_prompt_preferences(self.store.get_setting('prompt_display_v1', {})),
+                    known_ids=course_known)
             else:
                 prompt = build_prompt_block(self, q, clean_prompt_preferences(
-                    self.store.get_setting("prompt_display_v1", {})), size=20)
+                    self.store.get_setting("prompt_display_v1", {})), size=20, known_ids=course_known)
             prompt._feedback_fragment.update({"kind": "tutor_question", "row_id": row_id,
                                          "question": deepcopy(q), "draft": deepcopy(draft)})
             children.append(prompt)
-        children.extend(instruction_widgets(u, q))
+        children.extend(instruction_widgets(u, q, course_known))
         children.append(u.row(*actions))
         if q.get("gloss"):
             children.append(u.label(q["gloss"], size=12, color=u.MUTED))
@@ -297,17 +319,22 @@ class TutorUIMixin:
 
             children.append(cloze_controls(self, u, q, draft, save_cloze,
                 submit_cloze,
-                lambda: self.page == 'tutor_question' and self._tutor_current['id'] == row_id, prompt=prompt))
+                lambda: self.page == 'tutor_question' and self._tutor_current['id'] == row_id, prompt=prompt,
+                known_ids=course_known))
         elif mode == "choice":
-            children.extend(u.button(choice, lambda w, answer=choice: self.submit_tutor_answer(answer, row_id=row_id),
+            # Captions may carry kana (all options or none); the callbacks keep the raw choice.
+            labels = option_labels(q, course_known)
+            children.extend(u.button(labels.get(choice, choice), lambda w, answer=choice: self.submit_tutor_answer(answer, row_id=row_id),
                 multiline=True, text_role=learning_text_role(q, "choice")) for choice in q.get("choices", []))
         elif mode == "reorder":
             used = list(draft.get("parts", []))
             choices = q.get("choices", [])
-            text = "".join(choices[index] for index in used)
-            children.append(u.label(text or "点击词块组成句子", size=20, text_role="study" if used else "ui"))
+            labels = option_labels(q, course_known)
+            text = "".join(choices[index] for index in used)  # Submitted as written.
+            composed = "".join(labels.get(choices[index], choices[index]) for index in used)
+            children.append(u.label(composed or "点击词块组成句子", size=20, text_role="study" if used else "ui"))
             for index, choice in enumerate(choices):
-                button = u.button(choice, lambda w, index=index: self.add_tutor_part(index, row_id=row_id),
+                button = u.button(labels.get(choice, choice), lambda w, index=index: self.add_tutor_part(index, row_id=row_id),
                                   multiline=True, text_role="study")
                 button.enabled = index not in used
                 children.append(button)
@@ -326,6 +353,7 @@ class TutorUIMixin:
             else:
                 def skip(widget=None):
                     if self.page == "tutor_question" and self._tutor_current["id"] == row_id:
+                        TutorUIMixin.flush_tutor_answer_draft(self)
                         self.tutor_store().skip_unavailable_input(row_id)
                         self.continue_tutor()
                 children.extend([u.label("这道旧题需要额外的日文输入。可换题，草稿保留且不计错。", size=13, color=u.MUTED),
@@ -343,7 +371,54 @@ class TutorUIMixin:
         if self.page != "tutor_question" or (widget is not None and widget is not getattr(self, "_tutor_answer_input", None)):
             return
         self._tutor_answer_state["answer"] = self._tutor_answer_input.value or ""
-        self.tutor_store().save_draft(self._tutor_current["id"], self._tutor_answer_state)
+        # Same save_draft as before, coalesced to at most one write per 0.25 s;
+        # flush_tutor_drafts forces it before submit, navigation and exit.
+        row_id = self._tutor_current["id"]
+        draft = page_draft_debouncer(self, "_tutor_answer_draft",
+                                     lambda: TutorUIMixin.flush_tutor_answer_draft(self))
+        if draft is None:
+            return TutorUIMixin._persist_tutor_answer(self, row_id, self._tutor_answer_state)
+        draft.accept(row_id, deepcopy(self._tutor_answer_state))
+
+    def flush_tutor_answer_draft(self):
+        """Synchronously persist a pending typed tutor answer.
+
+        None: nothing pending; False: a lock timeout, shown as a retry status.
+        """
+        draft = getattr(self, "_tutor_answer_draft", None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        row_id, snapshot = pending
+        current = getattr(self, "_tutor_current", None) or {}
+        if self.page == "tutor_question" and current.get("id") == row_id:
+            state = self._tutor_answer_state  # Also carries audio_ok/presented flags.
+        else:
+            state = snapshot  # The last on-screen draft of a page already left.
+        return TutorUIMixin._persist_tutor_answer(self, row_id, state)
+
+    def _persist_tutor_answer(self, row_id, state):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        status = getattr(self, "_tutor_status", None)
+
+        def busy():
+            if status is not None and self.page == "tutor_question":
+                status.text = TUTOR_BUSY_STATUS
+        saved = persist_with_lock_notice(lambda: self.tutor_store().save_draft(row_id, state),
+            record=lambda exc: record_error("tutor_draft", "save", exc),
+            debouncer=getattr(self, "_tutor_answer_draft", None), key=row_id, value=deepcopy(state),
+            notice=busy)
+        if saved is False:
+            return False
+        if status is not None and getattr(status, "text", None) == TUTOR_BUSY_STATUS:
+            status.text = ""
+        return saved
+
+    def flush_tutor_drafts(self):
+        """Forced flush of the tutor answer and chat drafts; False if one failed."""
+        results = (TutorUIMixin.flush_tutor_answer_draft(self), TutorUIMixin.flush_tutor_chat_draft(self))
+        return False if any(result is False for result in results) else None
 
     def add_tutor_part(self, index, *, row_id):
         if self.page != "tutor_question" or self._tutor_current["id"] != row_id:
@@ -399,6 +474,8 @@ class TutorUIMixin:
     def submit_tutor_answer(self, answer, *, revealed=False, row_id=None):
         if self.page != "tutor_question" or row_id is not None and self._tutor_current["id"] != row_id:
             return
+        # The typed draft reaches storage before the answer is graded.
+        TutorUIMixin.flush_tutor_answer_draft(self)
         q = self._tutor_current["question"]
         from .answer_input_ui import prepare_submission
         ready, answer = prepare_submission(q, answer, self._tutor_status, revealed=revealed,
@@ -430,7 +507,7 @@ class TutorUIMixin:
         from .learning_pitch_ui import answer_diagram
         pitch = is_pitch_question(q)
         answer = (answer_diagram(self, q, reveal=True) if pitch else
-                  u.label(answer_text(q), size=20, flex=1, text_role=learning_text_role(q, "answer")))
+                  u.label(shown_answer(q), size=20, flex=1, text_role=learning_text_role(q, "answer")))
         answer._feedback_fragment = {"kind": "tutor_feedback", "question": deepcopy(q), "result": deepcopy(result)}
         text = self._learning_answer_audio_text(q)
 
@@ -446,11 +523,11 @@ class TutorUIMixin:
             if pitch:
                 entered = answer_label(q, entered)
             else:
-                entered = answer_text(q, entered)
+                entered = shown_answer(q, entered)
             children.append(u.label("我的回答：" + entered, size=12, color=u.MUTED))
         explanation = str(result.get("explanation") or q.get("feedback") or "").strip()
         if explanation and explanation != answer_text(q).strip():
-            children.append(u.label(explanation, size=15))
+            children.append(u.label(shown_explanation(q, explanation), size=15))
         actions = [u.button("问 AI", lambda w: self.open_tutor_question(source="tutor", question_id=row_id,
             after_answer=True), compact=True, flex=1)]
         item = self.learning_store.get_item(q["target_id"])
@@ -532,6 +609,8 @@ class TutorUIMixin:
                     "ai": {"ai_question", "ai_feedback"}, "tutor": {"tutor_question", "tutor_feedback"}}
         if self.page not in expected[source]:
             return
+        # Help reads/updates the origin's stored draft: persist typing first.
+        TutorUIMixin.flush_tutor_drafts(self)
         origin = {"source": source, "question_id": question_id, "target_id": "", "after_answer": bool(after_answer)}
         row = self._tutor_origin_row(origin)
         if row is None:
@@ -683,13 +762,62 @@ class TutorUIMixin:
         self.save_tutor_chat_input()
 
     def save_tutor_chat_input(self, widget=None, **kwargs):
+        """on_change (widget given): coalesce; explicit call: save now, return success.
+
+        The same save_chat_draft runs as before. Send/back/continue/toggle call
+        it explicitly, so they still stop on an unsaved draft.
+        """
         if self.page != "tutor_chat" or widget is not None and widget is not getattr(self, "_tutor_chat_input", None):
             return False
+        text = str(self._tutor_chat_input.value or "")
+        origin = self._tutor_chat_origin
+        draft = getattr(self, "_tutor_chat_draft", None)
+        if widget is not None:
+            draft = page_draft_debouncer(self, "_tutor_chat_draft",
+                                         lambda: TutorUIMixin.flush_tutor_chat_draft(self))
+            if draft is not None:
+                draft.accept(deepcopy(origin), text)
+                return True
+        elif draft is not None and draft.pending is not None and draft.pending[0] != origin:
+            TutorUIMixin.flush_tutor_chat_draft(self)  # Another origin's text: never drop it.
+        elif draft is not None:
+            draft.flush_now()  # Superseded by the current text written below.
+        return TutorUIMixin._persist_tutor_chat(self, text, origin)
+
+    def flush_tutor_chat_draft(self):
+        """Synchronously persist a pending chat draft; None if nothing pending."""
+        draft = getattr(self, "_tutor_chat_draft", None)
+        pending = draft.flush_now() if draft is not None else None
+        if pending is None:
+            return None
+        origin, text = pending
+        return TutorUIMixin._persist_tutor_chat(self, text, origin)
+
+    def _persist_tutor_chat(self, text, origin):
+        from .draft_debounce import persist_with_lock_notice
+        from .diagnostic_events import record_error
+        draft = getattr(self, "_tutor_chat_draft", None)
+        status = getattr(self, "_tutor_chat_status", None) if self.page == "tutor_chat" else None
+
+        def busy():
+            if status is not None:
+                status.text = TUTOR_BUSY_STATUS
         try:
-            self.tutor_store().save_chat_draft(str(self._tutor_chat_input.value or ""), self._tutor_chat_origin)
+            # Only a lock timeout requeues the text; an invalid draft cannot
+            # succeed on retry and keeps its explicit status instead.
+            saved = persist_with_lock_notice(lambda: self.tutor_store().save_chat_draft(text, origin),
+                record=lambda exc: record_error("tutor_draft", "save", exc),
+                debouncer=draft, key=deepcopy(origin), value=text, notice=busy)
         except ValueError:
-            self._tutor_chat_status.text = '这段草稿过长或包含不支持的字符，尚未保存；请缩短或整理后再离开。'
+            if draft is not None:
+                draft.mark_failed()
+            if status is not None:
+                status.text = TUTOR_CHAT_INVALID_STATUS
             return False
+        if saved is False:
+            return False
+        if status is not None and getattr(status, "text", None) in {TUTOR_BUSY_STATUS, TUTOR_CHAT_INVALID_STATUS}:
+            status.text = ""
         return True
 
     def _mark_tutor_origin_assisted(self, origin):
@@ -1027,6 +1155,8 @@ class TutorUIMixin:
                 return True
             self._leave_confirmation_active = True
             self.platform.stop()
+            # The dialog says typed answers are saved: make that true now.
+            TutorUIMixin.flush_tutor_answer_draft(self)
             token = self._page_token
 
             async def confirm():

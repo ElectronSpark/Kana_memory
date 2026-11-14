@@ -3,6 +3,14 @@
 Identifiers describe a reading/sense or a construction/function, never a quiz.
 Teaching text and source attribution are supplied by an independent content
 pack. Citation-form pitch metadata is never treated as sentence intonation.
+
+Importable libraries (design 08 phase 5 follow-ups): get_learning_item resolves
+an old id through an enabled extension library's alias (core ids and the
+core-only catalogue are unchanged), and a learning identity that two
+catalogue namespaces define because of extension content rejects the extension
+items (diagnostic recorded) while a duplicate inside core content still raises.
+Every library whose items were left out that way is reported damaged, with the
+reason, by content_pack.library_status() (design 08 section 16.5).
 """
 from __future__ import annotations
 
@@ -11,6 +19,9 @@ import hashlib
 import unicodedata
 import json
 
+from . import content_pack
+from .content_library_index import SharedMapping, isolated_copy
+from .content_library_merge import catalogue_items
 from .content_pack import load_namespace
 
 _CONTENT = load_namespace('learning_content', {})
@@ -20,6 +31,7 @@ _WORDS = _CONTENT.get('_WORDS', [])
 _GRAMMAR = _CONTENT.get('_GRAMMAR', [])
 
 _ITEMS = {item["id"]: item for item in [*_WORDS, *_GRAMMAR]}
+_DIAGNOSTICS = []  # (kind, content ids, library ids) rows of the catalogue build
 
 
 def learning_items(family: str | None = None) -> list[dict]:
@@ -28,10 +40,79 @@ def learning_items(family: str | None = None) -> list[dict]:
     return [reviewed_item(x) for x in _ITEMS.values() if family is None or x["family"] == family]
 
 
+_SHARED_FIELDS = ("question_templates",)
+
+
+def _view(item):
+    from .material_review import has_item_review, reviewed_item
+    if has_item_review(item.get("id")):
+        return reviewed_item(item)  # a reviewed correction may replace fields: the full rule decides
+    # isolated_copy: the same independent copy as deepcopy for these plain fields, without a call per string
+    # (listing the catalogue copies every small field of every lesson, several times per added lesson).
+    return {key: (_shared(value) if key in _SHARED_FIELDS else isolated_copy(value)) for key, value in item.items()}
+
+
+def _shared(value):
+    if isinstance(value, SharedMapping):
+        return value  # an extension library's templates, read on demand
+    return SharedMapping(value) if isinstance(value, dict) else deepcopy(value)
+
+
+def learning_item_views(family: str | None = None) -> list[dict]:
+    """learning_items for callers that only read (design 08 section 6.5).
+
+    Each item is an independent dict equal to its learning_items snapshot,
+    except that question_templates is the catalogue's own mapping, read-only
+    (an extension library's is decoded when first read) instead of a copy:
+    listing the catalogue then costs neither the copy nor the decoding.
+    deepcopy(view) is the plain independent item. Never serialize a view or
+    change its templates; copy it first.
+    """
+    return [_view(x) for x in _ITEMS.values() if family is None or x["family"] == family]
+
+
+def learning_item_view(content_id: str) -> dict | None:
+    """get_learning_item as a read-only view (see learning_item_views)."""
+    value = _ITEMS.get(content_id)
+    if value is None and isinstance(content_id, str):
+        value = _ITEMS.get(_alias_target(content_id))
+    return _view(value) if value else None
+
+
+def catalogue_ids() -> frozenset:
+    """Content ids the effective catalogue defines (no item decoding or copies)."""
+    return frozenset(_ITEMS)
+
+
+def catalogue_fingerprints() -> dict:
+    """content id -> item_fingerprint of the effective catalogue, as the App sees it."""
+    from .material_review import item_fingerprint
+    return {content_id: item_fingerprint(item) for content_id, item in _ITEMS.items()}
+
+
 def get_learning_item(content_id: str) -> dict | None:
+    """The reviewed item; an extension library's alias old -> new returns the new item."""
     from .material_review import reviewed_item
     value = _ITEMS.get(content_id)
+    if value is None and isinstance(content_id, str):
+        value = _ITEMS.get(_alias_target(content_id))
     return reviewed_item(value) if value else None
+
+
+def _alias_target(content_id):
+    """The effective alias target of an id the catalogue lacks (extension libraries only)."""
+    if not content_pack.library_layers():
+        return None
+    catalogue = content_pack.effective_catalogue()
+    if not catalogue.extension_ids:
+        return None
+    target = catalogue.alias_target(content_id)
+    return target if target != content_id else None
+
+
+def catalogue_diagnostics() -> tuple:
+    """(kind, content ids, library ids) rows recorded while building the catalogue."""
+    return tuple(_DIAGNOSTICS)
 
 
 def _kana_identity(value):
@@ -120,17 +201,112 @@ def learning_sources() -> list[dict]:
     return deepcopy(_CONTENT.get("SOURCES", [])) + grammar_sources() + exam_sources() + usage_sources() + vocabulary_sources() + pronunciation_sources()
 
 
+def _duplicate_ids(groups):
+    seen, duplicates = set(_ITEMS), []
+    for items in groups:
+        for item in items:
+            if item["id"] in seen:
+                duplicates.append(item["id"])
+            seen.add(item["id"])
+    return list(dict.fromkeys(duplicates))
+
+
+def _without_extension_duplicates(sources):
+    """Items to add after the learning_content namespace (design 08 §6.3).
+
+    A learning identity defined twice across catalogue namespaces is a core
+    packaging error when only core content is involved: everything is
+    returned and the caller raises, as before. When every duplicate involves
+    an id an enabled extension library contributed, the extension is rejected
+    from this catalogue: its extension-only items are left out (also from the
+    learning_content namespace), one core copy of each duplicated core id is
+    kept, and a content_library diagnostic is recorded.
+    """
+    groups = [items for _, items in sources]
+    everything = [item for items in groups for item in items]
+    duplicates = _duplicate_ids(groups)
+    if not duplicates or not content_pack.library_layers():
+        return everything
+    catalogue = content_pack.effective_catalogue()
+    contributed, by_library = {}, {}
+    for library_id in catalogue.extension_ids:
+        for name, payload in catalogue.payloads.get(library_id, {}).items():
+            ids = {cid for cid, _ in catalogue_items(payload)}
+            contributed.setdefault(name, set()).update(ids)
+            by_library.setdefault(library_id, set()).update(ids)
+    extension_ids = set().union(*contributed.values()) if contributed else set()
+    placed = {cid: {"learning_content"} for cid in _ITEMS}
+    for name, items in sources:
+        for item in items:
+            placed.setdefault(item["id"], set()).add(name)
+    # Extension-involved: some copy sits in a namespace an extension contributed it to.
+    if not extension_ids or any(not any(cid in contributed.get(name, ()) for name in placed[cid])
+                                for cid in duplicates):
+        return everything
+    core_ids = catalogue.core_ids()
+    rejected = extension_ids - core_ids
+    for cid in [cid for cid in _ITEMS if cid in rejected]:
+        del _ITEMS[cid]
+    involved = set(duplicates)
+    preferred = {}
+    for name, items in sources:
+        for item in items:
+            if item["id"] in involved and item["id"] not in contributed.get(name, ()):
+                preferred.setdefault(item["id"], name)
+    keep, kept = [], set(_ITEMS)
+    for name, items in sources:
+        for item in items:
+            cid = item["id"]
+            if cid in rejected:
+                continue
+            if cid in involved:
+                if cid in kept or preferred.get(cid, name) != name:
+                    continue
+                kept.add(cid)
+            keep.append(item)
+    libraries = tuple(lib for lib in catalogue.extension_ids if by_library.get(lib, set()) & involved)
+    _DIAGNOSTICS.append(("duplicate_identity_rejected_extension", tuple(duplicates), libraries))
+    shown = "、".join(duplicates[:3]) + ("等" if len(duplicates) > 3 else "")
+    reasons = {}
+    for library_id in catalogue.extension_ids:
+        if library_id in libraries:
+            reasons[library_id] = f"学习目录拒绝了本库内容：与其他命名空间重复定义学习 ID（{shown}）"
+        elif by_library.get(library_id, set()) & rejected:
+            reasons[library_id] = "学习目录拒绝了本库内容：其他扩展库的重复学习 ID 使扩展内容一并未加入"
+    content_pack.record_catalogue_rejection(getattr(catalogue, "token", None), reasons,
+                                            bystanders=tuple(lib for lib in reasons if lib not in libraries))
+    from . import diagnostic_events
+    diagnostic_events.record_error("content_library", "read",
+                                   ValueError("Duplicate learning identity across catalogue namespaces"))
+    return keep
+
+
+def _rows(module, name="_ITEMS"):
+    """Independent catalogue rows of a curriculum module.
+
+    The modules' own accessors deepcopy, which would decode every question
+    template an extension library reads on demand (design 08 section 6.5);
+    isolated_copy keeps those deferred and is otherwise the same copy.
+    """
+    return isolated_copy(getattr(module, name))
+
+
 def _extend_catalogue():
-    from . import grammar_curriculum
-    from .exam_grammar_curriculum import grammar_items as exam_items
-    from .usage_grammar_curriculum import grammar_items as usage_items
-    from .vocabulary_lessons import bundled_word_lessons
-    from .pronunciation_curriculum import pronunciation_items
+    from . import (_vocabulary_catalog, exam_grammar_curriculum, grammar_curriculum, pronunciation_curriculum,
+                   usage_grammar_curriculum)
+    from . import vocabulary_lessons  # noqa: F401 - loaded together with the catalogue, as it always was
     from .learning_dependencies import validate_catalog
-    new_grammar = [*grammar_curriculum.grammar_items(), *exam_items(), *usage_items()]
+    grammar_sources = [("grammar_curriculum", _rows(grammar_curriculum)),
+                       ("exam_grammar_curriculum", _rows(exam_grammar_curriculum)),
+                       ("usage_grammar_curriculum", _rows(usage_grammar_curriculum))]
     for identity, metadata in getattr(grammar_curriculum, "LEGACY_GRAMMAR_METADATA", {}).items():
         _ITEMS[identity].update(deepcopy(metadata))
-    for item in [*new_grammar, *bundled_word_lessons(), *pronunciation_items()]:
+    sources = [*grammar_sources, ("vocabulary_catalog", _rows(_vocabulary_catalog, "WORD_LESSONS")),
+               ("pronunciation_curriculum", _rows(pronunciation_curriculum))]
+    added = _without_extension_duplicates(sources)
+    added_objects = {id(item) for item in added}
+    new_grammar = [item for _, items in grammar_sources for item in items if id(item) in added_objects]
+    for item in added:
         if item["id"] in _ITEMS:
             raise ValueError("Duplicate bundled learning identity: " + item["id"])
         _ITEMS[item["id"]] = item

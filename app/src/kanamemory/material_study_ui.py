@@ -4,6 +4,18 @@ from .material_study import MaterialStudyStore
 from .material_share_ui import MaterialShareUIMixin
 from . import ui_components as u
 
+BUSY_STATUS = "数据库正忙，尚未保存；当前选择仍在，请稍后再试。"
+
+
+def _locked(error):
+    """A lock timeout on an explicit save: recorded, shown as retryable."""
+    from .draft_debounce import is_database_locked
+    if not is_database_locked(error):
+        return False
+    from .diagnostic_events import record_error
+    record_error("material_selection", "save", error)
+    return True
+
 
 class MaterialStudyUIMixin(MaterialShareUIMixin):
     def refresh_material_selection(self):
@@ -65,6 +77,11 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
                 self.store.set_setting(selection_key(form_context["key"]), selected)
             except ValueError as exc:
                 status.text = str(exc)
+                return
+            except Exception as exc:
+                if not _locked(exc):
+                    raise
+                status.text = BUSY_STATUS
                 return
             self.show_ai_form("analyze", input_id=form_context.get("input_id"))
         self.screen("material_selection", "选择发送范围", *rows, status,
@@ -235,6 +252,11 @@ class MaterialStudyUIMixin(MaterialShareUIMixin):
                 service.enroll(pending['preview'])
             except ValueError as exc:
                 status.text = str(exc)
+                return
+            except Exception as exc:
+                if not _locked(exc):
+                    raise
+                status.text = BUSY_STATUS
                 return
             self.continue_learning()
         confirm_button = u.button('加入并继续学习', confirm, primary=True)

@@ -47,7 +47,7 @@ def _validate_backup_export(data, archive):
         decoder.decode(b'', final=True)
 
 
-def _read_backup_stream(native, cache_dir, max_bytes=_BACKUP_MAX_BYTES):
+def _read_backup_stream(native, cache_dir, max_bytes=_BACKUP_MAX_BYTES, *, binary=False):
     """Bounded JNI strings; no Java full-file byte array or UTF-16 string.
 
     Only the framework-owned cache directory is used, never a selected path.
@@ -68,10 +68,14 @@ def _read_backup_stream(native, cache_dir, max_bytes=_BACKUP_MAX_BYTES):
                 raise PlatformError('文件传输块无效。')
             total += len(block)
             if total > max_bytes:
-                raise PlatformError('文件超过 64 MiB 限制。' if max_bytes == _BACKUP_MAX_BYTES else '文本文件超过 16,000 字节限制。')
-            decoder.decode(block, final=False)
+                raise PlatformError('文件超过 64 MiB 限制。' if max_bytes == _BACKUP_MAX_BYTES
+                                    else f'文件超过 {max_bytes // (1024 * 1024)} MiB 限制。' if binary
+                                    else '文本文件超过 16,000 字节限制。')
+            if not binary:
+                decoder.decode(block, final=False)
             output.write(block)
-        decoder.decode(b'', final=True)
+        if not binary:
+            decoder.decode(b'', final=True)
         output.seek(0)
         result = output.read(total + 1)
         if len(result) != total:
@@ -85,6 +89,11 @@ def _write_backup_stream(native, data):
         native.writeExportBlock(base64.b64encode(data[start:start + _BACKUP_BLOCK_BYTES]).decode('ascii'))
     native.finishExport()
     return True
+
+
+def _read_library_stream(native, cache_dir, max_bytes):
+    """Binary variant for content library packs; same bounded SAF channel."""
+    return _read_backup_stream(native, cache_dir, max_bytes, binary=True)
 
 
 async def _backup_stream_io(native, function, *args):
@@ -237,6 +246,11 @@ class AndroidPlatform:
         self.tts_voice_inventory = []
         self._voice_cache = None
         self._voice_candidates = {}
+        # (language, voice name) currently verified and set on the shared engine.
+        # Utterances in that language skip getVoices/setVoice; any engine
+        # (re)initialisation, language switch, speech error or return to the
+        # foreground (voices may be installed/removed meanwhile) clears it.
+        self._selected_voice = None
         self._chinese_tts = {language: {"status": "unavailable", "detail": f"{VOICE_LABELS[language]}语音尚未初始化。", "voice": None, "locale": None}
                              for language in ("cmn", "yue")}
         self._tts_preparing = False
@@ -295,7 +309,8 @@ class AndroidPlatform:
         native.setOnTouchListener(listener)
         return True
 
-    async def _backup_document(self, data=None, filename=None, *, archive=False, max_bytes=_BACKUP_MAX_BYTES):
+    async def _backup_document(self, data=None, filename=None, *, archive=False, max_bytes=_BACKUP_MAX_BYTES,
+                               binary=False):
         """Await one native SAF picker. Cancellation never changes learning data."""
         self._check_open()
         if self._backup_native is not None:
@@ -338,7 +353,8 @@ class AndroidPlatform:
                 if result != _BACKUP_IMPORT_READY:
                     raise PlatformError("文件读取接口版本不匹配。")
                 cache = str(self._context.getCacheDir().getCanonicalPath())
-                value = await _backup_stream_io(native, _read_backup_stream, cache, max_bytes)
+                reader = _read_library_stream if binary else _read_backup_stream
+                value = await _backup_stream_io(native, reader, cache, max_bytes)
                 return None if native.isCancelled() else value
             if result != _BACKUP_EXPORT_READY:
                 raise PlatformError("文件保存接口版本不匹配。")
@@ -467,6 +483,11 @@ class AndroidPlatform:
     async def import_material_text(self):
         from .material_input import MAX_BYTES
         return await self._backup_document(max_bytes=MAX_BYTES)
+
+    async def import_library_pack(self):
+        """Content library ZIP through the same bounded SAF import channel (binary)."""
+        from .content_library_rules import MAX_PACK_BYTES
+        return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True)
 
     def pending_material_shares(self):
         import json
@@ -856,6 +877,7 @@ class AndroidPlatform:
             self.tts_voice_inventory = []
             self._voice_cache = None
             self._voice_candidates = {}
+            self._selected_voice = None
             for language in ("cmn", "yue"):
                 self._set_voice_state(language, "unavailable", f"正在检查{VOICE_LABELS[language]}离线语音。")
             c = self._jclass
@@ -987,6 +1009,9 @@ class AndroidPlatform:
                                            "locale": profile.locale if profile else None}
 
     def _select_tts_voice(self, language, voices=None, *, verify_inventory=True):
+        # Any attempt may change the engine's voice; only a verified live
+        # selection below re-arms the per-utterance cache.
+        self._selected_voice = None
         if voices is None:
             self._read_voices()
             candidates = self._voice_candidates[language]
@@ -1027,6 +1052,9 @@ class AndroidPlatform:
             self._set_voice_state(language, "error", detail)
             raise PlatformError(detail)
         self._set_voice_state(language, "ready", self._voice_demo_detail(language, actual.name), actual)
+        if verify_inventory:
+            # Only a selection checked against the live inventory may be reused.
+            self._selected_voice = (language, actual.name)
         self._jclass("android.util.Log").i("KanaMemoryAudio",
             f"voice_selected language={language} voice={actual.name} locale={actual.locale} "
             f"network_required={str(actual.network_required).lower()} not_installed={str(actual.not_installed).lower()}")
@@ -1111,6 +1139,9 @@ class AndroidPlatform:
             future.set_result(None)
         else:
             self.last_audio_status = "stopped" if event == "stop" else "error"
+            if event == "error":
+                # The engine or its voice may have changed; re-verify next time.
+                self._selected_voice = None
             if code == -9:
                 self._set_voice_state(language, "not_installed", f"{VOICE_LABELS[language]}语音数据尚未完成下载，请安装后重新检查声音。")
             message = "朗读已停止，请重播。" if event == "stop" else f"系统语音播放失败（代码 {code}），请检查{VOICE_LABELS[language]}语音设置。"
@@ -1138,9 +1169,14 @@ class AndroidPlatform:
         TTS = self._jclass("android.speech.tts.TextToSpeech")
         if len(text.encode("utf-16-le")) // 2 > TTS.getMaxSpeechInputLength():
             raise PlatformError("朗读文本超过系统长度限制。")
-        # The engine is shared. Always reselect and verify before queuing, including
-        # Japanese after Chinese; never rely on a previous language availability.
-        self._select_tts_voice(language)
+        # The engine is shared. Reselect and verify before queuing whenever the
+        # language differs from the last verified selection (Japanese after
+        # Chinese included). Repeated utterances in one language reuse it, so
+        # each one costs only stop/focus/speak, not getVoices()+setVoice IPC.
+        selected = self._selected_voice
+        state_voice = self.tts_voice if language == "ja" else self._chinese_tts[language]["voice"]
+        if selected is None or selected != (language, state_voice):
+            self._select_tts_voice(language)
         utterance_id = str(uuid4())
         self._request_speech_focus(utterance_id)
         future = asyncio.get_running_loop().create_future()
@@ -1388,7 +1424,10 @@ class AndroidPlatform:
             def onStateChanged(self, source, event):
                 if owner._closed: return
                 if event == events.ON_STOP: callback(False, monotonic())
-                elif event == events.ON_START: callback(True, monotonic())
+                elif event == events.ON_START:
+                    # System settings may have installed/removed voices meanwhile.
+                    owner._selected_voice = None
+                    callback(True, monotonic())
         self._activity_observer = Observer()
         self._activity_lifecycle = activity.getLifecycle()
         self._activity_lifecycle.addObserver(self._activity_observer)
@@ -1417,6 +1456,7 @@ class AndroidPlatform:
         self._tts_audio_ready = False
         self._voice_cache = None
         self._voice_candidates = {}
+        self._selected_voice = None
         for _listener, future in self._listeners.values():
             if not future.done():
                 future.cancel()

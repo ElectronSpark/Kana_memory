@@ -136,6 +136,19 @@ def pause_typing(app, control):
     callback()
 
 
+def elapse_draft_delay(app):
+    """Let the keystroke-draft pause elapse: fire the last armed draft timer.
+
+    Keystrokes persist their checkpoint at most DEFAULT_DELAY later (WP1); a
+    scenario reading the stored draft right after typing waits for that first.
+    """
+    from kanamemory.draft_debounce import DEFAULT_DELAY
+    armed = [call for call in app.loop.call_later.call_args_list
+             if call.args and call.args[0] == DEFAULT_DELAY]
+    assert armed, "no keystroke draft timer was armed"
+    armed[-1].args[1]()
+
+
 def kana_route_handoff(app):
     """Main-lane kana practice hands off to the study-path route, which resumes
     the saved kana queue. Stub only that handoff for kana-queue fakes; course

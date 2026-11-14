@@ -108,7 +108,7 @@ def test_cued_typing_does_not_set_independent_production_but_retrieval_does(stor
     q = build_learning_question(item, 'grammar_transform', variant=1)
     q['id'] = 'retrieve'
     learning.append_questions(q, now=now)
-    projected = next(learning._dispatch_pending())
+    projected = next(learning.dispatch_pending())
     probe_unit = {**dict(projected), 'due_at_utc': (now + timedelta(days=10)).isoformat(),
                   'probe_due_at_utc': now.isoformat()}
     assert _ability_due(probe_unit, json.loads(projected['snapshot_json'])) == now.isoformat()
@@ -129,7 +129,7 @@ def test_dispatch_projection_cannot_turn_invalid_metadata_into_legacy_retrieval(
     q = build_learning_question(item, 'grammar_transform', variant=1)
     q['practice'] = metadata
     learning.append_questions(q, now=now)
-    projected = next(learning._dispatch_pending())
+    projected = next(learning.dispatch_pending())
     unit = {**dict(projected), 'due_at_utc': (now + timedelta(days=10)).isoformat(),
             'probe_due_at_utc': now.isoformat()}
     assert _ability_due(unit, json.loads(projected['snapshot_json'])) == _ability_due(unit, q)

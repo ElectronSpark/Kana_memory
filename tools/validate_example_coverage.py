@@ -10,7 +10,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'app/src'))
 from kanamemory import example_catalogue
-from kanamemory.example_store import validate_pack
+from kanamemory.example_store import BUNDLED_LIMITS, validate_pack
 from kanamemory.learning_content import learning_items
 from kanamemory.build_info import VERSION
 
@@ -22,7 +22,7 @@ def main():
     pack = example_catalogue.bundled_example_pack(items)
     elapsed = time.perf_counter() - start
     assert before == items
-    validate_pack(pack, {i['id'] for i in items})
+    validate_pack(pack, {i['id'] for i in items}, limits=BUNDLED_LIMITS)  # the bundled catalogue
     encoded = json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
     refs = {r['id']: r for r in pack['references']}
     examples = {e['id']: e for e in pack['examples']}

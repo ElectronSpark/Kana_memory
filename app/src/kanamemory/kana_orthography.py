@@ -70,6 +70,17 @@ def same_kana_sound(expected, actual, script=None, *, fold_script=False):
     return left.translate(_SOUND_MAP) == right.translate(_SOUND_MAP)
 
 
+def kana_sound_key(text):
+    """What same_kana_sound(a, b, fold_script=True) compares, or None for text that is not kana.
+
+    same_kana_sound(a, b, fold_script=True) is exactly
+    ``kana_sound_key(a) is not None and kana_sound_key(a) == kana_sound_key(b)``;
+    a caller that compares one reading with thousands computes each key once.
+    """
+    value = _normal(text)
+    return _hira(value).translate(_SOUND_MAP) if _kana(value) else None
+
+
 def allowed_word_spellings(expected, *, metadata=None, accepted_answers=()):
     """Return the saved target plus explicitly permitted whole-word spellings.
 

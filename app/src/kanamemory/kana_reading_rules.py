@@ -5,6 +5,7 @@ available for reference; this mapping never transfers a score or rewrites a
 saved question. Ordinary kana and complete combinations are not retired.
 """
 from collections.abc import Mapping
+from copy import deepcopy
 from unicodedata import normalize
 
 SMALL_KANA_RULE = "pronunciation:small_kana"
@@ -47,6 +48,29 @@ def rule_for_kana(row):
     return next(iter(rules)) if forms and len(rules) == 1 and None not in rules else None
 
 
+_SHARED = {}
+
+
+def _annotations():
+    """Read-only shared copy of reading annotations, reused per pack file.
+
+    reviewed_long_vowel_spans runs inside word loops; load_namespace would
+    deep-copy the whole namespace on each call. Never mutate the result.
+    """
+    from . import content_pack
+    loader, path = content_pack.load_namespace, content_pack.pack_path()
+    try:
+        stat = path.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        stamp = None
+    key = (loader, str(path), stamp)
+    entry = _SHARED.get("entry")
+    if entry is None or entry[0] != key:
+        entry = _SHARED["entry"] = (key, loader("reading_annotations", {}))
+    return entry[1]
+
+
 def explicit_reading_rules(reading):
     """Rules directly evidenced by written signs, in canonical stable order.
 
@@ -70,8 +94,7 @@ def reviewed_long_vowel_spans(reading):
     """
     if not isinstance(reading, str):
         return ()
-    from .content_pack import load_namespace
-    content = load_namespace("reading_annotations", {})
+    content = _annotations()
     if content.get("version") != 1:
         return ()
     records = content.get("long_vowels", {}).get(reading, [])
@@ -91,7 +114,7 @@ def reviewed_long_vowel_spans(reading):
                 or not isinstance(record.get("source_urls"), list)
                 or not record["source_urls"]):
             continue
-        valid.append(record)
+        valid.append(deepcopy(record))  # Detached from the shared pack copy.
     return tuple(valid)
 
 

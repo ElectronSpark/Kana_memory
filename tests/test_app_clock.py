@@ -181,7 +181,8 @@ def test_business_modules_do_not_add_hidden_wall_clock_bypasses():
         # Export/recovery filenames use wall time, not the learning calendar.
         ('backup_ui.py', 'convert_legacy'), ('record_schema.py', '_recovery_copy'),
     }
-    diagnostic_files = {'feedback_context.py', 'feedback_store.py', 'feedback_ui.py'}
+    # crash_events stamps unhandled-error records with real time, like feedback.
+    diagnostic_files = {'feedback_context.py', 'feedback_store.py', 'feedback_ui.py', 'crash_events.py'}
     failures = []
     for path in (Path(__file__).resolve().parents[1]/'app/src/kanamemory').glob('*.py'):
         tree = ast.parse(path.read_text('utf-8-sig'))

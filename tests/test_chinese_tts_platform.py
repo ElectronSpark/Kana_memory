@@ -183,6 +183,61 @@ def test_japanese_chinese_japanese_reselect_exact_voices_and_wait_for_real_done(
     asyncio.run(run())
 
 
+def test_repeated_utterances_reuse_verified_voice_until_invalidated(speech_environment):
+    """Per-utterance cost is stop/focus/speak; voice IPC only on a real change."""
+    platform, host = speech_environment
+    inventory_reads = []
+    original_voices = host.TTS.getVoices
+
+    def counted_voices(self):
+        inventory_reads.append(1)
+        return original_voices(self)
+
+    host.TTS.getVoices = counted_voices
+
+    async def speak(text, language):
+        task, utterance = await queued_task(platform, host, text, language)
+        platform._progress_events.onDone(utterance)
+        await asyncio.wait_for(task, 1)
+
+    def counts():
+        return len(inventory_reads), len(platform._tts.set_voice_calls)
+
+    async def run():
+        assert await platform.prepare_tts() == "ready"
+        reads, sets = counts()
+        await speak("かな", "ja")  # First utterance verifies against the live inventory.
+        assert counts() == (reads + 1, sets + 1)
+        stops, focus = host.native_stops, len(host.focus_requests)
+        for _ in range(3):
+            await speak("かな", "ja")
+        assert counts() == (reads + 1, sets + 1)
+        # Stop and audio focus stay per utterance (anti-overlap behaviour kept).
+        assert host.native_stops >= stops + 3 and len(host.focus_requests) == focus + 3
+        await speak("中国", "cmn")  # Language switch reselects on the shared engine.
+        await speak("かな", "ja")
+        assert counts() == (reads + 3, sets + 3)
+        assert [voice.name for voice in platform._tts.set_voice_calls[-2:]] == ["cmn-local", "ja-local"]
+        # A speech error invalidates the cache: the next utterance re-verifies.
+        task, utterance = await queued_task(platform, host, "かな", "ja")
+        platform._progress_events.onError(utterance, -1)
+        with pytest.raises(PlatformError):
+            await asyncio.wait_for(task, 1)
+        await speak("かな", "ja")
+        assert counts() == (reads + 4, sets + 4)
+        # Engine re-initialisation invalidates it too.
+        await platform.prepare_tts()
+        reads, sets = counts()
+        await speak("かな", "ja")
+        assert counts() == (reads + 1, sets + 1)
+        # A removed voice found by a recheck is never reused from the cache.
+        host.voices = [voice for voice in host.voices if voice.name != "ja-local"]
+        await platform.prepare_tts()
+        with pytest.raises(PlatformError):
+            await platform.play("かな")
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("replacement", [
     Voice("cmn-local", language="zh", country="HK"),
     Voice("cmn-local", language="cmn", country="CN", network=True),

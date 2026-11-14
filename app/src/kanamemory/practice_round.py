@@ -20,6 +20,9 @@ class AppRunPlan:
     native_orders: dict = field(default_factory=dict)
     native_positions: dict = field(default_factory=dict)
     question_ids: dict = field(default_factory=dict)
+    # The entry promote() moved to the front last: ('course', question_id) or
+    # ('kana', session_id, native_key); "one block at a time" (design 12 B3).
+    promoted: tuple | None = None
 
 
 def enable(store):
@@ -98,6 +101,11 @@ def active(store):
                 and isinstance(plan, AppRunPlan) and not plan.finished)
 
 
+def round_id(store):
+    """The active round's identity (its run_id), or None; in-memory notes about one round key on it."""
+    return store._practice_run_plan.run_id if active(store) else None
+
+
 def collecting(store):
     return active(store) and not store._practice_run_plan.is_sealed
 
@@ -157,6 +165,72 @@ def frozen_priority(store, lane, stable_id, initial_priority):
             return None
         plan.priorities[key] = deepcopy(initial_priority)
     return deepcopy(plan.priorities[key])
+
+
+def course_order_token(store):
+    """Plan state that freeze_course_rows reads; keys one action's memoized reads.
+
+    Once a course order is frozen, sealing no longer changes what it returns.
+    """
+    plan = _plan(store)
+    if not isinstance(plan, AppRunPlan):
+        return (bool(getattr(store, '_practice_run_enabled', False)), None)
+    return (active(store), finished(store), plan.run_id, plan.course_order,
+            collecting(store) if plan.course_order is None else None)
+
+
+@dataclass(frozen=True)
+class RoundSnapshot:
+    """Read-only copy of a sealed round's frozen order, passable to a worker thread.
+
+    Pure data (no connection, no store): the plan identity (run_id), its
+    frozen course order, priorities and native session orders, plus the UI
+    connection revision and course_order_token at capture. A worker installs
+    it on its own connection so frozen_priority/freeze_course_rows/
+    freeze_native_order return exactly what they return on the UI connection;
+    a sealed plan is never extended there. The UI thread uses a worker result
+    only while ``current`` still holds; otherwise it recomputes inline.
+    """
+    lane: str
+    run_id: str
+    course_order: tuple | None
+    priorities: dict
+    native_orders: dict
+    native_positions: dict
+    revision: tuple
+    token: tuple
+    promoted: tuple | None = None
+
+    @classmethod
+    def capture(cls, store):
+        """Snapshot of the active sealed plan of this lane, else None (nothing to pass)."""
+        if not sealed(store) or finished(store):
+            return None
+        plan = store._practice_run_plan
+        return cls(_lane(store), plan.run_id, plan.course_order, deepcopy(plan.priorities),
+                   deepcopy(plan.native_orders), deepcopy(plan.native_positions),
+                   tuple(store.read_revision()), course_order_token(store), plan.promoted)
+
+    def _state(self):
+        return (self.lane, self.run_id, self.course_order, self.priorities, self.native_orders,
+                self.native_positions, self.token, self.promoted)
+
+    def current(self, store) -> bool:
+        """The UI plan is still this sealed plan, unchanged (order, priorities, lane)."""
+        now = RoundSnapshot.capture(store)
+        return now is not None and now._state() == self._state()
+
+    def install(self, store):
+        """Give a worker connection a private sealed copy; never call on the UI store."""
+        plan = AppRunPlan(run_id=self.run_id, is_sealed=True, finished=False,
+                          priorities=deepcopy(self.priorities), course_order=self.course_order,
+                          native_orders=deepcopy(self.native_orders),
+                          native_positions=deepcopy(self.native_positions), promoted=self.promoted)
+        store.practice_lane = self.lane
+        store._practice_run_plans = {self.lane: plan}
+        enable(store)
+        _plan(store)
+        return plan
 
 
 def _question_id(row):
@@ -289,13 +363,41 @@ def promote_initial(store, *, course_id=None, session_id=None, question=None):
     """
     if not collecting(store):
         return False
+    return _to_front(store._practice_run_plan, course_id, session_id, question, lambda positions: -1) is not None
+
+
+def promote(store, *, course_id=None, session_id=None, question=None):
+    """Move an entry ALREADY registered in this active round to the front (design 12 B5).
+
+    The effect of promote_initial (front of its lane's frozen order, cross-lane
+    frozen priority (1, 0)), also after sealing. Never adds an entry: False
+    when it is not registered or no round is active. The plan remembers the
+    promoted entry (promoted / clear_promoted); RoundSnapshot carries it.
+    """
+    if not active(store):
+        return False
     plan = store._practice_run_plan
-    promoted = False
+    marker = _to_front(plan, course_id, session_id, question,
+                       lambda positions: min([0, *(rank for _, rank in positions.values())]) - 1)
+    if marker is None:
+        return False
+    plan.promoted = marker
+    return True
+
+
+def _to_front(plan, course_id, session_id, question, front_rank):
+    """Shared mechanics of promote_initial and promote; the marker of the last entry moved, or None.
+
+    course_id is its frozen question ID. Native teaching probes may return a
+    reordered preview index, so match its earliest frozen semantic occurrence;
+    ``front_rank(positions)`` gives it the rank that puts it first.
+    """
+    marker = None
     if course_id is not None and course_id in (plan.course_order or ()):
         plan.course_order = (course_id, *(identity for identity in plan.course_order
                                         if identity != course_id))
         plan.priorities[('cross-course', course_id)] = (1, 0)
-        promoted = True
+        marker = ('course', course_id)
     if session_id is not None and question is not None:
         key = native_key(question)
         positions = plan.native_positions.get(session_id, {})
@@ -303,10 +405,30 @@ def promote_initial(store, *, course_id=None, session_id=None, question=None):
                     if candidate == key]
         if matching:
             _, index = min(matching)
-            positions[index] = (key, -1)
+            positions[index] = (key, front_rank(positions))
             plan.priorities[('cross-kana', (session_id, key))] = (1, 0)
-            promoted = True
-    return promoted
+            marker = ('kana', session_id, key)
+    return marker
+
+
+def promoted(store):
+    """The entry promote() moved last in this active round, or None."""
+    return store._practice_run_plan.promoted if active(store) else None
+
+
+def clear_promoted(store):
+    """Forget the promoted entry once its block is finished (its priority and place stay)."""
+    if active(store):
+        store._practice_run_plan.promoted = None
+
+
+def promoted_native_index(store, session_id, key):
+    """Current queue index of the promoted occurrence of ``key`` (its lowest rank), or None."""
+    if not active(store):
+        return None
+    positions = store._practice_run_plan.native_positions.get(session_id, {})
+    matching = [(rank, index) for index, (candidate, rank) in positions.items() if candidate == key]
+    return min(matching)[1] if matching else None
 
 
 def _archived_question(store, question_id):

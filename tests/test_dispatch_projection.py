@@ -30,11 +30,11 @@ def test_projection_matches_full_reader_with_fallback_probe_semantics(stores,mon
     before=rows(store)
     projected=learning.current(KINDS,now=NOW,fair_new=True,**scope)
     with monkeypatch.context() as patch:
-        patch.setattr(learning,'_dispatch_pending',learning._pending)
+        patch.setattr(learning,'dispatch_pending',learning._pending)
         oracle=learning.current(KINDS,now=NOW,fair_new=True,**scope)
     assert projected==oracle and rows(store)==before
     full=next(row for row in learning._pending() if row['question_id']==qid)
-    narrow=next(row for row in learning._dispatch_pending() if row['question_id']==qid)
+    narrow=next(row for row in learning.dispatch_pending() if row['question_id']==qid)
     assert len(full['snapshot_json'])>40000 and len(narrow['snapshot_json'])<100
     assert 'large_unrelated_explanation' in json.loads(full['snapshot_json'])
 
@@ -49,13 +49,13 @@ def test_projection_preserves_feedback_real_input_waits_and_disabled_choices(sto
                 before=rows(store)
                 actual=learning.current(kinds,now=at,fair_new=True)
                 with monkeypatch.context() as patch:
-                    patch.setattr(learning,'_dispatch_pending',learning._pending)
+                    patch.setattr(learning,'dispatch_pending',learning._pending)
                     expected=learning.current(kinds,now=at,fair_new=True)
                 assert actual==expected and rows(store)==before
     learning.submit(qid,'正在读书',True,now=NOW)
     actual=learning.current(KINDS,now=NOW)
     with monkeypatch.context() as patch:
-        patch.setattr(learning,'_dispatch_pending',learning._pending)
+        patch.setattr(learning,'dispatch_pending',learning._pending)
         assert learning.current(KINDS,now=NOW)==actual
     assert actual['dispatch_priority']==(0,0)
 

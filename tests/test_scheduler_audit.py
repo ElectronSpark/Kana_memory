@@ -9,6 +9,7 @@ from fsrs import Card, Rating
 
 from support.learning_store_fixtures import START, item, question, ready
 from support.study_path_runtime_support import path_app
+from support.study_home_support import home_page
 from support.learning_fixtures import learning_app
 from support.app_fixtures import setup_app
 from support.app_fixtures import question_app
@@ -232,14 +233,14 @@ def test_home_unqueued_review_uses_feedback_wait_without_rewriting_due(path_app)
     sid = begin_kana(app.store, [kana_question(cid)], submitted)
     result = rate_kana(app.store, sid, rating=4, when=submitted, finalized=finalized)
     assert app.store.load_session_progress() is None
-    counts = app._study_path_unqueued_reviews()
+    counts = home_page(app).unqueued_reviews()
     assert counts == {"ready": 0, "waiting": 1,
                       "next_due": (finalized + timedelta(seconds=60)).isoformat()}
     # record_review returns the live ability projection (2c44345); the raw row keeps its due.
     assert app.store.get_scheduling_card(cid, "kana_choice", "hiragana") == result["card"]
     assert app.store.get_card(cid, "kana_choice", "hiragana")["due_at_utc"] == result["due_at_utc"]
     app._test_clock[0] += timedelta(seconds=60)
-    assert app._study_path_unqueued_reviews() == {"ready": 1, "waiting": 0, "next_due": None}
+    assert home_page(app).unqueued_reviews() == {"ready": 1, "waiting": 0, "next_due": None}
 
 
 @pytest.mark.parametrize("delay", [None, timedelta(0), timedelta(seconds=5)])

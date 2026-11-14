@@ -43,6 +43,7 @@ class LexicalReview:
         self.db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA query_only=ON")
+        self.db.execute("PRAGMA temp_store=MEMORY")  # Android has no writable SQLite temp directory (see content.py).
         self.meta = {r[0]: json.loads(r[1]) for r in self.db.execute("SELECT key,value FROM metadata")}
         if (self.meta.get("format") != FORMAT or self.meta.get("version") != VERSION
                 or self.meta.get("complete") is not True):

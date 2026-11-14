@@ -9,7 +9,7 @@ import pytest
 
 from kanamemory import material_review
 from kanamemory.example_catalogue import bundled_example_pack
-from kanamemory.example_store import ExampleStore, SETTING, empty_pack, validate_pack
+from kanamemory.example_store import BUNDLED_LIMITS, ExampleStore, SETTING, empty_pack, validate_pack
 from kanamemory.learning_content import learning_items
 from kanamemory.material_review import fingerprint, item_fingerprint, review_data
 from support.example_store_support import pack
@@ -90,7 +90,7 @@ def test_full_review_graph_matches_original_and_owns_all_mutable_children(comple
     assert actual == expected  # includes translations, hints, spans, order and every reference
     assert json.dumps(raw, ensure_ascii=False, sort_keys=True) == original_bytes
     assert not mutable_ids(actual) & (mutable_ids(raw) | mutable_ids(review_data()))
-    validate_pack(actual, known)
+    validate_pack(actual, known, limits=BUNDLED_LIMITS)
     assert material_review.reviewed_pack(actual, include_additions=include_additions, known_targets=known) == actual
 
 

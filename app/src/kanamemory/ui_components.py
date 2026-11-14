@@ -19,6 +19,11 @@ from .text_layout import configure_text, font_scale, text_style
 from .typography import font_family, configure_text_role
 from .selection_layout import configure_selection
 from .ui_theme import GREEN, INK, MUTED, PAPER, WHITE, ENTRY_BACKGROUNDS
+from .crash_events import install_app_loop_hook, install_toga_hook
+
+# Every page builds its controls here, so this is where handler errors start
+# being kept for feedback (crash_events) instead of only reaching logcat.
+install_toga_hook()
 
 __all__ = [
     "col", "row", "wrapped", "switch", "selection", "label", "button", "speaker_button",
@@ -79,7 +84,10 @@ def label(text: object, size: float = 14, color: str = INK, bold: bool = False, 
     return configure_text(widget)
 
 
-def button(text: str, handler: Callable[..., Any], *, primary: bool = False, compact: bool = False, multiline: bool = False, text_role: str = "ui", **style: Any) -> toga.Button:
+def button(text: str, handler: Callable[..., Any], *, primary: bool = False, compact: bool = False, multiline: bool = False, text_role: str = "ui", start_aligned: bool = False, **style: Any) -> toga.Button:
+    # start_aligned: on Android the caption starts at the leading edge on every wrapped line (tree captions).
+    # The app loop exists once pages build buttons: keep its task errors too.
+    install_app_loop_hook()
     options = dict(font_size=14, height=46, margin_bottom=6, color=WHITE if primary else GREEN, background_color=GREEN if primary else "#E4EEE8")
     options.update(style)
     options["font_family"] = font_family(text_role, options.get("font_family"))
@@ -103,6 +111,10 @@ def button(text: str, handler: Callable[..., Any], *, primary: bool = False, com
             native.setPadding(0, native.getPaddingTop(), 0, native.getPaddingBottom())
         configure_text(widget, minimum_height=minimum_height)
         widget.refresh()
+        if start_aligned:
+            # android.view.Gravity.START (0x800003) | CENTER_VERTICAL (0x10); the native horizontal
+            # padding around large-font CJK glyphs stays.
+            native.setGravity(0x800003 | 0x10)
     elif multiline:
         widget._impl.set_text(str(text))
         widget.refresh()

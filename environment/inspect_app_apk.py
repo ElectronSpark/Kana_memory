@@ -286,6 +286,9 @@ def main():
             "data_extraction_rules_attribute": next((line.strip() for line in manifest["stdout"].splitlines() if "android:dataExtractionRules(" in line), None),
             "full_backup_content_attribute": next((line.strip() for line in manifest["stdout"].splitlines() if "android:fullBackupContent(" in line), None),
             "extract_native_libs_attribute": next((line.strip() for line in manifest["stdout"].splitlines() if "android:extractNativeLibs(" in line), None),
+            # G4: MainActivity is the only activity declaring these; expect 0x800005a0 and 0x2 (singleTask).
+            "main_activity_config_changes_attribute": next((line.strip() for line in manifest["stdout"].splitlines() if "android:configChanges(" in line), None),
+            "main_activity_launch_mode_attribute": next((line.strip() for line in manifest["stdout"].splitlines() if "android:launchMode(" in line), None),
             "backup_rule_xml": {name: run([build_tools / "aapt.exe", "dump", "xmltree", apk, name]) for name in backup_rule_files}},
         "native_library_count": len(native),
         "load_alignment_check_passed": bool(native) and all(i.get("load_segments_16kb_aligned") for i in native),

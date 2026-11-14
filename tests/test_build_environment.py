@@ -113,3 +113,67 @@ def test_public_build_carries_contract_and_lock():
     assert '$environmentTool --host' in runner and 'Assert-AndroidEnvironment -Tools' in runner
     for variable in ('ANDROID_HOME', 'ANDROID_SDK_ROOT'):
         assert f'$env:{variable} = $sdkRoot' in runner
+
+
+GENERATED_MANIFEST = '''<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:allowBackup="true" android:label="@string/formal_name" {app_attrs}>
+        <activity
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:name="org.beeware.android.MainActivity"
+            android:exported="true" {activity_attrs}>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+'''
+PATCH_DRIVER = r'''param($Runner, $In, $Out)
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Runner, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-KanaAndroidManifest' }, $true)
+if (-not $fn) { throw 'Set-KanaAndroidManifest missing from run_app.ps1' }
+. ([scriptblock]::Create($fn.Extent.Text))
+[xml]$manifest = Get-Content -LiteralPath $In -Raw -Encoding UTF8
+Set-KanaAndroidManifest -Manifest $manifest
+$manifest.Save($Out)
+'''
+
+
+def _patch_manifest(tmp_path, shell, text, name):
+    import subprocess
+    source, target, driver = tmp_path / f'{name}.in.xml', tmp_path / f'{name}.out.xml', tmp_path / 'driver.ps1'
+    source.write_text(text, 'utf8')
+    driver.write_text(PATCH_DRIVER, 'utf8')
+    subprocess.run([shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(driver),
+                    str(ROOT / 'environment/run_app.ps1'), str(source), str(target)], check=True, timeout=120,
+                   capture_output=True)
+    return target.read_text('utf-8-sig')
+
+
+@pytest.mark.parametrize('activity_attrs', ['', 'android:launchMode="singleTask"'])
+def test_manifest_patch_keeps_one_activity_across_relaunch_and_launcher_intents(tmp_path, activity_attrs):
+    import xml.etree.ElementTree as ET
+    shell = shutil.which('pwsh') or shutil.which('powershell')
+    if shell is None:
+        pytest.skip('PowerShell is required to execute the run_app.ps1 manifest patch')
+    android = '{http://schemas.android.com/apk/res/android}'
+    first = _patch_manifest(tmp_path, shell, GENERATED_MANIFEST.format(app_attrs='', activity_attrs=activity_attrs), 'first')
+    second = _patch_manifest(tmp_path, shell, first, 'second')
+    assert second == first  # idempotent: build re-runs the patch on an already patched project
+    application = ET.fromstring(first.encode('utf8')).find('application')
+    assert application.get(f'{android}allowBackup') == 'false'
+    assert application.get(f'{android}fullBackupContent') == 'false'
+    main, = [a for a in application.findall('activity') if a.get(f'{android}name') == 'org.beeware.android.MainActivity']
+    assert main.get(f'{android}configChanges').split('|') == [
+        'orientation', 'screenSize', 'screenLayout', 'keyboardHidden', 'assetsPaths']
+    assert main.get(f'{android}launchMode') == 'singleTask'
+    assert first.count('launchMode') == 1 and first.count('KanaTextShareActivity') == 1
+
+
+def test_pyproject_renders_single_task_on_fresh_create():
+    import tomllib
+    android = tomllib.loads((ROOT / 'app/pyproject.toml').read_text('utf8'))['tool']['briefcase']['app']['kanamemory']['android']
+    assert android['android_manifest_activity_attrs_extra_content'] == 'android:launchMode="singleTask"'

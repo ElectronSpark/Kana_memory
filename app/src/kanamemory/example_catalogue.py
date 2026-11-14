@@ -142,8 +142,10 @@ def bundled_example_pack(items, *, apply_review=True):
     """
     items = list(items.values() if isinstance(items, dict) else items)
     if apply_review:
-        from .material_review import example_source_item
-        items = [example_source_item(item) for item in items]
+        # example_source_item only changes an item review_data() names; the others are read as they are
+        # (its copy of each would also decode every template an extension library reads on demand).
+        from .material_review import example_source_item, has_item_review
+        items = [example_source_item(item) if has_item_review(item.get('id')) else item for item in items]
     by_target = {item['id']: item for item in items}
     examples, references = {}, {}
 

@@ -71,7 +71,7 @@ def test_old_thousand_row_history_shows_only_three_unfinished_questions(question
         app.session_id, app.questions = session, pending["questions"]
         app.question_index, app.session_right = 1000, pending["session_right"]
         app.show_question()
-        assert app.title == "练习 · 现在可答 3 题"
+        assert app.title == "本轮剩 3 题 · 第 1001 / 1003 题"
         assert reopened.load_session_progress()["question_index"] == 1000
         assert memory(reopened) == records
 

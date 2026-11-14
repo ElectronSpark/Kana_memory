@@ -5,6 +5,7 @@ content, answers, review events and due dates remain intact. A changed/imported
 record is repaired only when its complete teaching fingerprint matches a
 reviewed old record. Example and reference replacements get new identities.
 """
+from collections.abc import Mapping
 from copy import deepcopy
 from functools import lru_cache
 import hashlib
@@ -26,8 +27,10 @@ def without_order_translations(value):
     Ordinary text, translations, dependencies and evidence remain untouched.
     For legacy JSON without this field, serialization is byte-for-byte the
     original fingerprint input. This is a detached view, never a saved rewrite.
+    A read-only mapping (question templates a library reads on demand) is
+    taken as the plain mapping it stands for.
     """
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: without_order_translations(part) for key, part in value.items()
                 if key != "order_translation"}
     if isinstance(value, list):
@@ -73,6 +76,92 @@ def review_data():
     if data.get("format") != "kanamemory-material-review" or data.get("version") != 1:
         raise ValueError("Unsupported bundled material review")
     return data
+
+
+_INDEX = {}
+_INDEX_FIELDS = (("content_id", "kind"), ("target_id", "kind"))
+
+
+def _hashable(value):
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
+def _build_index(data):
+    """Lookup tables equal to the scans they replace; built once per data object.
+
+    questions: an entry can only match a question whose content_id/target_id and
+    kind equal its match values, so it is bucketed by those exact values; any
+    entry without them (or with unhashable values) is checked for every
+    question. Candidates keep their list order, and each is still checked with
+    the full match rule.
+    """
+    buckets, always = {}, []
+    for position, entry in enumerate(data.get("questions", [])):
+        match = entry.get("match", {}) if isinstance(entry, dict) else {}
+        for fields in _INDEX_FIELDS:
+            if isinstance(match, dict) and all(field in match and _hashable(match[field]) for field in fields):
+                buckets.setdefault((fields,) + tuple(match[field] for field in fields), []).append(position)
+                break
+        else:
+            always.append(position)
+    fingerprints = {}
+    for cid, values in data.get("target_fingerprints", {}).items():
+        fingerprints[cid] = frozenset(values) if all(_hashable(value) for value in values) else tuple(values)
+    payload_changes = {entry["before_payload_sha256"]: entry
+                       for entry in data.get("references", {}).values()
+                       if entry.get("before_payload_sha256")}
+    return {"buckets": buckets, "always": tuple(always), "target_fingerprints": fingerprints,
+            "payload_changes": payload_changes}
+
+
+def review_index(data=None):
+    """The precomputed index of review_data() (or of the given data object).
+
+    Review data is immutable once loaded; a replaced object gets a new index.
+    """
+    data = review_data() if data is None else data
+    entry = _INDEX.get("entry")
+    if entry is None or entry[0] is not data:
+        entry = (data, _build_index(data))
+        _INDEX["entry"] = entry
+    return entry[1]
+
+
+def _question_entries(data, question):
+    index = review_index(data)
+    positions = set(index["always"])
+    for fields in _INDEX_FIELDS:
+        key = (fields,) + tuple(question.get(field) for field in fields)
+        if _hashable(key):
+            positions.update(index["buckets"].get(key, ()))
+    entries = data.get("questions", [])
+    return [entries[position] for position in sorted(positions)]
+
+
+def is_reviewed_target(content_id, fingerprint):
+    """Whether an item fingerprint is a reviewed target of review_data()."""
+    data = review_data()
+    return fingerprint in review_index(data)["target_fingerprints"].get(content_id, ())
+
+
+def has_item_review(content_id):
+    """Whether review_data() names this item: reviewed_item / example_source_item may change it.
+
+    For every other item both return a plain deepcopy, so a caller that only
+    reads can skip the copy (and the fingerprint) without changing a result.
+    """
+    data = review_data()
+    return (content_id in data.get("items", {})
+            or content_id in data.get("lesson_presentations", {}).get("items", {}))
+
+
+def has_reviewed_targets(content_id):
+    """Whether any fingerprint of this item can be a reviewed target (is_reviewed_target)."""
+    return content_id in review_index(review_data())["target_fingerprints"]
 
 
 def reviewed_item(item):
@@ -148,7 +237,7 @@ def reviewed_question(question):
                 raise ValueError("Invalid exact question explanation")
             result["feedback"] = change["feedback"]
             result["material_review"] = explanations["revision"]
-    for entry in review_data().get("questions", []):
+    for entry in _question_entries(review_data(), question):
         def matches_field(key, value):
             actual = question.get(key)
             if actual == value:
@@ -195,9 +284,8 @@ def reviewed_pack(pack, *, include_additions=False, known_targets=None):
                        if key not in {"examples", "references"}})
     examples, references = {}, {}
     source_examples = {row["id"]: row for row in pack["examples"]}
-    payload_changes = {entry["before_payload_sha256"]: entry
-                       for entry in data.get("references", {}).values()
-                       if entry.get("before_payload_sha256")}
+    index = review_index(data)
+    payload_changes = index["payload_changes"]
     for source in pack["examples"]:
         change = data.get("examples", {}).get(source["id"])
         row = (change["replacement"] if change and fingerprint(source) in change.get("input_sha256s", [change["before_sha256"]])
@@ -223,8 +311,10 @@ def reviewed_pack(pack, *, include_additions=False, known_targets=None):
     if include_additions:
         targets = set(known_targets) if known_targets is not None else None
         if isinstance(known_targets, dict):
+            # An id the index does not name matches no fingerprint: its item is not fingerprinted at all.
             targets = {cid for cid, item in known_targets.items() if isinstance(item, dict)
-                       and item_fingerprint(item) in data.get("target_fingerprints", {}).get(cid, [])}
+                       and cid in index["target_fingerprints"]
+                       and item_fingerprint(item) in index["target_fingerprints"][cid]}
         for row in data.get("added_references", []):
             if (targets is None or row["target_id"] in targets) and row["id"] not in references:
                 references[row["id"]] = deepcopy(row)

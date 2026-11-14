@@ -149,7 +149,8 @@ def _build(store, old, source, catalogue, metadata):
     # Preserve independent reasons, queue lane and original scheduling floors.
     for name in ('practice_config', 'word_romaji_drill', 'kana_context_v1', 'kana_rule_probe_v1',
                  'not_before_utc', 'relearning_of_index', 'relearning_count', 'spelling_correction_of',
-                 'spelling_correction_index', 'study_path_entry', 'study_path_due_v1', 'word_kind_pause_v1'):
+                 'spelling_correction_index', 'study_path_entry', 'study_path_due_v1', 'word_kind_pause_v1',
+                 'extra_practice_v1'):
         if name in old.get('metadata', {}): q.metadata[name] = deepcopy(old['metadata'][name])
     q.metadata.pop('word_kind_pause_v1', None)
     # A changed reading invalidates old pitch and component annotations.

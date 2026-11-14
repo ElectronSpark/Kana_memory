@@ -4,22 +4,60 @@ Only immutable examples and span-pinned references from the content review
 pack participate. The cache stores IDs, revisions and exact text, not learner
 history. Unknown/custom/model material remains unclassified.
 """
-from functools import lru_cache
+from functools import wraps
 from hashlib import sha256
 import json
+from threading import Lock
 
 
-@lru_cache(maxsize=1)
+def _single_flight(function):
+    """Cache one result; concurrent first callers wait for the one computation.
+
+    lru_cache lets a second thread recompute while the first is still running.
+    Here the startup warm-up thread and an early main-thread question share a
+    single run. Failures are not cached. cache_clear() matches lru_cache.
+    """
+    lock, state, missing = Lock(), {}, object()
+
+    @wraps(function)
+    def cached():
+        value = state.get("value", missing)
+        if value is not missing:
+            return value
+        with lock:
+            if "value" not in state:
+                state["value"] = function()
+            return state["value"]
+
+    def cache_clear():
+        with lock:
+            state.clear()
+
+    cached.cache_clear = cache_clear
+    return cached
+
+
+def _reviewed_targets(items):
+    """{item id: revision} of reviewed targets, via the precomputed review index.
+
+    Equal to testing each fingerprint against the target_fingerprints list
+    (WP6 builds that list into a set once per review data object). An item
+    the list does not name cannot be a target whatever its fingerprint, so
+    it is neither copied nor fingerprinted.
+    """
+    from .material_review import (has_reviewed_targets, is_reviewed_target, item_fingerprint,
+                                  example_source_item)
+    return {item["id"]: str(item["revision"]) for item in items
+            if has_reviewed_targets(item["id"])
+            and is_reviewed_target(item["id"], item_fingerprint(example_source_item(item)))}
+
+
+@_single_flight
 def _reviewed_index():
-    from .learning_content import learning_items
-    from .material_review import review_data, item_fingerprint, example_source_item
+    from .learning_content import learning_item_views
     from .example_catalogue import bundled_example_pack
-    data = review_data()
-    items = learning_items()
-    known = {}
-    for item in items:
-        if item_fingerprint(example_source_item(item)) in data.get("target_fingerprints", {}).get(item["id"], []):
-            known[item["id"]] = str(item["revision"])
+    items = learning_item_views()  # read only: no copy of every lesson with all its templates
+    known = _reviewed_targets(items)
     # This applies exact retirements/replacements to original course examples
     # as well as additions. Keep only the compact ID/text index after building.
     pack = bundled_example_pack(items)

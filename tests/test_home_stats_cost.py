@@ -6,6 +6,7 @@ from support.study_path_runtime_support import home
 from support.study_path_runtime_support import seed_main
 from support.study_path_runtime_support import history
 from support.study_path_runtime_support import buttons
+from support.study_home_support import home_page
 from support.learning_fixtures import learning_app
 from support.app_fixtures import question_app, setup_app
 
@@ -19,7 +20,7 @@ def test_path_home_does_not_scan_legacy_statistics(path_app, monkeypatch):
     monkeypatch.setattr(app.store, "stats", forbidden)
 
     home(app)
-    assert "主线初学完成" in app.home_stats_label.text
+    assert "主线初学完成" in home_page(app).stats_label.text
     assert "继续学习" in [button.text for button in buttons(app)]
     forbidden.assert_not_called()
     assert history(app) == before
