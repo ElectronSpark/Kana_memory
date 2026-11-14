@@ -6,7 +6,7 @@ Pure rules: no Toga, learner database, clock, platform or app import. The option
      "kind": direct | multiple | clipping | wasei | hybrid | exempt,
      "sources": [{"language": code, "word": source spelling, "part": katakana part (hybrid only)}],
      "full_form": unclipped kana form (clipping: required; wasei: only for a clipped coinage),
-     "reason": mimetic | sino_japanese | native (exempt only),
+     "reason": mimetic | sino_japanese | native | coined (exempt only),
      "note_zh": optional Chinese note, at most 120 characters,
      "evidence": {"source_ids": [1..8 ids]},
      "review": {"status": candidate | reviewed, "by": optional}}
@@ -47,7 +47,11 @@ THREE_LETTER_CODES = MappingProxyType({
     "zho": "zh", "san": "sa", "ara": "ar", "ain": "ain",
 })
 KINDS = ("direct", "multiple", "clipping", "wasei", "hybrid", "exempt")
-EXEMPT_REASONS = ("mimetic", "sino_japanese", "native")
+# Why a katakana title has no source to state: a mimetic word, a Sino-Japanese word or a native word that is
+# merely written in katakana, or a name coined for a work (a character's name, a proper name inside a
+# work: no word of any language is its source). A foreign place or person name is NOT exempt: it states the
+# language it came through, like any loanword; so does an ordinary foreign word taken out of a coined name.
+EXEMPT_REASONS = ("mimetic", "sino_japanese", "native", "coined")
 REVIEW_STATUSES = ("candidate", "reviewed")
 ENTRY_FIELDS = frozenset({"title", "reading", "kind", "sources", "full_form", "reason", "note_zh", "evidence",
                           "review"})

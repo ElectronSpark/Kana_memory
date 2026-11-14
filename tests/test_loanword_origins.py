@@ -80,6 +80,10 @@ def test_exempt_shows_nothing_and_a_note_follows_the_line():
     exempt = entry("exempt", reason="mimetic", title="コツコツ", reading="コツコツ")
     assert lo.validate_entry(CID, exempt) is exempt
     assert lo.origin_line(exempt) is None and lo.origin_note(exempt) is None
+    assert lo.EXEMPT_REASONS == ("mimetic", "sino_japanese", "native", "coined")
+    for reason in lo.EXEMPT_REASONS:  # a name coined for a work is exempt too: no word is its source
+        other = entry("exempt", reason=reason, title="コツコツ", reading="コツコツ")
+        assert lo.validate_entry(CID, other) is other and lo.origin_line(other) is None
     noted = {**CLIPPING, "note_zh": "日语里通常用短形式。"}
     item = {"id": CID, "family": "word", "title": "テレビ", "reading": "テレビ"}
     assert lo.origin_texts(item, {CID: noted}) == (("来源：英语 television 的缩略（テレビジョン）", "日语里通常用短形式。"),)
