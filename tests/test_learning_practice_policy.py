@@ -99,6 +99,35 @@ def test_malformed_metadata_is_not_a_legacy_escape_hatch():
     assert choose(item) is None
 
 
+@pytest.mark.parametrize("extra", [
+    {"opens_after_reviews": 0}, {"opens_after_reviews": 40}, {"scenario_id": "s"},
+    {"scenario_id": "station_ticket_office", "opens_after_reviews": 6}, {"scenario_id": "a" * 64},
+])
+def test_pacing_keys_are_accepted_practice_metadata(extra):
+    from kanamemory.learning_questions import validate_practice
+    template = raw("x")
+    template["practice"].update(extra)
+    assert validate_practice(template, target_id=CID) == template["practice"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"opens_after_reviews": -1}, {"opens_after_reviews": 41}, {"opens_after_reviews": True},
+    {"opens_after_reviews": 2.0}, {"opens_after_reviews": "2"}, {"opens_after_reviews": None},
+    {"scenario_id": ""}, {"scenario_id": "Station"}, {"scenario_id": "1st"}, {"scenario_id": "a-b"},
+    {"scenario_id": "a" * 65}, {"scenario_id": "station\n"}, {"scenario_id": 7}, {"scenario_id": None},
+    {"opens_after": 2}, {"scenario": "station"},
+])
+def test_malformed_pacing_keys_are_rejected_like_any_other_practice_metadata(extra):
+    from kanamemory.learning_questions import validate_practice
+    template = raw("x")
+    template["practice"].update(extra)
+    with pytest.raises(ValueError):
+        validate_practice(template, target_id=CID)
+    item = lesson()
+    item["question_templates"] = {"grammar_cloze": [template]}
+    assert choose(item) is None  # Malformed metadata is not a legacy escape hatch.
+
+
 def test_legacy_templates_still_work_without_metadata_and_are_not_mutated():
     item = lesson()
     for values in item["question_templates"].values():

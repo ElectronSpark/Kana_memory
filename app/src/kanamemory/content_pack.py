@@ -146,6 +146,9 @@ QUESTION_DEPENDENCIES = "question_dependencies"
 QUESTION_READINGS = "question_readings"  # Optional: kana for the words a question shows (11 section 7).
 DEPENDENCY_ID_FIELDS = ("words", "grammar", "kana")
 DEPENDENCY_FIELDS = (*DEPENDENCY_ID_FIELDS, "oov")
+# Design 11 section 18: of a template's required words, those it shows only in its stem (never in an answer,
+# an accepted answer or an option) and glosses there. Written by the content build; a subset of its base list.
+DEPENDENCY_STEM_FIELDS = {"stem_words": "words", "stem_oov": "oov"}
 _MAX_DEPENDENCY_ENTRIES = 40  # Same bound as reviewed practice background_ids.
 _MAX_DEPENDENCY_ID_CHARS = 1024
 _MAX_DEPENDENCY_SURFACE_CHARS = 64
@@ -156,17 +159,26 @@ def validate_question_dependency_requirements(value, *, target_id=None):
     """One template's needs: {"words"/"grammar"/"kana": [ids], "oov": [surfaces]}.
 
     Every list holds at most 40 distinct bounded strings; a template never
-    requires its own target item. Returns the value unchanged.
+    requires its own target item. Optional "stem_words" / "stem_oov" name the
+    members of "words" / "oov" that the template shows only in its stem and
+    glosses there (DEPENDENCY_STEM_FIELDS); each must be a subset of its base
+    list. They add no requirement. Returns the value unchanged.
     """
-    if not isinstance(value, Mapping) or set(value) - set(DEPENDENCY_FIELDS):
+    if (not isinstance(value, Mapping)
+            or set(value) - set(DEPENDENCY_FIELDS) - set(DEPENDENCY_STEM_FIELDS)):
         raise ContentPackError("Invalid question dependency requirements")
     for field, values in value.items():
-        limit = _MAX_DEPENDENCY_SURFACE_CHARS if field == "oov" else _MAX_DEPENDENCY_ID_CHARS
+        base = DEPENDENCY_STEM_FIELDS.get(field, field)
+        limit = _MAX_DEPENDENCY_SURFACE_CHARS if base == "oov" else _MAX_DEPENDENCY_ID_CHARS
         if (not isinstance(values, list) or len(values) > _MAX_DEPENDENCY_ENTRIES
                 or any(not isinstance(v, str) or not v.strip() or len(v) > limit for v in values)
                 or len(set(values)) != len(values)
-                or (field != "oov" and target_id is not None and target_id in values)):
+                or (base != "oov" and target_id is not None and target_id in values)):
             raise ContentPackError("Invalid question dependency list: " + field)
+        if base != field:
+            listed = value.get(base)
+            if not isinstance(listed, list) or any(v not in listed for v in values):
+                raise ContentPackError("Invalid question dependency list: " + field)
     return value
 
 

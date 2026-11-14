@@ -198,6 +198,10 @@ def _dependencies(**changes):
     {"schema_version": 1, "items": {}},
     {"schema_version": 1, "items": {"word:a": {}}},
     {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {}}}}},
+    # Design 11 section 18: stem facts are subsets of their base lists and add no requirement.
+    _dependencies(stem_words=["word:b"], stem_oov=["私"]),
+    _dependencies(stem_words=[]),
+    _dependencies(stem_oov=["私"]),
 ])
 def test_question_dependencies_accepts_the_v1_contract_including_missing_items(value):
     assert validate_question_dependencies(value) is value
@@ -222,6 +226,13 @@ def test_question_dependencies_accepts_the_v1_contract_including_missing_items(v
     _dependencies(grammar=[7]),
     _dependencies(oov=["私" * 65]),
     _dependencies(kana=["k" * 1025]),
+    _dependencies(stem_words=["word:c"]),            # not one of the template's required words
+    _dependencies(stem_oov=["僕"]),                   # not one of its oov surfaces
+    _dependencies(stem_words="word:b"),
+    _dependencies(stem_words=["word:b", "word:b"]),
+    _dependencies(stem_grammar=["grammar:g"]),       # only words can be stem facts
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {"stem_words": ["word:b"]}}}}},
+    {"schema_version": 1, "items": {"word:a": {"vocab_meaning": {_SHA: {"words": "word:b", "stem_words": ["word:b"]}}}}},
 ])
 def test_question_dependencies_rejects_malformed_namespaces(value):
     with pytest.raises(ContentPackError):

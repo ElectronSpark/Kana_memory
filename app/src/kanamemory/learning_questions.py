@@ -32,6 +32,13 @@ _DEPENDENCIES = load_namespace(QUESTION_DEPENDENCIES, {})
 # An out-of-vocabulary surface counts as one unknown item. The token holds a
 # NUL so that no content id (and therefore no known set) can ever contain it.
 OOV_TOKEN_PREFIX = "\x00oov:"
+# Optional reviewed practice keys that pace and group a template (design 11 section 18). Like every practice
+# key they are part of the template's fingerprint, so they are set when a template is written, never added later.
+# opens_after_reviews: the scheduled reviews its item x ability needs before the template is offered (absent: 0).
+# scenario_id: the life scene the question is set in, an id of the optional question_scenarios namespace.
+PRACTICE_PACING_KEYS = ("opens_after_reviews", "scenario_id")
+MAX_OPENS_AFTER_REVIEWS = 40
+_SCENARIO_ID = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 from . import word_sound_questions as sound_questions
 from .question_kinds import REGISTRY as KIND_REGISTRY
 from .question_kinds import vocab_sound as _vocab_sound
@@ -168,10 +175,16 @@ def validate_practice(raw, *, target_id=None):
     required = {"schema_version", "task_family", "context_id", "scaffold",
                 "target_spans", "background_ids", "reviewed"}
     if (not isinstance(value, dict) or not required <= set(value)
-            or set(value) - required - {"example_id", "coverage_scope", "assessed_ids"}
+            or set(value) - required - {"example_id", "coverage_scope", "assessed_ids", *PRACTICE_PACING_KEYS}
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["reviewed"] is not True):
         raise ValueError("Unsupported reviewed practice metadata")
+    if "opens_after_reviews" in value and (type(value["opens_after_reviews"]) is not int
+                                           or not 0 <= value["opens_after_reviews"] <= MAX_OPENS_AFTER_REVIEWS):
+        raise ValueError("Invalid practice release level")
+    if "scenario_id" in value and (not isinstance(value["scenario_id"], str)
+                                   or not _SCENARIO_ID.fullmatch(value["scenario_id"])):
+        raise ValueError("Invalid practice scenario")
     for name in ("task_family", "context_id", "example_id"):
         if name in value and (not isinstance(value[name], str) or not value[name]
                               or len(value[name]) > 256):
