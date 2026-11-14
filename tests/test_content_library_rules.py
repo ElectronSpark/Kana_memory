@@ -69,6 +69,27 @@ def test_manifest_round_trip_and_summary():
     assert summary == {"title": "测试扩展库", "families": {"grammar": 1}, "namespaces": ["lesson", "route"], "item_count": 1}
 
 
+def test_app_versions_are_compared_number_by_number_and_free_text_refuses_nothing():
+    assert rules.app_version_key("0.36.0") == (0, 36, 0, 0) == rules.app_version_key(" 0.36 ")
+    assert rules.app_version_key("1.2.3.4") == (1, 2, 3, 4)
+    for text in ("", "v0.36", "0.36.0-beta", "0.36.0.0.1", "0..1", None, 36):
+        assert rules.app_version_key(text) is None
+
+    def needed(requirement, app):
+        return rules.app_too_old({"requires": {"teaching_format": 1, "namespace_version": 1, **requirement}}, app)
+    assert needed({"app_min_version": "0.36.0"}, "0.35.0") == "0.36.0"
+    assert needed({"app_min_version": " 0.36 "}, "0.35.9") == "0.36"
+    assert needed({"app_min_version": "0.10.0"}, "0.9.0") == "0.10.0"  # numbers, not text
+    for requirement, app in (({"app_min_version": "0.36.0"}, "0.36.0"), ({"app_min_version": "0.36.0"}, "0.36"),
+                             ({"app_min_version": "0.36.0"}, "1.0"), ({}, "0.35.0"),
+                             ({"app_min_version": "the next one"}, "0.35.0"),
+                             ({"app_min_version": "0.36.0"}, "a development build")):
+        assert needed(requirement, app) is None
+    assert rules.app_too_old({}, "0.35.0") is None
+    assert rules.APP_TOO_OLD.format(needed="0.36.0", current="0.35.0") == (
+        "这个内容库需要 0.36.0 或更新版本的应用（当前 0.35.0）。请先更新应用，再导入。")
+
+
 @pytest.mark.parametrize("overrides,drop", [
     ({"content_sha256": "0" * 64}, ()),
     ({"library_id": "Bad Id"}, ()),

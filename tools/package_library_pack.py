@@ -185,8 +185,10 @@ def _route_table(library_id, specs):
 def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_version=None, title=None,
             extension=False, namespaces=None, include_media=True, description="", rewrite_ids=False,
             depend_on_source=False, optional_references=(), retires=(), aliases=None, overrides=(),
-            sign_seed=None, key_id=None, routes=(), with_sample_route=False):
+            sign_seed=None, key_id=None, routes=(), with_sample_route=False, app_min_version=None):
     resources, output = Path(resources).resolve(), Path(output).resolve()
+    if app_min_version is not None and rules.app_version_key(app_min_version) is None:
+        raise ValueError("app_min_version must be a dotted number such as 0.36.0")
     if output.is_relative_to(resources) or output.exists():
         raise ValueError("Choose a new output file outside the runtime resources")
     if not rules.LIBRARY_ID.fullmatch(library_id):
@@ -267,7 +269,8 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
         "title": title or ("KanaMemory 核心内容库" if not extension else library_id),
         "description": description, "language_pair": "ja-zh",
         "profile": "extension" if extension else "core", "teaching_profile": metadata["profile"],
-        "requires": {"teaching_format": 1, "namespace_version": rules.NAMESPACE_VERSION},
+        "requires": {"teaching_format": 1, "namespace_version": rules.NAMESPACE_VERSION,
+                     **({} if app_min_version is None else {"app_min_version": app_min_version.strip()})},
         "layers": layers, "files": files, "content_sha256": rules.content_digest(files),
         "provides": {"items": provides_items, "namespaces": sorted(provided_namespaces),
                      **({"routes": list(route_table)} if route_table else {})},
@@ -325,6 +328,8 @@ def main():
     parser.add_argument("--key-id", help="public_key_id for --sign-key (default ed25519:<fingerprint prefix>)")
     parser.add_argument("--route", action="append", default=[], type=Path,
                         help="Extension only: JSON file with a study route spec (or a list of specs); repeatable")
+    parser.add_argument("--app-min-version", help="The oldest app version that can use this library (a dotted "
+                        "number such as 0.36.0); an older app then refuses the import with a message")
     parser.add_argument("--sample-route", action="store_true",
                         help="With --rewrite-ids: add route:<library_id>:sample over the rewritten ids")
     args = parser.parse_args()
@@ -339,7 +344,7 @@ def main():
                      depend_on_source=args.depend_on_source, optional_references=args.optional_reference,
                      retires=retires, aliases=aliases, overrides=args.override, sign_seed=seed, key_id=args.key_id,
                      routes=[spec for path in args.route for spec in load_route_specs(path)],
-                     with_sample_route=args.sample_route)
+                     with_sample_route=args.sample_route, app_min_version=args.app_min_version)
     result.pop("provides")
     print(json.dumps(result, ensure_ascii=False))
 

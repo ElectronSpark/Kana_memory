@@ -43,6 +43,7 @@ import zipfile
 from . import content_library_rules as rules
 from . import content_pack
 from .app_clock import utc_now
+from .build_info import VERSION as APP_VERSION
 
 LEARNER_TABLES = frozenset({"study_card", "review_event", "session_checkpoint", "learning_unit", "app_setting",
                             "learning_content", "learning_question", "learning_event"})
@@ -526,6 +527,11 @@ class ContentLibraryService:
             raise rules.ContentLibraryError("核心库的 library_id 必须是 " + rules.CORE_LIBRARY_ID)
         if manifest["profile"] != "core" and manifest["library_id"] == rules.CORE_LIBRARY_ID:
             raise rules.ContentLibraryError("扩展库不能使用核心库的 library_id")
+        # A pack made for a newer app may hold content this app refuses lesson by lesson, or cannot read at
+        # all: say so before anything is installed (design 08 section 4.2).
+        needed = rules.app_too_old(manifest, APP_VERSION)
+        if needed:
+            raise rules.ContentLibraryError(rules.APP_TOO_OLD.format(needed=needed, current=APP_VERSION))
         with zipfile.ZipFile(archive) as zipped:
             for name, path in report.teaching_documents:
                 document = json.loads(zipped.read(path).decode("utf-8"))

@@ -763,6 +763,7 @@ tests/test_completed_answer_cache.py
 tests/test_content_bundle.py
 tests/test_content_library_rules.py
 tests/test_content_library_service.py
+tests/test_package_library_pack.py
 tests/test_content_library_ui.py
 tests/test_content_exposure_spacing.py
 tests/test_content_link_navigation.py

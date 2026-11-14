@@ -97,6 +97,8 @@ LIBRARY_ID = re.compile(r"[a-z][a-z0-9_.-]{2,63}\Z")
 NAMESPACE_NAME = re.compile(r"[a-z][a-z0-9_]{0,79}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 VERSION_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\Z")
+APP_VERSION = re.compile(r"\d+(?:\.\d+){0,3}\Z")  # requires.app_min_version that can be compared: 0.36 or 0.36.0
+APP_TOO_OLD = "这个内容库需要 {needed} 或更新版本的应用（当前 {current}）。请先更新应用，再导入。"
 FAMILIES = ("word", "grammar", "pronunciation", "kana")
 ROUTE_ENTRY_LIMIT = 20000  # same limit as study_path.validate_path_state
 KANA_IDENTITY_PREFIX = "kana:"
@@ -438,6 +440,27 @@ def _file_table(files):
     if total > MAX_PACK_BYTES:
         raise ContentLibraryError("Library pack exceeds its size limit")
     return result
+
+
+def app_version_key(text):
+    """The numbers of a dotted app version (0.36.0 -> (0, 36, 0, 0)), or None when the text is not one."""
+    text = text.strip() if isinstance(text, str) else ""
+    if not APP_VERSION.fullmatch(text):
+        return None
+    numbers = tuple(int(part) for part in text.split("."))
+    return numbers + (0,) * (4 - len(numbers))
+
+
+def app_too_old(manifest, app_version):
+    """requires.app_min_version of a manifest when the running app is older than it, else None.
+
+    Compared number by number (0.36 equals 0.36.0). A requirement or an app version that is not a dotted
+    number cannot be compared and refuses nothing: packs written before the comparison existed may hold any
+    text in that field. The pack tool writes only comparable values.
+    """
+    needed = manifest.get("requires", {}).get("app_min_version")
+    wanted, have = app_version_key(needed), app_version_key(app_version)
+    return needed.strip() if wanted is not None and have is not None and have < wanted else None
 
 
 def validate_manifest(value):

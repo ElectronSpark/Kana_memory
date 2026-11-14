@@ -5,6 +5,7 @@ import zipfile
 import pytest
 
 from kanamemory import content_library_rules as rules
+from kanamemory import content_library_service as service_module
 from kanamemory import content_pack
 from kanamemory.content_availability import Catalogue, build_view
 from kanamemory.content_library_service import ContentLibraryService
@@ -105,6 +106,29 @@ def test_bad_packs_are_refused_without_leaving_staging_or_registry_changes(world
         service.inspect_bytes(pack_bytes("author.n3", extension_namespaces(), **kwargs), "bad.zip")
     assert [p.name for p in root.iterdir()] == [rules.MIRROR_FILE]
     assert service.registry() == before
+
+
+def test_a_pack_made_for_a_newer_app_is_refused_with_the_version_it_needs(world, monkeypatch):
+    service, root = world["service"], world["root"]
+    before = service.registry()
+
+    def pack(version):
+        return pack_bytes("author.n3", extension_namespaces(), manifest_overrides={
+            "requires": {"teaching_format": 1, "namespace_version": 1, "app_min_version": version}})
+    monkeypatch.setattr(service_module, "APP_VERSION", "0.35.0")
+    with pytest.raises(rules.ContentLibraryError) as refused:
+        service.inspect_bytes(pack("0.36.0"), "newer.zip")
+    assert str(refused.value) == "这个内容库需要 0.36.0 或更新版本的应用（当前 0.35.0）。请先更新应用，再导入。"
+    assert [p.name for p in root.iterdir()] == [rules.MIRROR_FILE] and service.registry() == before
+    # the same or an older requirement passes, and so does text that cannot be compared (older packs)
+    for version in ("0.35.0", "0.35", "0.9", "the next one"):
+        inspection = service.inspect_bytes(pack(version), "fits.zip")
+        assert inspection.report.manifest["requires"]["app_min_version"] == version
+        service.discard(inspection)
+    # the running app's own version is the one compared
+    from kanamemory.build_info import VERSION
+    monkeypatch.undo()
+    assert service_module.APP_VERSION == VERSION and rules.app_version_key(VERSION) is not None
 
 
 def test_an_oversized_pack_is_refused_with_the_limit_that_is_applied(world, monkeypatch):
