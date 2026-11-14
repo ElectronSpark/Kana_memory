@@ -215,7 +215,7 @@ class DesktopPlatform:
     async def import_library_pack(self):
         """Pick one content library pack (.zip) through the backup import channel."""
         import toga
-        from .content_library_rules import MAX_PACK_BYTES
+        from .content_library_rules import MAX_PACK_BYTES, PACK_TOO_LARGE
         window = toga.App.app.current_window
         if self._closed or window is None:
             return None
@@ -226,7 +226,7 @@ class DesktopPlatform:
             with Path(path).open("rb") as stream:
                 data = stream.read(MAX_PACK_BYTES + 1)
             if len(data) > MAX_PACK_BYTES:
-                raise PlatformError("内容库文件超过 256 MiB 限制。")
+                raise PlatformError(PACK_TOO_LARGE)
             return data
         return await asyncio.to_thread(read)
 

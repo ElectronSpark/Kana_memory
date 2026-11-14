@@ -83,9 +83,11 @@ MERGE_POLICIES = frozenset({"items_by_id", "map_by_key", "contribution", "single
 FORBIDDEN_SUFFIXES = frozenset({".py", ".pyc", ".pyd", ".dll", ".exe", ".ps1", ".js", ".jks", ".keystore",
                                 ".so", ".sh", ".bat", ".cmd", ".jar", ".dex", ".apk"})
 # The full core pack (lexicon 99 MiB, annotations, teaching, media) is about
-# 256 MiB uncompressed; the suggested 256 MiB of 08 §5.2 is kept for the
-# transfer channel of extension packs by the platform layer, see service.
+# 306 MiB uncompressed, hence 512 MiB for a pack and 256 MiB for one file,
+# above the 256 MiB that 08 §5.2 first suggested (08 section 16). The
+# import channel of both platforms and the service refuse at this one limit.
 MAX_PACK_BYTES = 512 * 1024 * 1024
+PACK_TOO_LARGE = f"内容库文件超过 {MAX_PACK_BYTES // (1024 * 1024)} MiB 限制。"
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_TEACHING_BYTES = 64 * 1024 * 1024  # one namespace document; same bound as content_pack._MAX_PAYLOAD_BYTES
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024

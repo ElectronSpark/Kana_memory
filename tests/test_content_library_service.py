@@ -107,6 +107,21 @@ def test_bad_packs_are_refused_without_leaving_staging_or_registry_changes(world
     assert service.registry() == before
 
 
+def test_an_oversized_pack_is_refused_with_the_limit_that_is_applied(world, monkeypatch):
+    # The message names the limit actually used (it once said 256 MiB while 512 MiB was applied).
+    assert rules.PACK_TOO_LARGE == f"内容库文件超过 {rules.MAX_PACK_BYTES // (1024 * 1024)} MiB 限制。"
+    assert "512 MiB" in rules.PACK_TOO_LARGE
+    service, root = world["service"], world["root"]
+    data = pack_bytes("author.n3", extension_namespaces())
+    monkeypatch.setattr(rules, "MAX_PACK_BYTES", len(data) - 1)
+    with pytest.raises(ValueError) as refused:
+        service.stage_bytes(data, "big.zip")
+    assert str(refused.value) == rules.PACK_TOO_LARGE
+    assert not root.exists() or [p.name for p in root.iterdir()] == [rules.MIRROR_FILE]
+    monkeypatch.setattr(rules, "MAX_PACK_BYTES", len(data))
+    service.discard(service.stage_bytes(data, "fits.zip"))
+
+
 def test_learner_tables_in_a_bundled_database_are_refused(world, tmp_path):
     import sqlite3
     path = tmp_path / "learner.sqlite3"

@@ -485,7 +485,7 @@ class ContentLibraryService:
         if not isinstance(data, (bytes, bytearray)) or not data:
             raise ValueError("请选择一个内容库文件。")
         if len(data) > rules.MAX_PACK_BYTES:
-            raise ValueError("内容库文件超过 256 MiB 限制。")
+            raise ValueError(rules.PACK_TOO_LARGE)
         self.root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".incoming-", dir=self.root))
         try:
