@@ -313,6 +313,8 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
     CONTENT_REVISION/VOCABULARY_REVISION 等修订号（extension 库的修订号进入其 provenance）。
   按“表面形式”关联的表（VOCABULARY_WEAVE.word_forms、SEMANTIC_GROUPS）：合并后只在同一库内
   解析词形到 ID；跨库同词形不自动关联，预检列为提示。
+  loanword_origins（外来词来源，设计 11 第 19 节，2026-11-14）不在内置表里：它的 items 按默认规则 items_by_id 合并，同 id
+  冲突时核心优先并照常报告。扩展库只为自己的词课写条目；写给别的库词课的条目，在该库自己的包检查里报“没有对应词课”。
 
 6.3 同 ID 冲突规则
   a) 同 ID 且 item_fingerprint 相同：视为同一内容，provenance 记录多个来源，无冲突。

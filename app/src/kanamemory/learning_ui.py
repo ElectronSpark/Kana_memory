@@ -32,7 +32,7 @@ from .ai_ui import AIUIMixin
 from .learning_pitch_ui import LearningPitchUIMixin, answer_diagram
 from .pitch_practice import is_pitch_question, answer_label as pitch_answer_label, editor_draft as pitch_editor_draft
 from .new_dispatch import study_path_available
-from .intro_batch_ui import IntroBatchUIMixin, INTRO_BATCH_PAGES
+from .intro_batch_ui import IntroBatchUIMixin, INTRO_BATCH_PAGES, origin_labels
 from .content_library_ui import ContentLibraryUIMixin
 from . import ui_components as u
 
@@ -672,6 +672,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if item.get("reading"):
             children.append(u.row(u.label(self.learning_reading_label(item), size=19, flex=1, text_role="study"),
                 *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))])))
+        children.extend(origin_labels(item))
         # The same known set as the batch card (design 11 section 5, D3): shared
         # examples whose other references are not yet introduced stay hidden.
         children.extend([teaching_block(u, item, speak=self.speak_text),
@@ -1656,6 +1657,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if item.get("reading"):
             children.append(u.row(u.label(self.learning_reading_label(item), size=18, flex=1, text_role="study"),
                 *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))])))
+        children.extend(origin_labels(item))
         admitted = item.get('enrolled_abilities', [])
         focused_reading = item['family'] == 'word' and admitted == ['reading']
         conceptual = self.learning_store.get_unit(item['id'], 'understanding') if enrolled else None
@@ -2453,6 +2455,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 title='本题语序参考译文（实验）', show_source=True)
         self.screen("learning_feedback_detail", "详细", u.label(item["title"], size=22,
             text_role="study" if item["family"] == "word" else "ui"),
+            *origin_labels(item),
             *error_details,
             *question_reference,
             teaching_block(u, item, speak=self.speak_text),

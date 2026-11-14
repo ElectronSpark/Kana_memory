@@ -36,7 +36,7 @@ from .presentation import CATEGORY_LABELS, origin_source_ids, payload, short
 from .text_layout import configure_text, font_scale, text_style
 from .typography import font_family, configure_text_role, configure_study_ranges
 from .detail_content import dialect_entry, is_kana_combination, sense_entries
-from .detail_enrichment import REFERENCE_PAGE_NOTE, history_entries, japanese_entries, reference_entries
+from .detail_enrichment import REFERENCE_PAGE_NOTE, history_entries, japanese_entries, reference_entries, source_cards
 from .pronunciation_samples import pronunciation_samples
 from .origin_images import OriginImageCatalog
 from .practice_worker import BackgroundTicket, build_in_background, run_in_background, study_revision
@@ -2208,18 +2208,17 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     self.heading("日语词义与词性"), *self.detail_entries(sense_entries(word)),
                     self.heading("字形与读法"), *form_entries,
                     self.mixed_label("长音符 → ā / ī / ū / ē / ō；", ContentText("おう"), "、", ContentText("えい"), "保留 ou、ei。", size=12, color=MUTED),
-                    self.heading("词源与英语原词")]
+                    self.heading("词源与来源词")]
         if hasattr(self, "learning_store"):
             children.insert(2, ui.button("加入词汇学习", lambda w: self.open_word_learning(word), primary=True))
-        origin = data.get("origin", {})
         english_candidates = data.get("english_review_candidates") or []
-        expression = "; ".join(dict.fromkeys(c["english_source_expression"] for c in english_candidates if c.get("english_source_expression")))
-        expressions = origin.get("source_expressions", [])
-        if expression:
-            children.append(self.entry_card(ui.label("英语来源形式", size=12, color=MUTED), self.content_label(expression, size=20, bold=True, color=GREEN)))
-        elif expressions:
-            children.append(self.entry_card(ui.label("词典来源表达", size=12, color=MUTED), self.content_label("; ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in expressions), size=20, bold=True, color=GREEN)))
-        else:
+        from .learning_content import learning_item_view
+        # Reviewed course entries (a lesson written and read as this word) first, then the lexicon's candidate.
+        cards = source_cards(word, lesson_view=learning_item_view)
+        for caption, text, note in cards:
+            children.append(self.entry_card(ui.label(caption, size=12, color=MUTED), self.content_label(text, size=20, bold=True, color=GREEN),
+                                            *([ui.label(note, size=12, color=MUTED)] if note else [])))
+        if not cards:
             children.append(ui.label("语源仍待核实。包含汉字不等于借自汉语。", color=MUTED))
         entries = japanese_entries(data, include_pitch=False)
         if entries:

@@ -22,6 +22,7 @@ from kanamemory.content_pack import (FORMAT, VERSION, SHARDED_VERSION, NAMESPACE
                                      ITEM_PREFIX, SHARDED, TOP_PREFIX, WHOLE, WHOLE_KEY,
                                      decode_value, encode_value, manifest_digest, namespace_document,
                                      shard_digest, validate_pack)
+from kanamemory.loanword_origins import NAMESPACE as LOANWORD_ORIGINS, candidate_count
 
 # The two largest namespaces (about 32 and 4 MiB of JSON), both looked up by
 # content id and bound by item_fingerprint (08 section 6.2, 09 section 3), and
@@ -138,6 +139,9 @@ def build(source, destination, *, profile="personal", layout="sharded", shard=SH
     temporary = Path(handle.name)
     handle.close()
     result = {"namespaces": len(documents), "profile": profile}
+    origins = dict(values).get(LOANWORD_ORIGINS)
+    if origins is not None:  # design 11 section 19: a released pack should hold no unreviewed entry
+        result["loanword_origin_candidates"] = candidate_count(origins)
     try:
         with closing(sqlite3.connect(temporary)) as connection:
             if layout == "legacy":

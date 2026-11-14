@@ -59,6 +59,7 @@ import threading
 from . import content_library_index as library_index
 from . import content_library_merge as library_merge
 from . import content_library_rules as library_rules
+from . import loanword_origins
 
 FORMAT = "kanamemory-teaching-content"
 VERSION = 1
@@ -310,17 +311,35 @@ def validate_question_readings(value):
     return value
 
 
+# Optional teaching namespace with the source of every katakana loanword lesson (design 11 section 19);
+# its rules live in loanword_origins. Checked by deep validation (builds) only: a v1 pack whose entries
+# are malformed still opens, and the App then shows no origin.
+LOANWORD_ORIGINS = loanword_origins.NAMESPACE
+
+
+def _loanword_check(check):
+    def checked(*args):
+        try:
+            return check(*args)
+        except loanword_origins.LoanwordOriginError as error:
+            raise ContentPackError("Invalid loanword origins: " + str(error)) from error
+    return checked
+
+
 # namespace -> (whole-value check, per-item check, name used in errors).
 _SHARD_CHECKS = {
     QUESTION_DEPENDENCIES: (validate_question_dependencies, validate_question_dependency_entry,
                             "question dependencies"),
     QUESTION_READINGS: (validate_question_readings, validate_question_reading_item, "question readings"),
+    LOANWORD_ORIGINS: (_loanword_check(loanword_origins.validate_namespace),
+                       _loanword_check(loanword_origins.validate_entry), "loanword origins"),
 }
+_DEEP_ONLY_CHECKS = frozenset({LOANWORD_ORIGINS})
 
 
-def _validate_shard_value(name, key, value):
+def _validate_shard_value(name, key, value, *, deep=True):
     """Namespace-specific checks of one decoded shard (deep validation and builds)."""
-    if name not in _SHARD_CHECKS:
+    if name not in _SHARD_CHECKS or (name in _DEEP_ONLY_CHECKS and not deep):
         return
     whole, item, label = _SHARD_CHECKS[name]
     if key == WHOLE_KEY:
@@ -790,7 +809,7 @@ def validate_pack(path, *, deep=False):
             for name, raw in documents:
                 if not isinstance(raw, str) or len(raw.encode("utf-8")) > _MAX_PAYLOAD_BYTES:
                     raise ContentPackError("Teaching namespace exceeds its size limit")
-                _validate_shard_value(name, WHOLE_KEY, decode_value(json.loads(raw)))
+                _validate_shard_value(name, WHOLE_KEY, decode_value(json.loads(raw)), deep=deep)
             digest = hashlib.sha256(json.dumps(documents, ensure_ascii=False).encode("utf-8")).hexdigest()
             if digest != metadata.get("content_sha256"):
                 raise ContentPackError("Teaching content checksum mismatch")

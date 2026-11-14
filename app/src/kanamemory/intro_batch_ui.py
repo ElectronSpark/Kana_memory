@@ -8,6 +8,7 @@ creates a formal question, learning event or scheduler change.
 from __future__ import annotations
 
 from . import intro_batch
+from . import loanword_origins
 from . import ui_components as u
 from .learning_questions import (build_learning_question, grade_learning_answer, question_kinds,
                                  practice_templates, question_requires, retired_practice_variants,
@@ -35,6 +36,17 @@ def ability_hint(question):
     """One line for the first formal question of a later ability."""
     ability = ABILITY_NAMES.get(question.get("ability"), "练习")
     return f"新能力：{ability} — {KIND_CUES.get(question.get('kind'), KIND_LABELS.get(question.get('kind'), '练习'))}"
+
+
+def origin_labels(item):
+    """The loanword source line (and its note) of a word lesson, for pages shown after teaching or an
+    answer only: never before or while a question is answered (loanword_origins rule 4)."""
+    labels = []
+    for line, note in loanword_origins.origin_texts(item):
+        labels.append(u.label(line, size=15))
+        if note:
+            labels.append(u.label(note, size=13, color=u.MUTED))
+    return labels
 
 
 def background_known(question, known_ids):
@@ -265,13 +277,17 @@ class IntroBatchUIMixin:
         expected = dict(entry)
         self.screen("learning_card", "新项说明",
             u.label(f"第 {index + 1} / {len(state['entries'])} 项", size=13, color=u.MUTED),
-            *self.intro_batch_review_hint(), *self._intro_card_body(item),
+            *self.intro_batch_review_hint(), *self._intro_card_body(item, origin=True),
             u.button("下一项", lambda w: self.choose_intro_card("next", expected=expected), primary=True),
             u.button("我已经会了", lambda w: self.choose_intro_card("known", expected=expected)),
             u.button("稍后再学", self.leave_learning))
 
-    def _intro_card_body(self, item):
-        """说明卡 content, shared by the card page and wrong-answer feedback."""
+    def _intro_card_body(self, item, *, origin=False):
+        """说明卡 content, shared by the card page and wrong-answer feedback.
+
+        origin=True adds the loanword source under the meaning; the card opened during a formal
+        question (learning_hint) leaves it out.
+        """
         word = item["family"] == "word"
         children = [u.label(item["title"], size=25, bold=True, color=u.GREEN, text_role="study" if word else "ui")]
         instruction = item.get("instruction", {})
@@ -283,6 +299,8 @@ class IntroBatchUIMixin:
             meaning = item.get("meaning") or instruction.get("summary")
             if meaning:
                 children.append(u.label(meaning, size=18))
+            if origin:
+                children.extend(origin_labels(item))
             children.append(self.example_cards(item, limit=1, known_ids=self._intro_batch_known_ids()))
         else:
             from .structured_lessons import lesson_view
@@ -415,7 +433,7 @@ class IntroBatchUIMixin:
             # The card again; the item then waits at the end of the quiz unless
             # the store released it (design 12 Q2, breadth first).
             self._intro_quiz_result.add(u.label("说明卡", size=13, color=u.MUTED))
-            self._intro_quiz_result.add(u.col(*self._intro_card_body(self._learning_item)))
+            self._intro_quiz_result.add(u.col(*self._intro_card_body(self._learning_item, origin=True)))
         done = intro_batch.quiz_head(self.learning_store.intro_batch() or {"phase": "cards", "quiz_queue": []}) is None
         self._intro_quiz_result.add(u.button("继续", self.finish_intro_batch_quiz if done else self.show_intro_batch,
                                              primary=True))

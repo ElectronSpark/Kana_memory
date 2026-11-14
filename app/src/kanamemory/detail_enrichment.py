@@ -7,6 +7,7 @@ from .kana_links import ContentText
 from .presentation import payload
 from .reading_audio import MIDDLE_CHINESE, matched_reading_audio
 from .content_pack import load_namespace
+from . import loanword_origins
 
 
 # Display once above the cards on every reference page, including later pages.
@@ -73,6 +74,44 @@ def _source(record):
             names.append(name)
     # Source labels are interface metadata, not linkable learning text.
     return DetailLine(("来源：" + "；".join(names),), "meta") if names else None
+
+
+CANDIDATE_LABEL = "候选（未审）"
+
+
+def _single_language(tags):
+    """Chinese name of the one language all tags name, else None (none, several or not listed)."""
+    codes = {loanword_origins.language_code(tag) for tag in tags}
+    return loanword_origins.LANGUAGES[codes.pop()] if len(codes) == 1 and None not in codes else None
+
+
+def source_cards(record, lesson_view=None) -> tuple[tuple[str, str, str | None], ...]:
+    """(label, text, note) cards of a dictionary word's origin section, reviewed course entries first.
+
+    lesson_view(content id) -> catalogue lesson or None lets the course's reviewed loanword_origins
+    entries bound to a lesson written and read as this word come first, with their language. The
+    lexicon's own Wiktionary-derived expression follows, labelled 候选（未审）; its label names a
+    language only when every record names the same listed one. () when nothing is recorded.
+    """
+    data = _data(record)
+    cards = []
+    if lesson_view is not None:
+        for line, note in loanword_origins.reviewed_dictionary_texts(data.get("form"), data.get("reading"),
+                                                                       lesson_view):
+            cards.append(("课程来源（已审核）", line, note))
+    english = [c for c in data.get("english_review_candidates") or () if c.get("english_source_expression")]
+    expressions = (data.get("origin") or {}).get("source_expressions") or []
+    if english:
+        language = _single_language((c.get("etymology_evidence") or {}).get("source_language") for c in english)
+        text = "; ".join(dict.fromkeys(c["english_source_expression"] for c in english))
+        cards.append(((language or "") + "来源形式 · " + CANDIDATE_LABEL, text, None))
+    elif expressions:
+        language = _single_language(x.get("donor_language") if isinstance(x, dict) else None for x in expressions)
+        # The lexicon stores {donor_language, source_expression, ...}; older records had text or a plain string.
+        text = "; ".join(str(x.get("source_expression") or x.get("text", x)) if isinstance(x, dict) else str(x)
+                         for x in expressions)
+        cards.append(("词典来源表达" + (f"（{language}）" if language else "") + " · " + CANDIDATE_LABEL, text, None))
+    return tuple(cards)
 
 
 def history_entries(record) -> tuple[DetailEntry, ...]:
