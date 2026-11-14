@@ -489,6 +489,7 @@ tests/test_compile_reviewed_question_batch.py
 tests/test_practice_authoring_fields.py
 tests/test_practice_release_and_stem_gloss.py
 tests/test_content_source_split.py
+tests/test_build_question_batch.py
 tests/test_lazy_question_sequence.py
 tests/test_learning_pitch_alignment_viewport.py
 tests/test_learning_pitch_viewport.py
@@ -514,6 +515,7 @@ tools/build_word_sound_mix.py
 tools/compile_reviewed_question_batch.py
 tools/practice_authoring_fields.py
 tools/content_source_split.py
+tools/build_question_batch.py
 tools/extend_practice_annotations.py
 tools/practice_grammar_expansion.py
 tools/practice_word_expansion.py
