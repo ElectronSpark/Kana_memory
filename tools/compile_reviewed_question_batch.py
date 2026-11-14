@@ -3,6 +3,9 @@
 This tool never writes learner databases. A partial or stale semantic ledger is
 an error, not permission to ship a smaller batch under a full-coverage claim.
 Question JSON is private content; this compiler contains no course sentences.
+An authoring row may also carry the optional fields glosses, opens_after_reviews
+and scenario_id (design 11 section 18; tools/practice_authoring_fields.py).
+The review binds them like every other field of the row.
 """
 from __future__ import annotations
 
@@ -13,11 +16,14 @@ import json
 from pathlib import Path
 
 from build_varied_practice import append_history, digest
+from practice_authoring_fields import (AUTHORING_FIELDS, apply_pacing, check_scenario, context_row,
+                                       gloss_rows, scenario_ids, scenario_payload, split_fields)
 
 FORMAT = 'kanamemory-reviewed-question-batch'
 VERSION = 1
 FIELDS = {'slot_id', 'target_id', 'kind', 'question', 'task_family', 'context_text',
           'target_spans', 'background_ids', 'assessed_ids', 'coverage_scope', 'source_refs'}
+OPTIONAL_FIELDS = AUTHORING_FIELDS
 
 
 def apply_retirements(output, authoring, review, items):
@@ -65,8 +71,11 @@ def apply_retirements(output, authoring, review, items):
 
 
 def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
-                  coverage_key='expansion_0291', method='sol_exact_slot_review_0291'):
-    """Publish one exactly reviewed batch; the reviewer and batch names are recorded as given."""
+                  coverage_key='expansion_0291', method='sol_exact_slot_review_0291', scenarios=None):
+    """Publish one exactly reviewed batch; the reviewer and batch names are recorded as given.
+
+    scenarios: the ids of the question_scenarios catalogue; when given, every scenario_id used must be one.
+    """
     from kanamemory.learning_questions import KIND_ABILITIES, validate_practice
     from kanamemory.material_review import item_fingerprint
     from kanamemory.multi_cloze import is_cloze_question, validate_snapshot
@@ -94,7 +103,7 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
     output = {'schema_version': 1, 'revision': authoring['revision'], 'items': {}, 'provenance': []}
     seen = set()
     for row in authoring['questions']:
-        if not isinstance(row, dict) or set(row) != FIELDS:
+        if not isinstance(row, dict) or not FIELDS <= set(row) <= FIELDS | OPTIONAL_FIELDS:
             raise ValueError('Invalid authoring record')
         identity, target = row['slot_id'], row['target_id']
         if not isinstance(identity, str) or not identity or identity in seen:
@@ -132,6 +141,10 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
             'target_spans': deepcopy(row['target_spans']), 'background_ids': deepcopy(backgrounds),
             'coverage_scope': row['coverage_scope'], 'assessed_ids': deepcopy(row['assessed_ids']),
             'reviewed': True}
+        # Pacing keys belong to the practice, so they are set before validation and the fingerprint.
+        pacing, glosses = split_fields({k: row[k] for k in OPTIONAL_FIELDS if k in row}, key=identity)
+        check_scenario(pacing, scenarios, key=identity)
+        raw = apply_pacing(raw, pacing, key=identity)
         validate_practice(raw, target_id=target)
         if mode == 'choice':
             choices = raw.get('choices', [])
@@ -154,7 +167,8 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
         if any(digest(existing) == fingerprint for existing in templates):
             raise ValueError('Two quota slots contain the same exercise')
         templates.append(raw)
-        record['contexts'][fingerprint] = {'background_glosses': []}
+        record['contexts'][fingerprint] = context_row(
+            gloss_rows(raw, kind, target, glosses, key=identity, known_items=by_id))
         output['provenance'].append({'target_id': target, 'kind': kind, 'template_sha256': fingerprint,
             'method': method, 'slot_id': identity,
             # Full authoring and independent review ledgers are release artifacts.
@@ -165,6 +179,14 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
         raise ValueError('Review scope differs from the authored batch')
     apply_retirements(output, authoring, review, by_id)
     merged = append_history(output, previous)
+    # append_history keeps an existing context row over a new one, so authored glosses for a template that is
+    # already published with another context would be dropped silently. Refuse instead; glosses for existing
+    # templates are added by the merge tool's revive path. A row without glosses keeps today's behaviour.
+    for target, record in output['items'].items():
+        for fingerprint, context in record['contexts'].items():
+            if (context['background_glosses']
+                    and merged['items'][target].get('contexts', {}).get(fingerprint) != context):
+                raise ValueError('An existing template already has other glosses: ' + fingerprint)
     merged['coverage'] = deepcopy((previous or {}).get('coverage', {}))
     merged['coverage'][coverage_key] = {'new_slots': len(seen) - len(authoring.get('retirements', [])),
         'authored_slots': len(seen),
@@ -175,25 +197,54 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
     return merged
 
 
-def main():
+def pack_size_problem(name, value):
+    """Why the namespace would not fit the sharded teaching pack, or None.
+
+    The limits the pack really has: the build refuses a shard over 32 MiB (tools/build_teaching_content._LIMIT; a
+    sharded namespace has one shard per item record plus one per other top-level key) and the App refuses a
+    namespace whose shards total more than 256 MiB (content_pack._MAX_SHARDED_BYTES). The shards are cut exactly as
+    the build cuts them.
+    """
+    from build_teaching_content import _LIMIT, SHARDED_NAMESPACES, _shards
+    from kanamemory.content_pack import _MAX_SHARDED_BYTES
+    _, _, rows = _shards(name, value, SHARDED_NAMESPACES)
+    for key, _, _, payload in rows:
+        if len(payload) > _LIMIT:
+            return f'{name}/{key} is {len(payload)} bytes; one shard may hold at most {_LIMIT}'
+    total = sum(len(payload) for *_, payload in rows)
+    if total > _MAX_SHARDED_BYTES:
+        return f'{name} is {total} bytes in shards; a namespace may hold at most {_MAX_SHARDED_BYTES}'
+    return None
+
+
+def main(argv=None):
     from kanamemory.content_pack import decode_value, namespace_document
     from kanamemory.learning_content import learning_items
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('authoring', 'review', 'previous', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument('--reviewer', default='gpt-6.1-sol', help='the reviewer the review manifest must name')
+    parser.add_argument('--coverage-key', default='expansion_0291', help='the coverage row this batch writes')
+    parser.add_argument('--method', default='sol_exact_slot_review_0291', help='the provenance method recorded')
+    parser.add_argument('--scenarios', type=Path,
+                        help='question_scenarios.json; when given, every scenario_id used must be in it')
+    args = parser.parse_args(argv)
     read = lambda path: json.loads(path.read_text('utf8'))
     prior = read(args.previous)
     if prior.get('name') != 'varied_practice':
         raise ValueError('Previous input is not the varied-practice namespace')
-    result = compile_batch(read(args.authoring), read(args.review), learning_items(), decode_value(prior['payload']))
+    scenarios = scenario_ids(scenario_payload(read(args.scenarios))) if args.scenarios else None
+    result = compile_batch(read(args.authoring), read(args.review), learning_items(), decode_value(prior['payload']),
+                           reviewer=args.reviewer, coverage_key=args.coverage_key, method=args.method,
+                           scenarios=scenarios)
+    problem = pack_size_problem('varied_practice', result)
+    if problem:
+        raise ValueError('Expanded namespace exceeds the content-pack limit: ' + problem)
     document = namespace_document('varied_practice', result)
     payload_bytes = len(json.dumps(document['payload'], ensure_ascii=False, separators=(',', ':')).encode())
-    if payload_bytes > 32 * 1024 * 1024:
-        raise ValueError('Expanded namespace exceeds the existing content-pack limit')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n', 'utf8')
-    print(json.dumps({'payload_bytes': payload_bytes, **result['coverage']['expansion_0291']}, ensure_ascii=False))
+    print(json.dumps({'payload_bytes': payload_bytes, **result['coverage'][args.coverage_key]}, ensure_ascii=False))
 
 
 if __name__ == '__main__':

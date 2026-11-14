@@ -486,6 +486,7 @@ tests/support/word_interval_support.py
 tests/test_adaptive_practice_domain.py
 tests/test_append_practice_queue.py
 tests/test_compile_reviewed_question_batch.py
+tests/test_practice_authoring_fields.py
 tests/test_lazy_question_sequence.py
 tests/test_learning_pitch_alignment_viewport.py
 tests/test_learning_pitch_viewport.py
@@ -509,6 +510,7 @@ tools/build_sentence_annotations.py
 tools/build_varied_practice.py
 tools/build_word_sound_mix.py
 tools/compile_reviewed_question_batch.py
+tools/practice_authoring_fields.py
 tools/extend_practice_annotations.py
 tools/practice_grammar_expansion.py
 tools/practice_word_expansion.py
