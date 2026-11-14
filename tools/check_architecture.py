@@ -5,8 +5,9 @@ include scope and import shape (not source line); repeated edges are counted.
 The independent public tree checks only the source files shipped in that tree.
 Files that create controls also carry one shrinking number each (design 13
 G1-G3): store references and attributes set on the app, ceilings in page_coupling.
-Design 12 and 13, named in comments here and in the policy, are design documents
-that are not published; docs/design_current/07_engineering_structure.txt restates the rule.
+Design 12 and 13, named in comments here and in the policy, are
+docs/design_current/12_time_share_scheduling.txt and 13_frontend_backend_separation.txt;
+docs/design_current/07_engineering_structure.txt restates the rule.
 """
 
 from __future__ import annotations

@@ -36,6 +36,10 @@ docs/design_current/04_data_ai_interfaces.txt：持久化、内容包、AI、反
 docs/design_current/08_importable_libraries.txt：可导入学习库设计与阶段实现记录（标 I 处已实现，其余 P）。
 docs/design_current/09_runtime_plan_and_question_kind_plugins.txt：卡死对策、题型插件与 WP1–WP7 实现记录。
 docs/design_current/10_parallel_study_routes.txt：平行学习路线设计与 WP-R1–R5 实现记录。
+docs/design_current/11_content_focus_dependency_and_expansion.txt：内容聚焦（同形词题型）、题目依赖门控、主线顺序与词汇扩充的设计与各工作包的实现记录；第 16 节为主线的词与语法交替。
+docs/design_current/12_time_share_scheduling.txt：广度优先的学习安排——学习取向、时间份额、不以答对为关卡、学习重点、不限量的加练与24小时记分；第一步中 WP-M、WP-B1–B6、WP-H、WP-E 已实现；WP-B7 的文档与一轮原生核对已做（看到的、改的与没看到的几项见其第12节）；WP-B0（私有的报告工具）未做；已实现的在其第12节逐包记录（I，2026-11-12/13，原生未验），S2–S9等后续为P；私有段落不随公开源码发布。
+docs/design_current/13_frontend_backend_separation.txt：前后端分离计划稿——用例服务、流程协调、页面三种角色，逐页迁移；第1节为测量（I），S0b（页面守卫：G1–G3的统计与上限）已实现并冻结于0be6bbb，S1（设计12的新页面按合同写）有两条实现记录，S2（添加学习内容页迁到子包admission：服务、显示模型与页面模块）已实现（2026-11-13），S3（首页迁到子包home）已实现（2026-11-14，原生未验），S4起为P，未实施。
+docs/design_current/14_learning_content_principles.txt：学习内容与学习库的设计原则（路线的排法、题量、场景、一题多项、解锁、生词、版本与更新），核心内容与可导入学习库共用。
 
 待实现设计作为本套规范的独立P层，不混入当前实现：
 docs/knowledge_evidence_design_20261101.txt：知识点关系、观察归因与统一能力。

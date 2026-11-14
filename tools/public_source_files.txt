@@ -944,6 +944,9 @@ tests/test_library_availability_candidates.py
 tests/test_home_counts.py
 tests/test_question_presentation_copula_cue.py
 docs/design_current/11_content_focus_dependency_and_expansion.txt
+docs/design_current/12_time_share_scheduling.txt
+docs/design_current/13_frontend_backend_separation.txt
+docs/design_current/14_learning_content_principles.txt
 app/src/kanamemory/content_gaps.py
 tests/support/question_dependency_support.py
 tests/test_question_dependency_gate.py
