@@ -2,7 +2,7 @@
 param(
     [ValidateSet('create','build','package','install','launch','desktop')]
     [string]$Stage = 'build',
-    [string]$ToolchainRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km'),
+    [string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km'),
     [string]$Serial = 'emulator-5580',
     [string]$Python = ''
 )

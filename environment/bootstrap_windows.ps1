@@ -1,6 +1,6 @@
 param(
     [string]$BootstrapPython = 'C:\Python312\python.exe',
-    [string]$ToolRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km')
+    [string]$ToolRoot = (Join-Path $env:LOCALAPPDATA 'km')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent

@@ -73,6 +73,7 @@ def generated(tmp_path):
         'briefcase.toml': '[briefcase]\ntarget_version="0.3.27"',
         'app/requirements.txt': '\n'.join(name+'=='+version for name, version in value['resolved_android_pins'].items()),
         'gradle/wrapper/gradle-wrapper.properties': 'distributionUrl=https://services.gradle.org/distributions/gradle-9.5.0-bin.zip',
+        **{name: 'generated' for name in value['android']['generated_files']},
     }
     for name, text in files.items():
         path = tmp_path / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(text, 'utf8')
@@ -89,6 +90,35 @@ def test_generated_android_settings_match_without_executing_gradle(generated):
     path = generated / 'app/requirements.txt'
     path.write_text('fsrs==6.3.2\ntoga-android==0.5.7\n', 'utf8')
     assert 'dependencies differ' in android_errors(generated, value)[0]
+
+
+def test_a_generated_project_that_lost_a_source_file_is_reported(generated):
+    value = declarations()
+    names = value['android']['generated_files']
+    assert 'app/src/main/java/org/beeware/android/MainActivity.java' in names and len(names) >= 6
+    assert not android_errors(generated, value)
+    for name in names:  # each one alone: Gradle would still build what is left
+        path = generated / name
+        kept = path.read_bytes()
+        path.unlink()
+        assert android_errors(generated, value) == ['Generated Android project is incomplete, re-create it: missing ' + name]
+        path.write_bytes(kept)
+    assert not android_errors(generated, value)
+
+
+def test_the_toolchain_is_never_kept_in_the_temporary_directory():
+    # The system deletes old files there; a generated project lost its sources that way (2026-11-14).
+    scripts = sorted((ROOT / 'environment').glob('*.ps1'))
+    assert len(scripts) >= 6
+    for script in scripts:
+        text = script.read_text('utf8')
+        for line in text.splitlines():
+            if 'Root' in line and '=' in line and line.lstrip().startswith('['):
+                assert 'GetTempPath' not in line, (script.name, line.strip())
+    runner = (ROOT / 'environment/run_app.ps1').read_text('utf8')
+    assert "[string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km')" in runner
+    assert 'must not be inside the temporary directory' in runner
+    assert runner.index('must not be inside the temporary directory') < runner.index('briefcase create android')
 
 
 def test_sdk_package_identity_and_revision_are_checked(tmp_path):

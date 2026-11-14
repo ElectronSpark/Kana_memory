@@ -32,6 +32,24 @@ app/pyproject.toml. The canonical template is the clean commit
 cache lacks the template's empty pip-options.txt; this is not a required patch
 or a claim that the cache is clean. Do not copy that local deletion into source.
 
+Where the toolchain lives
+Keep the toolchain outside the temporary directory. The scripts default to
+%LOCALAPPDATA%\km, and run_app refuses a root inside the temporary directory,
+because the system deletes old files there. On 2026-11-14 such a clean-up had
+removed the Java sources of a generated project and files of the cached
+template (the missing pip-options.txt above was its first trace). Gradle built
+what was left, the manifest still named the activity, and the app failed at its
+first start. Three checks now catch such a loss:
+- the runner refuses the location;
+- the environment check reports a missing generated file before Gradle runs
+  (contract: android.generated_files, the files that create writes once and no
+  later stage rewrites);
+- the package and install stages refuse an APK whose launcher class is not
+  defined in its dex files.
+A project that has lost files is created again (remove its generated bundle,
+then the create stage). Putting single files back by hand is only for finishing
+a run in progress, and that run's record must say so.
+
 Generated projects must use Gradle 9.5.0, AGP 9.3.1 and Chaquopy 17.0.0; SDK
 min/compile/target are 26/36/36. Runtime Python packages, including their current
 transitive packages, are pinned in environment/android-runtime.lock.txt and

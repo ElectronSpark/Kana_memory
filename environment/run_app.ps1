@@ -2,7 +2,7 @@
 param(
     [ValidateSet('create','build','package','install','launch','desktop')]
     [string]$Stage = 'build',
-    [string]$ToolchainRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km'),
+    [string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km'),
     [string]$Serial = 'emulator-5580',
     [switch]$PublicBuild,
     [string]$Python = ''
@@ -287,6 +287,12 @@ function Assert-PackagedBuildIdentity {
 $ToolchainRoot = [IO.Path]::GetFullPath($ToolchainRoot)
 if ($ToolchainRoot -match '[^\x00-\x7F]|\s' -or $ToolchainRoot.Length -gt 65) {
     throw 'Android ToolchainRoot must be a short ASCII path without spaces.'
+}
+# The system deletes old files of the temporary directory. A toolchain kept there lost sources of its generated
+# project that way (2026-11-14), and Gradle then built an app without its entry classes.
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+if (($ToolchainRoot.TrimEnd('\') + '\').StartsWith($temporaryRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Android ToolchainRoot must not be inside the temporary directory: the system deletes old files there.'
 }
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $projectPython = if ($Python) { [IO.Path]::GetFullPath($Python) } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }

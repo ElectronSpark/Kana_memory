@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ToolchainRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km'),
+    [string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km'),
     [switch]$Start,
     [switch]$Visible,
     [ValidateRange(5554,5680)][int]$Port = 5580

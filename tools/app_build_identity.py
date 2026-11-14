@@ -7,8 +7,10 @@ from datetime import date
 import json
 from pathlib import Path
 import re
+import struct
 import subprocess
 import tomllib
+import zipfile
 
 
 def load_identity(app_source):
@@ -62,10 +64,47 @@ def validate_badging(text, identity):
         raise ValueError("APK version or application ID is stale; rebuild before packaging/installing")
 
 
+def dex_defined_classes(data):
+    """Descriptors (Lorg/example/Main;) of the classes one dex file DEFINES: its class_defs, not every type it names."""
+    if data[:4] != b"dex\n" or len(data) < 0x70:
+        raise ValueError("Not a dex file")
+    string_ids, type_ids = struct.unpack_from("<I", data, 0x3C)[0], struct.unpack_from("<I", data, 0x44)[0]
+    class_count, class_defs = struct.unpack_from("<II", data, 0x60)
+    found = set()
+    for index in range(class_count):
+        class_index = struct.unpack_from("<I", data, class_defs + 32 * index)[0]
+        string_index = struct.unpack_from("<I", data, type_ids + 4 * class_index)[0]
+        offset = struct.unpack_from("<I", data, string_ids + 4 * string_index)[0]
+        while data[offset] & 0x80:  # the uleb128 length before the text
+            offset += 1
+        found.add(data[offset + 1:data.index(b"\0", offset + 1)].decode("utf-8", errors="replace"))
+    return found
+
+
+def validate_launcher(path, badging):
+    """The activity the APK launches must be a class the APK holds.
+
+    A generated project that has lost its Java sources still builds: Gradle compiles what is left, the manifest
+    still names the activity, and the app dies at its first start (seen 2026-11-14, after a clean-up of temporary
+    files had removed sources from a toolchain kept in the temporary directory).
+    """
+    match = re.search(r"(?m)^launchable-activity: name='([^']+)'", badging)
+    if match is None:
+        raise ValueError("APK declares no launchable activity")
+    descriptor = "L" + match[1].replace(".", "/") + ";"
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            if re.fullmatch(r"classes\d*\.dex", name) and descriptor in dex_defined_classes(archive.read(name)):
+                return
+    raise ValueError(f"APK does not contain its launcher class {match[1]}: the generated Android project is "
+                     "incomplete; re-create it")
+
+
 def verify_apk(path, aapt, identity):
     result = subprocess.run([str(aapt), "dump", "badging", str(path)], capture_output=True,
                             text=True, encoding="utf-8", errors="replace", timeout=60, check=True)
     validate_badging(result.stdout, identity)
+    validate_launcher(path, result.stdout)
 
 
 def main():

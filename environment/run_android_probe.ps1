@@ -2,7 +2,7 @@
 param(
     [ValidateSet('create', 'build', 'package')]
     [string]$Stage = 'create',
-    [string]$ToolchainRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km')
+    [string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km')
 )
 $ErrorActionPreference = 'Stop'
 $ToolchainRoot = [IO.Path]::GetFullPath($ToolchainRoot)

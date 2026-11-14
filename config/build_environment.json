@@ -23,6 +23,7 @@
     "compile_sdk": 36,
     "target_sdk": 36,
     "abis": ["arm64-v8a", "x86_64"],
+    "generated_files": ["app/src/main/AndroidManifest.xml", "app/src/main/res/values/strings.xml", "app/src/main/java/org/beeware/android/MainActivity.java", "app/src/main/java/org/beeware/android/IPythonApp.java", "app/src/main/java/org/beeware/android/IDrawHandler.java", "app/src/main/java/org/beeware/android/DrawHandlerView.java"],
     "java_dependencies": ["androidx.appcompat:appcompat:1.7.1", "com.google.android.material:material:1.13.0", "com.google.mlkit:digital-ink-recognition:19.0.0"],
     "sdk_packages": {"build-tools;36.0.0": "36.0.0", "platforms;android-36": "2.0.0", "platform-tools": "37.0.1"},
     "jdk_pe_version": "17.0.17.0",

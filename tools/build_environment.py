@@ -105,6 +105,11 @@ def android_errors(project: Path, value: dict) -> list[str]:
     for dependency in expected['java_dependencies']:
         checks[dependency] = f'"{dependency}"' in app
     errors.extend('Generated Android mismatch: ' + key for key, passed in checks.items() if not passed)
+    # Files that create writes once and no later stage touches. When one is gone (a clean-up of temporary files
+    # removed them from a toolchain kept in the temporary directory, 2026-11-14) Gradle still builds what is left,
+    # and the app fails only when it starts.
+    errors.extend('Generated Android project is incomplete, re-create it: missing ' + name
+                  for name in expected.get('generated_files', ()) if not (project / name).is_file())
     return errors
 
 

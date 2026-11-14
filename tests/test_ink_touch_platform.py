@@ -102,7 +102,7 @@ def test_invalid_binding_does_not_replace_current_listener(platform):
 
 
 def test_native_motion_events_preserve_history_pointer_identity_and_cancellation(tmp_path):
-    bundled = Path(os.environ.get('LOCALAPPDATA', '')) / 'Temp/km/briefcase/tools/java17/bin'
+    bundled = Path(os.environ.get('LOCALAPPDATA', '')) / 'km/briefcase/tools/java17/bin'
     java_bin = Path(os.environ.get('KANAMEMORY_TEST_JAVA_BIN', str(bundled)))
     javac = str(java_bin / 'javac.exe') if (java_bin / 'javac.exe').is_file() else shutil.which('javac')
     java = str(java_bin / 'java.exe') if (java_bin / 'java.exe').is_file() else shutil.which('java')

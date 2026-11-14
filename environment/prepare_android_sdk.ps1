@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$ToolchainRoot = (Join-Path ([IO.Path]::GetTempPath()) 'km'))
+param([string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km'))
 $ErrorActionPreference = 'Stop'
 $sdkRoot = Join-Path $ToolchainRoot 'briefcase\tools\android_sdk'
 $sdkManager = Join-Path $sdkRoot 'cmdline-tools\19.0\bin\sdkmanager.bat'
