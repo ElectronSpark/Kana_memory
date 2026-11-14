@@ -123,7 +123,7 @@ WP2 题型注册表骨架（行为零变化）
   验收：冻结快照测试证明 KIND_ABILITIES/KIND_LABELS/DEFAULT_KINDS/OPT_IN_LISTENING_KINDS/LISTENING_KINDS/
   TEXT_KINDS/PRACTICE_ONLY_KINDS/KINDS_ADDED_AT/WORD_KINDS/GRAMMAR_KINDS/PRONUNCIATION_KINDS 逐项与改前相等；
   注册表不变量测试（无重复 kind、每 kind 有 ability/label、practice_only ⊆ 已注册）；
-  全目录题目快照黄金对照（改前生成、改后比对，证据放 .test_runs/wp2）；check_python 与架构守卫通过。
+  全目录题目快照黄金对照（改前生成、改后比对）；check_python 与架构守卫通过。
   完成（2026-11-08，f0784ae）：question_kind_registry 与 question_kinds/builtin 描述全部学习题型，learning_questions 的常量表由注册表派生，名称、取值与顺序不变（冻结快照测试固定）；全目录 27,854 道题改前后逐字节相同；钩子字段留待 WP4；同提交加入本文件。
 
 WP3 继续链去重（A1、A4）
@@ -137,21 +137,21 @@ WP3 继续链去重（A1、A4）
 WP4 题型分族迁移（每族一轮）
   所有权：question_kinds/<族>.py 与 learning_questions/question_presentation/answer_input/assessment_*
   中该族分支。验收：黄金对照逐字节不变；该族评分/展示/输入测试通过。
-  第1轮完成（2026-11-08）：vocab_sound、vocab_context——question_kinds/vocab_sound.py 与 vocab_context.py 定义 template_provider(item, spec, env)；learning_questions 的 practice_templates/_word_question/question_kinds 回退/_kind_source 改按注册表钩子与 template_source 分派；其余钩子仍为 None（走通用路径）；题目快照、评分与 practice_templates 黄金对照逐项相等（.test_runs/wp4）。
-  第2轮完成（2026-11-08）：vocab_choice、vocab_text——question_kinds/vocab_choice.py（vocab_meaning、vocab_audio_meaning、vocab_orthography、vocab_usage、vocab_zh_ja_contrast、reading_comprehension、listening_comprehension）与 vocab_text.py（vocab_reading、vocab_recall）定义 builder/grader/presenter/input_mode_policy；learning_questions 的 _word_question 与 grade_learning_answer、question_presentation 的提示表、answer_input 的罗马字资格改按注册表钩子分派（vocab_orthography 共用 vocab_text 的写法评分）；唯一有意行为变化：reviewed_practice_context 按 kind 的 template_source 查找来源，读句选词可返回复习上下文（此前恒为 None），因此读句选词词库多空题的新快照带上 learning_conditions/learning_condition_source/learning_condition_revision 并随之改变 assessment_contract（全目录 558 条，均为 vocab_context_choice；换回旧查找后与改前逐项相等）；评分、practice_templates 与展示/输入投影黄金对照逐项相等，其余题目快照逐项相等（.test_runs/wp4/r2）。
-  第3轮完成（2026-11-08）：grammar、pronunciation——语法族按作答形态分三个模块（不按每 kind 一文件）：question_kinds/grammar_meaning.py（grammar_meaning 提示，并持有全部语法 kind 共用的旧式 builder，经 BuildEnv.legacy_grammar_variants 借用 GRAMMAR_QUESTIONS）、grammar_cloze.py（grammar_cloze：单空补全提示与译文折叠、罗马字仅拉丁段）、grammar_production.py（grammar_transform、grammar_reorder、targeted_correction、controlled_sentence_production：产出整句，排列提示、prompt_is_instruction、罗马字仅拉丁段）；pronunciation.py 以新钩子 snapshot_finisher 写入读音快照字段（去音频、tests_reading、显式 text_roles）；learning_questions 的 _grammar_question 与读音 domain 分支、question_presentation 的残余提示表与 instruction_prompt kind 集、answer_input 的残余罗马字表改按注册表分派（vocab_reading_choice 提示归 vocab_sound，读句选词任务文本归 vocab_context，question_presentation/answer_input 不再有按 kind 表）；跨族集合改为 spec 字段派生：safe_support、background_support、order_translation_source（prompt/gap/answer）、dictionary_lesson、reads_written_form，KindPresentation 增 prompt_is_instruction/ui_cues/study_tasks，_JAPANESE_CUES 由 Registry.study_cues() 与折叠提示 cue 派生，均由 test_question_kind_registry 冻结快照守住原值；按题目 family/domain/input_mode 判定的语法假名等价（_grammar_kana：评分归一、构造时补 accepted、answer_input、personal_question）、guided 看词辨义改写、pitch/multi_cloze/prosody 按题形分派仍留原处；无有意行为变化，题目快照、评分/practice_templates、展示/输入投影黄金对照逐项相等（.test_runs/wp4/r3）。
+  第1轮完成（2026-11-08）：vocab_sound、vocab_context——question_kinds/vocab_sound.py 与 vocab_context.py 定义 template_provider(item, spec, env)；learning_questions 的 practice_templates/_word_question/question_kinds 回退/_kind_source 改按注册表钩子与 template_source 分派；其余钩子仍为 None（走通用路径）；题目快照、评分与 practice_templates 黄金对照逐项相等。
+  第2轮完成（2026-11-08）：vocab_choice、vocab_text——question_kinds/vocab_choice.py（vocab_meaning、vocab_audio_meaning、vocab_orthography、vocab_usage、vocab_zh_ja_contrast、reading_comprehension、listening_comprehension）与 vocab_text.py（vocab_reading、vocab_recall）定义 builder/grader/presenter/input_mode_policy；learning_questions 的 _word_question 与 grade_learning_answer、question_presentation 的提示表、answer_input 的罗马字资格改按注册表钩子分派（vocab_orthography 共用 vocab_text 的写法评分）；唯一有意行为变化：reviewed_practice_context 按 kind 的 template_source 查找来源，读句选词可返回复习上下文（此前恒为 None），因此读句选词词库多空题的新快照带上 learning_conditions/learning_condition_source/learning_condition_revision 并随之改变 assessment_contract（全目录 558 条，均为 vocab_context_choice；换回旧查找后与改前逐项相等）；评分、practice_templates 与展示/输入投影黄金对照逐项相等，其余题目快照逐项相等。
+  第3轮完成（2026-11-08）：grammar、pronunciation——语法族按作答形态分三个模块（不按每 kind 一文件）：question_kinds/grammar_meaning.py（grammar_meaning 提示，并持有全部语法 kind 共用的旧式 builder，经 BuildEnv.legacy_grammar_variants 借用 GRAMMAR_QUESTIONS）、grammar_cloze.py（grammar_cloze：单空补全提示与译文折叠、罗马字仅拉丁段）、grammar_production.py（grammar_transform、grammar_reorder、targeted_correction、controlled_sentence_production：产出整句，排列提示、prompt_is_instruction、罗马字仅拉丁段）；pronunciation.py 以新钩子 snapshot_finisher 写入读音快照字段（去音频、tests_reading、显式 text_roles）；learning_questions 的 _grammar_question 与读音 domain 分支、question_presentation 的残余提示表与 instruction_prompt kind 集、answer_input 的残余罗马字表改按注册表分派（vocab_reading_choice 提示归 vocab_sound，读句选词任务文本归 vocab_context，question_presentation/answer_input 不再有按 kind 表）；跨族集合改为 spec 字段派生：safe_support、background_support、order_translation_source（prompt/gap/answer）、dictionary_lesson、reads_written_form，KindPresentation 增 prompt_is_instruction/ui_cues/study_tasks，_JAPANESE_CUES 由 Registry.study_cues() 与折叠提示 cue 派生，均由 test_question_kind_registry 冻结快照守住原值；按题目 family/domain/input_mode 判定的语法假名等价（_grammar_kana：评分归一、构造时补 accepted、answer_input、personal_question）、guided 看词辨义改写、pitch/multi_cloze/prosody 按题形分派仍留原处；无有意行为变化，题目快照、评分/practice_templates、展示/输入投影黄金对照逐项相等。
 
 WP5 后台组装与锁顺序（A2、B 后半）
   所有权：practice_worker.py、domain.py 的 prepare_next_question 组装部分、study_path.py ensure_kana_queue、
   record_schema/learning_evidence 的 schema 探测、feedback_export_worker.py。
   验收：主线程只校验提交；后台结果经页面令牌与修订校验；锁顺序测试；现有 practice_worker/backup 测试通过。
-  完成（2026-11-08）：ensure_kana_queue 拆出只读 plan_kana_queue（候选筛选/模板选择/快照序列化），App 启动后开轮时由 practice_worker.run_in_background 在独立连接线程组装，主线程经 BackgroundTicket（页面令牌＋修订）校验后仅提交，离页丢弃、数据变则重算；prepare_next_question 排序与课程 current() 因依赖进程内练习轮计划留在主线程；record_schema/learning_evidence 的 schema 探测按（文件, schema_version）进程缓存＋连接内正向缓存，迁移后失效，已有库打开不取写锁；feedback_export_worker 写明 progress→feedback 锁顺序不变量并加归档前无锁预检；WAL 连接设 synchronous=NORMAL（Q1 已确认）；diagnostic_events 补锁错误操作名。合成探针主线程 SQL：旧式评分 986→929、课程道评分 383→326、开轮继续 6734→6429（主线程 1.40→0.90 s），派题结果与到期逐项相同（.test_runs/wp5/r1）；原生未验。
+  完成（2026-11-08）：ensure_kana_queue 拆出只读 plan_kana_queue（候选筛选/模板选择/快照序列化），App 启动后开轮时由 practice_worker.run_in_background 在独立连接线程组装，主线程经 BackgroundTicket（页面令牌＋修订）校验后仅提交，离页丢弃、数据变则重算；prepare_next_question 排序与课程 current() 因依赖进程内练习轮计划留在主线程；record_schema/learning_evidence 的 schema 探测按（文件, schema_version）进程缓存＋连接内正向缓存，迁移后失效，已有库打开不取写锁；feedback_export_worker 写明 progress→feedback 锁顺序不变量并加归档前无锁预检；WAL 连接设 synchronous=NORMAL（Q1 已确认）；diagnostic_events 补锁错误操作名。合成探针主线程 SQL：旧式评分 986→929、课程道评分 383→326、开轮继续 6734→6429（主线程 1.40→0.90 s），派题结果与到期逐项相同；原生未验。
 
 WP6 内容分片与预计算（E、C 后半、A3）
   所有权：content_pack.py、learning_questions.py 的模板读取、tools/build_teaching_content.py（分片与
   文件级 sha256）、material_review.py（预计算索引）、practice_archive.py（前缀归档）。
   验收：启动内存与时间探针对照；validate 改文件级后对坏包仍拒绝；归档后旧题/答案/事件可读且备份校验通过。
-  完成（2026-11-08）：内容包 v2——tools/build_teaching_content.py 默认把每个命名空间写成带 sha256/大小的分片，清单校验和写入 metadata.manifest_sha256（=content_sha256），varied_practice/context_choice 按内容 id 分片（清单列出每片 item_fingerprint 与模板 kind，content_pack.shard_index 给出 kind→item_fingerprint→id），顶层键（含 12 MiB provenance）各自成片；layout=legacy 仍可写 v1，v1 包照旧可读。load_namespace 签名不变：整体命名空间每次重新解码（去掉 lru_cache 原件＋deepcopy 双份），分片命名空间返回只读 ShardedNamespace，首次访问某条目才校验 sha256 并解码；learning_questions 未改，模板读取经此透明分片。validate_installed_pack 对 v2 只校验清单与分片大小（deep=True 全量），篡改/缺失/多余分片与清单不符均拒绝。material_review.review_index 首次加载时建立题目匹配桶、target_fingerprints 集合与 references 载荷表，结果与逐项扫描相等。practice_archive.archive_session_prefix（显式用例，不自动触发）以收据冻结会话已结算前缀（题/答/词例/复习事件的计数与 sha256），行不移动，学习 ID、评分幂等与备份格式不变，archived_prefix 读回；整会话 O(未完成) 收益需 domain.py 消费者改用前缀边界（未做）。临时 v2 包探针：validate 1.11→0.02 s，导入 RSS 240→75 MiB、对象 60.6 万→11.4 万、完整 GC 0.17→0.02 s，34 个命名空间与 722 项 practice_templates 逐项相等（.test_runs/wp6/r1）；resources/ 下正式包未重建。
+  完成（2026-11-08）：内容包 v2——tools/build_teaching_content.py 默认把每个命名空间写成带 sha256/大小的分片，清单校验和写入 metadata.manifest_sha256（=content_sha256），varied_practice/context_choice 按内容 id 分片（清单列出每片 item_fingerprint 与模板 kind，content_pack.shard_index 给出 kind→item_fingerprint→id），顶层键（含 12 MiB provenance）各自成片；layout=legacy 仍可写 v1，v1 包照旧可读。load_namespace 签名不变：整体命名空间每次重新解码（去掉 lru_cache 原件＋deepcopy 双份），分片命名空间返回只读 ShardedNamespace，首次访问某条目才校验 sha256 并解码；learning_questions 未改，模板读取经此透明分片。validate_installed_pack 对 v2 只校验清单与分片大小（deep=True 全量），篡改/缺失/多余分片与清单不符均拒绝。material_review.review_index 首次加载时建立题目匹配桶、target_fingerprints 集合与 references 载荷表，结果与逐项扫描相等。practice_archive.archive_session_prefix（显式用例，不自动触发）以收据冻结会话已结算前缀（题/答/词例/复习事件的计数与 sha256），行不移动，学习 ID、评分幂等与备份格式不变，archived_prefix 读回；整会话 O(未完成) 收益需 domain.py 消费者改用前缀边界（未做）。临时 v2 包探针：validate 1.11→0.02 s，导入 RSS 240→75 MiB、对象 60.6 万→11.4 万、完整 GC 0.17→0.02 s，34 个命名空间与 722 项 practice_templates 逐项相等；resources/ 下正式包未重建。
 
 5 开放问题
 Q1 是否接受 PRAGMA synchronous=NORMAL（WAL 下掉电可能丢最后一次提交）。
@@ -175,7 +175,7 @@ WP7b 完成（2026-11-08）：辅导/AI 服务/材料页的草稿防抖与锁错
   learning_conditions._reviewed_index 的已核目标改用 material_review.is_reviewed_target（WP6 预计算集合），
   保留 _single_flight；与旧列表逐项判断的结果逐项相等（含顺序）。feedback_store 的 WAL 连接在 journal_mode
   实际为 wal 时设 synchronous=NORMAL，非 WAL 保持 FULL（Q1 已确认）。测试：tests/test_page_draft_debounce_ui.py
-  （新）、test_feedback_store 与 test_reviewed_index_single_flight 扩展（.test_runs/wp7b/r1）；原生未验。
+  （新）、test_feedback_store 与 test_reviewed_index_single_flight 扩展；原生未验。
 
 WP7a 完成（2026-11-08）：继续链剩余读取去重、封轮评分→下一题后台化、前缀归档消费者。
   所有权：personal_content_versions.py、personal_content_compensation.py、personal_question.py（仅 rows_for 读取来源）、
@@ -205,7 +205,7 @@ WP7a 完成（2026-11-08）：继续链剩余读取去重、封轮评分→下�
   无收据时字节级等于原整会话哈希）；_restorable_session_repetitions 只在 [upto, index) 找被跳过的重复步，父答案可在前缀内（按序号单查）。
   语义说明：显式归档后，归档前缀内被跳过的定时重复步视为已关闭历史，重新启用题型时不再恢复（tests/test_prefix_archive_consumers.py
   固定此行为；边界之后的照旧恢复）。归档仍是显式用例、不自动触发；行不移动，备份/恢复与评分幂等不变。
-  探针（.test_runs/wp7a/r1，合成学习者，主线程 SQL 条数，改前 HEAD ea66a4e → 改后；表哈希、到期与派题逐项相同）：首页刷新 997→281
+  探针（合成学习者，主线程 SQL 条数，改前 HEAD ea66a4e → 改后；表哈希、到期与派题逐项相同）：首页刷新 997→281
   （调用栈含 personal_content_versions 的语句 620→2，含 compensation 的 230→2）；已封轮评分→下一题 864→189（personal_content_versions 378→0，current 移到工作线程：工作线程 315 条、无 BEGIN IMMEDIATE），
   主线程 0.115→0.043 s；开轮继续 6429→3758（其余 248 条个人内容读取在追加题目的写事务内，按约束保持现读）；旧式评分 929→515；
   课程道评分 326→276。耗时含探针调用栈归因开销，仅同批比较。测试：tests/test_personal_setting_projection.py、

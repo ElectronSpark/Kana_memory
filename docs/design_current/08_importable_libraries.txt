@@ -259,14 +259,14 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
 5.5 升级同一库
 - 新版本包安装走 5.2；预览额外显示：指纹变化项数（已学项中有多少会出现“保存快照与目录
   不一致”）、被 retires 的项、aliases；安装成功后旧版本目录删除。
-  更新不改变启用开关（2026-11-12，原生实测 native8 后修正）：原先安装新版本会把已停用的库重新启用；现在保持原状态，
+  更新不改变启用开关（2026-11-12，一轮原生实测后修正）：原先安装新版本会把已停用的库重新启用；现在保持原状态，
   预览页写明“更新后仍保持停用”，安装结果提示同样说明。升级差异读的是已安装版本的清单文件，与该库是否启用无关。
   库目录的符号链接检查只针对库根目录以下、库自己的文件夹：安卓上应用数据目录经由系统链接 /data/user/0 到达，
   原先检查所有上级目录，使服务层在设备上读不到任何已安装清单（升级差异按空库比较、库行“已学 0 项”、移除提示计数为 0、
   预检缺少其他库的指纹）；电脑上不出现。内置核心库一行的数量只计“没有任何扩展库提供”的项（原先把已载入扩展库的项也算入）。
   预检结果里的“新增内容／相同／冲突”只与继续保留的库比较，不与被替换的旧版本比较：原先用进程里已载入的目录代表“已安装内容”，
   旧版本已载入时新包与自己的旧版本“冲突”并给出未声明 overrides 的提示（0.34.0 审计 U1），旧版本停用时又把全部项算成新增
-  （native8：新增 1388 项）。现在由本库旧版本提供的项从已安装指纹与目录中剔除（同 ID 的核心项仍算冲突），
+  （一轮原生实测：新增 1388 项）。现在由本库旧版本提供的项从已安装指纹与目录中剔除（同 ID 的核心项仍算冲突），
   precheck_pack 新增 previous_ids：旧版本已有的项既不算新增也不算相同，“新增内容”即本次更新真正新增的项，启用与否结果相同。
   规则 c 对被替换的版本单独核对（内容变了而修订号未变即包错误），不再依赖旧版本是否已载入。
 - 已学项的升级语义沿用现行合同：保存快照为准；只有未动过且精确匹配旧指纹的项才接受新前置叠加；
@@ -334,7 +334,7 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
 - 共享例句包（example_store）target 不在有效目录时沿用现有 unavailable 处理。
 
 6.5 扩展库文档的按需读取 [I，0.34.2，2026-11-12；合成数据单元与集成测试、桌面实测；原生验证见 README]
-问题（native8，一个 1,388 项、6 个文档共约 70 MB JSON 的扩展库）：启用后每次启动把所有文档整份解码并再复制一份，
+问题（一轮原生实测，一个 1,388 项、6 个文档共约 70 MB JSON 的扩展库）：启用后每次启动把所有文档整份解码并再复制一份，
   桌面上教学内容占用 56 → 504 MB、载入 0.45 → 5.4 秒；模拟器 PSS 约 1 GB、到第一题 22 秒（核心库单独 335 MB、9.8 秒）。
   而一次学习只用到几课。核心包早已按分片逐条读取（content_pack 的 ShardedNamespace），扩展库没有对应机制。
 包格式、manifest、注册表、学习记录和题目快照都不变；已安装的库无需重装。
@@ -373,7 +373,7 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   例句服务（见下）、课程详情按 id 打开与前置计划／加入学习时的目录、“试做新内容”的候选扫描、例句关联的选择与导入预览、
   读音显示的课内写法表（question_readings._lesson_forms）。
   其余调用点仍取完整快照：每次为扩展库的每一项解码一次模板（比原来的 deepcopy 快，但仍与库的大小成正比）。
-- 例句服务（原生实测 native12 定位）：启动时后台预建的 ExampleStore 用 learning_items_available() 取完整目录并
+- 例句服务（原生实测定位）：启动时后台预建的 ExampleStore 用 learning_items_available() 取完整目录并
   把每一项 deepcopy 后保留到会话结束——设备上启用大库后多出的约 250 MB 就在这里（第一轮改动后 PSS 仍有 479–640 MB）。
   现在它取视图（example_targets_available(views=True)），自己保留的是 isolated_copy；bundled_catalogue 的“原件”
   用 original_source(isolated_copy(项), owned=True)，备忘键用 digest_default 序列化（视图与它代表的普通项得到同一段
@@ -385,7 +385,7 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   example_source_item（其余项它只是原样拷贝）。
 - 桌面实测（同一个扩展库的后一版，同一份学习记录）：教学内容占用 504 → 70 MB（不带库 53 MB），载入 5.4 → 0.9 秒（不带库 0.5 秒）；
   “继续学习”到第一题 14.5 → 5.3 秒（不带库 4.3 秒）；索引合计 2.9 MB，建索引时峰值多约 60 MB。
-- 独立审计（.test_runs/ondemand/audit/REPORT.md）：真实库与 30 个手工 JSON 边界用例上按需读取与整份解码逐项一致，
+- 独立审计：真实库与 30 个手工 JSON 边界用例上按需读取与整份解码逐项一致，
   三处改写结果不变；提出的四点（不成对代理、损坏只在使用处暴露、测试夹具的缓存、索引版本号的说明）均已采纳，见上。
 - 未做：仍取完整目录的调用点——AI 学习助手各页（example_targets_available 的默认形态、材料核对与学习）、例句编辑页、
   个人笔记关联、反馈影响分析、假名前置修复；这些页面打开时会为扩展库的每一项解码一次模板（一次性的内存高峰）。
@@ -680,7 +680,7 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
   Q6 不强制签名（signature.json 仅记录 unsigned/unverified）；Q7 备份携带该键（validate_backup_rows 校验形状），
   恢复时不据此安装或改本机注册表（startup_sync 只按本机文件与镜像处理）；Q8–Q10、Q12 未涉及；Q11 放在“设置”下。
 
-验证（.test_runs/content_libraries/r1）：三组新测试 50 项通过；verify_core_import.py 用 build_demo 产出的 demo 资源
+验证：三组新测试 50 项通过；verify_core_import.py 用 build_demo 产出的 demo 资源
 模拟 demo 树，导入 tools/package_library_pack.py 打出的 kanamemory.core 包，"重启"（新进程）后目录指纹、学习路线小节、
 假名表、LearningStore.counts 与 StudyPathService.overview 计数的快照哈希与内置完整资源启动的基线一致
 （722 项、363 小节、165 假名），demo 无库时不同（1 项、3 小节、3 假名）。原生（Android）未验：ZIP 走 SAF 导入通道的
@@ -740,7 +740,7 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
   local:* 与孤儿返回 None，由调用方沿用各自规则）；missing_required_references(content_id) -> tuple[str, ...]
   （非空 = blocked_dependency）；另有 is_unavailable、retirement、alias_target、providers_of、blocked_ids、token。
 
-不变约束核对（.test_runs/lib_phase34/r1，contract_hash.py）：只有核心库时 34 个命名空间 load_namespace 结果的
+不变约束核对（contract_hash.py）：只有核心库时 34 个命名空间 load_namespace 结果的
 带类型标记哈希、varied_practice/context_choice 的 shard_index、目录 ID/指纹/revision/depends_on/prerequisite_revision、
 722 项完整目录与 363 个路线小节摘要与改前逐项相等；装一个只提供无关命名空间的扩展库（启用或停用）时同样相等。
 测试：tests/test_content_library_merge.py、tests/test_content_library_phase34.py（demo 副本改 ID 与核心库合并、同 ID 同
@@ -801,10 +801,10 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
 回执；FSRS 参数、证据权重、记录格式未改；页面无新增 SQL/_db/_pending；写事务仍归 LearningStore。
 architecture_policy 新增 availability_view 的 store._db 只读例外一行。
 
-验证（.test_runs/lib_phase1b/r1，README 说明短目录）：tests/test_content_availability.py（纯规则与 EffectiveCatalogue 接口）、
+验证：tests/test_content_availability.py（纯规则与 EffectiveCatalogue 接口）、
 tests/test_library_availability_store.py（每个 Store 读取点与写入口，两种孤儿夹具：注册表停用合成扩展库 test.ext、
 “目录中删除一项”；停用/启用往返全部表哈希不变，仅注册表条目 state/enabled 变化）、tests/test_library_availability_ui.py
-（首页、未入队预览、路线、继续学习、学习库页、记录页）。全部库启用时：用 .test_runs/wp7a/r1/probe_continue.py 的对照方法
+（首页、未入队预览、路线、继续学习、学习库页、记录页）。全部库启用时：用 probe_continue.py 的对照方法
 （注册表存在、有效目录服务全部合成课程）在 HEAD 3cd3fc6 导出树与工作树各跑一次，五个场景的全部表哈希、到期、派出页面/题目、
 LearningStore.counts（双方共有键）与首页文字逐项相同（compare_results.txt：ALL IDENTICAL；主线程 SQL 增加约 3–6%）。
 
@@ -865,7 +865,7 @@ LearningStore.counts（双方共有键）与首页文字逐项相同（compare_r
   页面按钮在此方法存在时自动出现。
 - libraries() 行可附 installed_at_utc、source_sha256、key_fingerprint（页面目前经 service.registry() 自行读取）。〔已完成：见 16.5〕
 
-验证（.test_runs/lib_phase5/r1）：RFC 8032 第 7.1 节 4 组向量（TEST 1–3 与 SHA(abc)）签名与验签一致；未签名/有效签名
+验证：RFC 8032 第 7.1 节 4 组向量（TEST 1–3 与 SHA(abc)）签名与验签一致；未签名/有效签名
 （已信任/未信任）/篡改清单/换公钥/另一把密钥同 id/格式错误六种包的 validate 结果；TOFU 决策表；fake UI 预检页文字
 （未签名可装、未信任显示指纹并可在服务接线后确认、无效签名拒绝）；工具签名往返与 package --sign-key。核心库对照：
 contract_hash.py 在只有核心库与装一个无关命名空间探针库（启用/停用）时与 lib_phase34 基线逐项相等（722 项、363 小节）。
@@ -931,7 +931,7 @@ B 8.2 范围外的候选列表（只读过滤，SQL 文本不变；全部库启�
 不变约束：进度表零结构变化，无新设置键；FSRS 参数、证据权重、记录格式未改；纯规则（content_library_*、content_availability）不依赖 Toga/数据库，
 learning_practice_policy 未新增导入；页面无新增 SQL/_db/_pending；写事务仍归各 Store。
 
-验证（.test_runs/lib_wiring/r1，README 说明短目录 .test_runs/lw/）：
+验证：
 - 对照（全部库启用）：lib_phase1b 的 probe_continue.py/compare_results.py 原样复制；改前在本任务开始前的工作树（已跟踪文件
   无改动 = HEAD 18dcdee）运行，改后在最终工作树运行；五个场景的全部表哈希、到期、派出页面/题目、LearningStore.counts 与首页
   文字逐项相同（compare_results.txt：ALL IDENTICAL；两边 counts 键集合相同）。B 的各过滤在注册表缺省或全部库启用时集合为空，
@@ -945,10 +945,10 @@ learning_practice_policy 未新增导入；页面无新增 SQL/_db/_pending；�
   tutor_retrieval、example_store.references、ContentBlockedCurrent.reason；孤儿两种夹具）；tests/test_library_availability_tutor.py
   （tutor_store.submit：孤儿目标 eligible=0、可用目标 eligible=1；依赖课程目录，私有）。test_content_library_signing.py 中
   “服务未接线时不显示信任按钮”的断言改为接线后的行为（按钮出现、确认、安装后 source=valid 与列表指纹）。
-- pytest_related.txt：80 个相关文件 1240 passed（basetemp .test_runs/lib_wiring/r1/tmp）；pytest_broad.txt：另 256 个触及改动读取点
+- pytest_related.txt：80 个相关文件 1240 passed；pytest_broad.txt：另 256 个触及改动读取点
   的文件（-m "not slow"）4707 passed、4 failed：test_engineering_read_work::test_add_action_read_work[empty/short/history]（结果摘要与
   基线不符）与 test_personal_audio_build::test_full_builder_opt_in…（payload_json 列不存在）；在 HEAD 18dcdee 的导出树
-  （.test_runs/lw/h）上同样失败且摘要逐字相同（head_failures_check.txt），为既有失败，与本任务无关，单列未修。
+  上同样失败且摘要逐字相同（head_failures_check.txt），为既有失败，与本任务无关，单列未修。
 - tools/check_python.py 通过（check_python.txt）。
 未做/差异：retention_schedule.active_due 未过滤（理由见上）；signature.json 仍只计为 signed、不校验；新测试文件未加入
 tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成数据，尚未在 demo 导出树中跑过；tutor 文件依赖课程目录，私有）；
@@ -980,11 +980,11 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
 - 打包工具：--route <json>（可重复，仅扩展库；文件为一个带 route_id 的规格或其列表，前缀不符或重复即报错）写入
   teaching/study_routes.json；--sample-route（需 --rewrite-ids）附 route:<library_id>:sample，两个显式小节（改写后的 ID、对应原 ID）。
 - 不变约束：只有核心库时 34 个命名空间带类型哈希、shard_index、目录 ID/指纹/修订/依赖、722 项完整目录与 363 小节路线摘要与改前及
-  lib_phase34 基线逐项相等（.test_runs/routes/r4a/baseline.json 与 after.json）。FSRS 参数、证据权重、记录格式未改；纯规则不依赖
+  lib_phase34 基线逐项相等。FSRS 参数、证据权重、记录格式未改；纯规则不依赖
   Toga/数据库；页面无新增 SQL/_db/_pending。
 - 测试：tests/test_content_library_routes.py（21 项，合成数据）。未做：RouteSet 构建/缓存、库停用时路线消失与当前路线回退、
   added_sections 往返（WP-R4b）；新测试文件未在 demo 导出树中运行，未加入 tools/public_source_files.txt；原生未验。
-- WP-R4b（2026-11-08，路线接入收尾）：content_pack.clear_cache 一并清 study_routes 的已构建路线树缓存。rules.precheck_pack(kana_identities=) 与 route_precheck 在形状前检通过后调用 route_full_problem → study_routes.validate_route_spec（catalogue_ids=已装有效目录 ∪ 本库 provides；kana_identities 缺省时路线自身的 kana: 条目视为已知），失败者进 route_errors，route_count/route_entry_counts 只计通过完整校验的路线，目录外身份分类仍覆盖全部形状合格的路线，“manifest 列出的路线不一致”按形状合格集合比较；仍只产生 warnings（与合并时“整条忽略”一致，10 文档 6.1 的“预检拒绝”据此加注为“预检警告、安装后忽略”）。新纯函数 kana_identities_of(kana_rows)、route_problems_in_catalogue(rows, catalogue_ids=, kana_identities=)；content_library_rules 新增依赖 .study_routes（纯规则→纯规则，architecture_policy 已登记）。ContentLibraryService(kana_identities=callable) 注入假名身份，_precheck 传入；libraries() 行增 routes_ignored（条数）与routes_ignored_reasons（((route_id, 原因), …)：EffectiveCatalogue.refused_routes 加 route_problems_in_catalogue 在当前有效目录∪ 已装文件库 provides 上的失败）。content_library_ui 用 repo.kana_list() 构造注入，库列表在 routes_ignored>0 时显示“已忽略路线 N 条”与前若干条原因。tools/package_library_pack.py 为缺 library_id/version 的规格补本库 ID 与 1。测试 tests/test_content_library_routes.py 增 4 项（缓存/token、完整校验、routes_ignored、安装→停用→启用端到端，均为合成数据，端到端用空假名表），改 1 项预期（原 route_count=2 的两条路线现因 grammar:nowhere 与空小节被完整校验忽略）。核心库合同哈希与 R4a 相同（.test_runs/routes/r4b/compare.txt）。未做：原生；新测试仍未在 demo 导出树运行、未入公开清单。
+- WP-R4b（2026-11-08，路线接入收尾）：content_pack.clear_cache 一并清 study_routes 的已构建路线树缓存。rules.precheck_pack(kana_identities=) 与 route_precheck 在形状前检通过后调用 route_full_problem → study_routes.validate_route_spec（catalogue_ids=已装有效目录 ∪ 本库 provides；kana_identities 缺省时路线自身的 kana: 条目视为已知），失败者进 route_errors，route_count/route_entry_counts 只计通过完整校验的路线，目录外身份分类仍覆盖全部形状合格的路线，“manifest 列出的路线不一致”按形状合格集合比较；仍只产生 warnings（与合并时“整条忽略”一致，10 文档 6.1 的“预检拒绝”据此加注为“预检警告、安装后忽略”）。新纯函数 kana_identities_of(kana_rows)、route_problems_in_catalogue(rows, catalogue_ids=, kana_identities=)；content_library_rules 新增依赖 .study_routes（纯规则→纯规则，architecture_policy 已登记）。ContentLibraryService(kana_identities=callable) 注入假名身份，_precheck 传入；libraries() 行增 routes_ignored（条数）与routes_ignored_reasons（((route_id, 原因), …)：EffectiveCatalogue.refused_routes 加 route_problems_in_catalogue 在当前有效目录∪ 已装文件库 provides 上的失败）。content_library_ui 用 repo.kana_list() 构造注入，库列表在 routes_ignored>0 时显示“已忽略路线 N 条”与前若干条原因。tools/package_library_pack.py 为缺 library_id/version 的规格补本库 ID 与 1。测试 tests/test_content_library_routes.py 增 4 项（缓存/token、完整校验、routes_ignored、安装→停用→启用端到端，均为合成数据，端到端用空假名表），改 1 项预期（原 route_count=2 的两条路线现因 grammar:nowhere 与空小节被完整校验忽略）。核心库合同哈希与 R4a 相同。未做：原生；新测试仍未在 demo 导出树运行、未入公开清单。
 
 16.7 健壮性修复（F3，代码审查 B-01…B-06、B-11，2026-11-08） [I]
 
@@ -1019,7 +1019,7 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
   content_availability.library_of_content（有效目录的所属扩展库，否则启动时未载入的已装库）归库，没有库认领的孤儿计入 provides 含该项的已装库；
   删除 rules.orphan_ids、rules.library_progress、service.orphan_ids/orphan_count 与 UI 的 content_library_orphan_count（无调用方）。
 - 不变约束：只有核心库时 34 个命名空间带类型哈希、shard_index、目录 ID/指纹/修订/依赖、722 项完整目录与 363 小节路线摘要与 HEAD 及 R4b
-  逐项相同（.test_runs/f3/r1/compare.txt）；进度表零结构变化，FSRS、权重与记录格式未改；纯规则不依赖 Toga/数据库。
+  逐项相同；进度表零结构变化，FSRS、权重与记录格式未改；纯规则不依赖 Toga/数据库。
 - 测试（合成数据）：test_content_library_merge 增 2 项（3000 项逆序链、离线合并成环/异常/过深）；test_content_library_phase34 增 1 项（任意合并异常回退）、
   改 1 项（成环包预检拒绝，再绕过预检验证启动回退）；test_content_library_service 增 5 项（移除后本进程仍读、重启清理；重装新目录；damaged 启动重检恢复；
   set_enabled 重试；预检拒绝过深链），改 3 项的目录与孤儿计数断言为新路径；test_content_library_wiring 旁及库不持久化；test_study_path_routes 增 1 项；
