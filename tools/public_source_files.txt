@@ -731,6 +731,7 @@ tests/support/text_layout_support.py
 tests/support/tts_setup_support.py
 tests/support/tutor_draft_fixtures.py
 tests/support/tutor_service_support.py
+tests/support/ui_module_contract.py
 tests/support/unassessed_service_support.py
 tests/support/word_interval_backup_support.py
 tests/support/word_romaji_lanes_support.py
@@ -940,6 +941,11 @@ app/src/kanamemory/home/previews.py
 app/src/kanamemory/home/service.py
 app/src/kanamemory/home/ui/__init__.py
 app/src/kanamemory/home/ui/home_page.py
+app/src/kanamemory/next_step/__init__.py
+app/src/kanamemory/next_step/display.py
+app/src/kanamemory/next_step/model.py
+app/src/kanamemory/next_step/ui/__init__.py
+app/src/kanamemory/next_step/ui/end_pages.py
 app/src/kanamemory/home_runtime.py
 tests/support/library_availability_support.py
 tests/test_content_availability.py
@@ -953,6 +959,7 @@ tests/test_content_library_routes.py
 tests/test_content_library_wiring.py
 tests/test_library_availability_candidates.py
 tests/test_home_counts.py
+tests/test_next_step_pages.py
 tests/test_question_presentation_copula_cue.py
 docs/design_current/11_content_focus_dependency_and_expansion.txt
 docs/design_current/12_time_share_scheduling.txt

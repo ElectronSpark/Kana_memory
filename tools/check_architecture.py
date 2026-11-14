@@ -173,7 +173,8 @@ def check_edges(actual: Counter, policy: dict, files: set[str], *, public_subset
 
 PACKAGE = "app/src/kanamemory/"
 # Design 13 C4 page packages: always scanned, always zero, no owner exemption, never a ceiling entry.
-PAGE_PACKAGES = (PACKAGE + "arrangement/ui/", PACKAGE + "admission/ui/", PACKAGE + "home/ui/")
+PAGE_PACKAGES = (PACKAGE + "arrangement/ui/", PACKAGE + "admission/ui/", PACKAGE + "home/ui/",
+                 PACKAGE + "next_step/ui/")
 STORES = frozenset({"store", "learning_store"})
 MEMBER_PROBES = frozenset({"getattr", "hasattr"})
 IGNORED_BUILTINS = frozenset({"id", "isinstance", "type"})   # identity and type checks read nothing
