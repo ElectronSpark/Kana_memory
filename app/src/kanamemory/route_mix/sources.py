@@ -6,7 +6,8 @@ loads its own namespace objects, a chunk of items at a time, and drops them
 (no module-level cache grows). Retired templates (retired_practice_variants:
 the retirement table and the cognate rule) and generated sound kinds are left
 out; a template whose requirements name an out-of-vocabulary surface can never
-be met and is left out too. content_identity names the core teaching pack and
+be met and is left out too, and so is a template released only after some
+reviews (practice.opens_after_reviews above 0). content_identity names the core teaching pack and
 the extension libraries this process loaded; None when it cannot be told.
 """
 from __future__ import annotations
@@ -236,7 +237,10 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
         ability = questions.KIND_ABILITIES.get(kind)
         if ability is None or (abilities is not None and ability not in abilities):
             continue
-        gone, never, merged = retired.get(kind, set()), set(), {}
+        # Q8 (design 11 section 18): only templates open at introduction count; a leveled one is out like a
+        # retired one. Only templates that name a level are fingerprinted for this.
+        gone = retired.get(kind, set()) | {fingerprint(raw) for raw in templates.get(kind, ()) if _opens_later(raw)}
+        never, merged = set(), {}
         titles = (groups_of or {}).get(kind)
         choices = [group_key(ability, title) for title in titles] if titles else [kind_key(kind)]
         requirements = entry.get(kind)
@@ -263,6 +267,18 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
             for key in choices:  # M5 per settings group (a kind no group switches: per kind)
                 rows.setdefault(key, []).append((sha, needed))
     return rows
+
+
+def _opens_later(raw) -> bool:
+    """The template names a release level other than 0 (practice.opens_after_reviews; design 11 section 18,
+    Q5/Q8): it is not offered at introduction, so readiness does not count it. A malformed level counts as
+    later too (the app's gate refuses malformed practice). Stem-gloss facts are not read: a template with
+    an out-of-vocabulary surface stays "never" (Q8 is conservative)."""
+    practice = raw.get("practice") if isinstance(raw, Mapping) else None
+    if not isinstance(practice, Mapping) or "opens_after_reviews" not in practice:
+        return False
+    level = practice["opens_after_reviews"]
+    return not (type(level) is int and level == 0)
 
 
 def content_identity():

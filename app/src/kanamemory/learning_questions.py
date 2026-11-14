@@ -12,6 +12,7 @@ import hashlib
 import json
 import random
 import re
+from typing import NamedTuple
 import unicodedata
 
 from .content_pack import (load_namespace, QUESTION_DEPENDENCIES, DEPENDENCY_ID_FIELDS,
@@ -256,8 +257,8 @@ def _namespace_covers(content_id):
             and isinstance(_DEPENDENCIES.get("items", {}).get(content_id), dict))
 
 
-def _declared_requirements(content_id, kind, raw):
-    """The question_dependencies entry of one raw template, or None when absent.
+def _dependency_requirements(content_id, kind, raw):
+    """The validated question_dependencies requirements of one raw template, or None when absent.
 
     A malformed entry is an invalid pack (ValueError), never a silent pass.
     """
@@ -273,10 +274,53 @@ def _declared_requirements(content_id, kind, raw):
         return None  # A built legacy question, not a stored raw template.
     if requirements is None:
         return None
-    validate_question_dependency_requirements(requirements, target_id=content_id)
+    return validate_question_dependency_requirements(requirements, target_id=content_id)
+
+
+def _requirement_ids(requirements):
+    """The required ids of one entry: its word, grammar and kana ids and an opaque token per oov surface."""
     ids = {cid for field in DEPENDENCY_ID_FIELDS for cid in requirements.get(field, ())}
     ids.update(OOV_TOKEN_PREFIX + surface for surface in requirements.get("oov", ()))
     return ids
+
+
+def _stem_only_ids(requirements):
+    """The entry's glossed stem-only words (design 11 section 18, Q4) in the form _requirement_ids gives them."""
+    return frozenset((*requirements.get("stem_words", ()),
+                      *(OOV_TOKEN_PREFIX + surface for surface in requirements.get("stem_oov", ()))))
+
+
+class TemplateFacts(NamedTuple):
+    """What the question gate reads of one raw template: template_requires, and the members of it that the
+    template shows only in its stem and glosses there (question_dependencies stem_words / stem_oov; empty
+    without them, for sound kinds and for undeclared templates)."""
+    requires: frozenset | None
+    stem_only: frozenset
+
+
+_NO_FACTS = frozenset()
+
+
+def template_facts(item, kind, raw):
+    """TemplateFacts of one raw template: its dependency entry is found and validated once for both."""
+    content_id = item.get("id") if isinstance(item, dict) else None
+    if kind in SOUND_KINDS:
+        # Generated sound tasks need only their target: the options are other
+        # written forms or kana, and with a known set they are drawn from known
+        # words (sound_variants). They are declared (and always met) wherever
+        # the pack's namespace covers the item, else undeclared as before.
+        return TemplateFacts(frozenset() if _namespace_covers(content_id) else None, _NO_FACTS)
+    requirements = _dependency_requirements(content_id, kind, raw) if isinstance(raw, dict) else None
+    practice = raw.get("practice") if isinstance(raw, dict) else None
+    background = practice.get("background_ids") if isinstance(practice, dict) else None
+    if requirements is None and not isinstance(background, list):
+        return TemplateFacts(None, _NO_FACTS)
+    result = _requirement_ids(requirements) if requirements is not None else set()
+    if isinstance(background, list):
+        result.update(cid for cid in background if isinstance(cid, str))
+    result.discard(content_id)
+    stem = _stem_only_ids(requirements) if requirements else _NO_FACTS
+    return TemplateFacts(frozenset(result), stem)
 
 
 def template_requires(item, kind, raw):
@@ -289,23 +333,7 @@ def template_requires(item, kind, raw):
     template is a fallback question (eligible only when no declared template
     is), not a gated one. Selection only: snapshots and history are unchanged.
     """
-    content_id = item.get("id") if isinstance(item, dict) else None
-    if kind in SOUND_KINDS:
-        # Generated sound tasks need only their target: the options are other
-        # written forms or kana, and with a known set they are drawn from known
-        # words (sound_variants). They are declared (and always met) wherever
-        # the pack's namespace covers the item, else undeclared as before.
-        return frozenset() if _namespace_covers(content_id) else None
-    declared = _declared_requirements(content_id, kind, raw) if isinstance(raw, dict) else None
-    practice = raw.get("practice") if isinstance(raw, dict) else None
-    background = practice.get("background_ids") if isinstance(practice, dict) else None
-    if declared is None and not isinstance(background, list):
-        return None
-    result = set(declared or ())
-    if isinstance(background, list):
-        result.update(cid for cid in background if isinstance(cid, str))
-    result.discard(content_id)
-    return frozenset(result)
+    return template_facts(item, kind, raw).requires
 
 
 def question_template(item, question, *, apply_review=True):

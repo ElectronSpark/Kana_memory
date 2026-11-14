@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 
 # 2: the M5 floor per question kind as well; 3: per settings group instead (kinds outside every group keep
-# the per-kind floor)
-ALGORITHM_VERSION = 3
+# the per-kind floor); 4: readiness counts only templates open at introduction (design 11 section 18, Q8)
+ALGORITHM_VERSION = 4
 
 
 def kind_groups(mapping) -> tuple:

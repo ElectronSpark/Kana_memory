@@ -487,6 +487,7 @@ tests/test_adaptive_practice_domain.py
 tests/test_append_practice_queue.py
 tests/test_compile_reviewed_question_batch.py
 tests/test_practice_authoring_fields.py
+tests/test_practice_release_and_stem_gloss.py
 tests/test_lazy_question_sequence.py
 tests/test_learning_pitch_alignment_viewport.py
 tests/test_learning_pitch_viewport.py

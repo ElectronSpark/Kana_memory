@@ -14,6 +14,7 @@ class CourseQueries(Protocol):
     def pending_abilities(self, content_id: str) -> set[str]: ...
     def instruction_ready_ids(self) -> Iterable[str]: ...
     # Optional: introduced_kana_ids(), read via getattr (design 11 section 5, D5).
+    # Optional: course_ids(), the enrolled content ids, read via getattr (design 11 section 18, Q6).
 
 
 def known_ids(queries) -> frozenset[str]:
@@ -25,6 +26,26 @@ def known_ids(queries) -> frozenset[str]:
     """
     kana = getattr(queries, "introduced_kana_ids", None)
     return frozenset({*queries.instruction_ready_ids(), *(kana() if callable(kana) else ())})
+
+
+def enrolled_ids_reader(queries):
+    """The stem-gloss tier's reader of enrolled ids (learning_practice_policy._enrolled_reader), or None.
+
+    queries.course_ids() is read at most once, on the first call, so one planned
+    lesson costs at most one read for all its abilities, and none unless a
+    template is otherwise eligible for the tier. A reader without that query
+    gives None: the tier stays off (the practice deck's one-ability reader).
+    """
+    course_ids = getattr(queries, "course_ids", None)
+    if not callable(course_ids):
+        return None
+    cell = []
+
+    def read():
+        if not cell:
+            cell.append(tuple(course_ids()))
+        return cell[0]
+    return read
 
 
 class CourseProgressReader(Protocol):
@@ -102,6 +123,7 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         gate = reader(item["id"], enabled) if callable(reader) else None
     closed_kinds = gate["closed_kinds"] if gate else frozenset()
     known = None
+    enrolled = enrolled_ids_reader(queries)
     for ability in admitted:
         if ability in pending:
             continue
@@ -123,6 +145,12 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         # Design 11 section 5, D8: only this formal course path lets a simple rule appear
         # before its lesson while the learner is at the very start (the page shows a hint).
         policy_state["early_allowance"] = True
+        # Design 11 section 18: the unit's review_count (in the unit row) releases leveled templates (Q5),
+        # and this path may serve a template with one or two glossed stem words the learner has not
+        # enrolled (Q6; the course question page shows the template's reviewed glosses, Q7).
+        if enrolled is not None:
+            policy_state["gloss_allowance"] = True
+            policy_state["enrolled_ids"] = enrolled
         history = learning_store.practice_history(item["id"], ability)
         selected = select_practice_plan(item, ability, kinds, policy_state, history,
                                         templates=templates, shared=True)

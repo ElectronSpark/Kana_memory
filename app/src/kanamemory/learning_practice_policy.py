@@ -95,6 +95,68 @@ def not_relaxed(descriptor, template=None):
     return not descriptor.get("relaxed")
 
 
+# Design 11 section 18, Q6: a template is servable with glosses for at most this many unmet stem-only words.
+STEM_GLOSS_LIMIT = 2
+
+
+def review_count(state):
+    """The scheduled reviews of the unit being planned (learning_unit.review_count; design 11 section 18, Q5).
+
+    A caller that gives no count, or an unusable one (a bool, None, a negative number), plans as for a unit
+    without reviews: such paths (guides, the intro quiz, checks, diagnostics, the tutor) see level 0 only.
+    """
+    count = state.get("review_count")
+    return count if type(count) is int and count >= 0 else 0
+
+
+def _opens_later(meta, reviews):
+    """Q5: the template's validated practice.opens_after_reviews is above the unit's reviews so far."""
+    return meta is not None and meta.get("opens_after_reviews", 0) > reviews
+
+
+def _enrolled_reader(state):
+    """The caller's enrolled ids for the stem-gloss tier (Q6), read at most once; None: the tier is off.
+
+    Only a caller that sets state["gloss_allowance"] to True and gives state["enrolled_ids"], a callable
+    returning the learner's enrolled content ids, has the tier. The ids are read the first time a template
+    is otherwise eligible; content without stem facts never reads them. A reader returning anything but a
+    collection of ids counts every word as enrolled (nothing is glossed).
+    """
+    reader = state.get("enrolled_ids") if state.get("gloss_allowance") is True else None
+    if not callable(reader):
+        return None
+    cell = []
+
+    def enrolled():
+        if not cell:
+            ids = reader()
+            cell.append(frozenset(x for x in ids if isinstance(x, str))
+                        if isinstance(ids, (list, tuple, set, frozenset)) else None)
+        return cell[0]
+    return enrolled
+
+
+def _stem_gloss(unmet, stem_only, raw, enrolled):
+    """Q6: what a template may be served with glossed (sorted word ids and bare oov surfaces), else ().
+
+    Its unmet requirements number 1..STEM_GLOSS_LIMIT and are all glossed stem-only words of its entry
+    (TemplateFacts.stem_only), none of them a word the learner has enrolled, and it is not a multi-gap
+    question (a filled gap and its stem cannot be told apart). A rule, a kana or an unmarked word among
+    them leaves the template to the relaxed pass as before.
+    """
+    from .learning_questions import OOV_TOKEN_PREFIX
+    if (not 1 <= len(unmet) <= STEM_GLOSS_LIMIT or not unmet <= stem_only
+            or raw.get("input_mode") == "multi_cloze" or "multi_cloze" in raw):
+        return ()
+    words = [cid for cid in unmet if not cid.startswith(OOV_TOKEN_PREFIX)]
+    if words:
+        ids = enrolled()
+        if ids is None or not ids.isdisjoint(words):
+            return ()
+    return tuple(sorted(cid[len(OOV_TOKEN_PREFIX):] if cid.startswith(OOV_TOKEN_PREFIX) else cid
+                        for cid in unmet))
+
+
 def _candidate_questions(item, ability, kinds, state, admit=None, templates=None, shared=False):
     """Enabled, available, dependency-safe descriptors for one item x ability.
 
@@ -127,6 +189,21 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     and never "relaxed"; when nothing is met it comes instead of the relaxed
     pass. Callers that do not set the flag (guides, the intro quiz, checks,
     the tutor) see the strict gate as before.
+
+    Release by reviews (design 11 section 18, Q5): a template whose practice
+    opens_after_reviews is above review_count(state) is no candidate at all:
+    it yields nothing in any pass, adds nothing to the content gap and never
+    enters the relaxed pass; every rule above is applied to the rest.
+
+    Stem-gloss tier (design 11 section 18, Q6): only when the caller sets
+    state["gloss_allowance"] to True and gives state["enrolled_ids"] (the
+    formal course path; see _enrolled_reader), a declared template the opening
+    allowance did not take, whose one or two unmet requirements are glossed
+    stem-only words the learner has not enrolled (_stem_gloss), is servable
+    with "stem_gloss": [word ids, bare oov surfaces] and never "relaxed". It
+    is placed like the opening allowance: after everything else that pass
+    yields (after the early tasks too), deduplicated by stimulus against all
+    of them, and instead of the relaxed pass when nothing is met.
 
     Generated sound kinds (WP-K2) take their variants from sound_variants: with
     three or more known candidates their options are known words only (an
@@ -161,10 +238,11 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     known = state.get("known_background_ids", ())
     known = {x for x in known if isinstance(x, str)} if isinstance(known, (list, tuple, set, frozenset)) else set()
     known.add(item["id"])
-    gated, early_gated, fallback, relaxed, missing = [], [], [], [], set()
+    gated, early_gated, gloss_gated, fallback, relaxed, missing = [], [], [], [], [], set()
     met_any = False
     seen = {True: set(), False: set()}
     early_allowance = state.get("early_allowance") is True
+    reviews, enrolled = review_count(state), _enrolled_reader(state)
     for kind in enabled:
         variants = templates.get(kind, []) if isinstance(templates, dict) else None
         sound = dict(questions.sound_variants(item, kind, known)) if kind in questions.SOUND_KINDS else None
@@ -187,7 +265,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
                 if not isinstance(raw, dict):
                     continue
             # The dependency entry is keyed by the raw template as stored.
-            requires = questions.template_requires(item, kind, raw)
+            requires, stem_only = questions.template_facts(item, kind, raw)
             raw = dict(raw, kind=kind)
             from .answer_input import available
             if not available(dict(raw, family=item.get("family"), domain=item.get("domain")),
@@ -196,6 +274,8 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
             meta = practice_metadata(raw)
             if "practice" in raw and meta is None:
                 continue  # Malformed metadata is not a legacy escape hatch.
+            if _opens_later(meta, reviews):
+                continue  # Q5: not yet released for this unit, so not a gap either.
             unmet = requires - known if requires is not None else frozenset()
             missing |= unmet
             if not isinstance(raw.get("prompt"), str) or not isinstance(raw.get("answer"), str):
@@ -205,23 +285,27 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
             entry = {**descriptor, "kind": kind, "variant": variant,
                      "input_mode": raw.get("input_mode", "choice"),
                      "reviewed_practice": meta is not None, "fallback": not declared}
-            early = ()
+            early = gloss = ()
             if unmet and early_allowance:
                 from .early_rules import early_rules
                 early = early_rules(unmet, known, target=item, kind=kind, question=raw)
+            if unmet and not early and enrolled is not None and stem_only:
+                gloss = _stem_gloss(unmet, stem_only, raw, enrolled)
             if early:
                 entry["early_rules"] = list(early)
+            elif gloss:
+                entry["stem_gloss"] = list(gloss)
             elif unmet:
                 entry["relaxed"] = len(unmet)
             else:
                 met_any = True
             if admit is not None and not admit(entry, raw):
                 continue
-            if unmet and not early:
+            if unmet and not early and not gloss:
                 relaxed.append(entry)
                 continue
-            if early:
-                early_gated.append(entry)
+            if early or gloss:
+                (early_gated if early else gloss_gated).append(entry)
                 continue
             if descriptor["fingerprint"] in seen[declared]:
                 continue
@@ -230,9 +314,10 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     # Opening allowance: purely additive. The passes below are computed from the fully met
     # templates exactly as without it; a task that shows a not yet taught rule (with its
     # hint) is appended after them and never hides, replaces or precedes a task that needs
-    # no hint (nor turns a requirement-free fallback into an unneeded top-up).
+    # no hint (nor turns a requirement-free fallback into an unneeded top-up). The stem-gloss
+    # tier (Q6) is additive in the same way and comes after the early tasks.
     early_extra, early_seen = [], seen[True] | seen[False]
-    for entry in early_gated:
+    for entry in (*early_gated, *gloss_gated):
         if entry["fingerprint"] not in early_seen:
             early_seen = early_seen | {entry["fingerprint"]}
             early_extra.append(entry)
@@ -259,7 +344,8 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
         from .content_gaps import record_gap
         record_gap(item["id"], ability, len(missing), enabled)
     if early_extra:
-        # No fully met template: a simple rule with its hint is nearer than the relaxed pass.
+        # No fully met template: a simple rule with its hint, or a stem word with its gloss, is nearer
+        # than the relaxed pass.
         yield from early_extra
         return
     if not relaxed:
@@ -392,8 +478,9 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
                 -int(targeted and candidate["family"] in errors),
                 family_count, min(4, contexts[candidate["context"]]),
                 min(4, fingerprints[candidate["fingerprint"]]),
-                # All else equal, a task without a not yet taught rule comes first (design 11, D8).
-                bool(candidate.get("early_rules")),
+                # All else equal, a task without a not yet taught rule (design 11, D8) or a glossed
+                # stem word (section 18, Q6) comes first.
+                bool(candidate.get("early_rules") or candidate.get("stem_gloss")),
                 stage_gap, rotating_rank[index])
 
     chosen = min(enumerate(candidates), key=lambda pair: key(pair[1], pair[0]))[1]
@@ -515,7 +602,8 @@ def guided_practice_sequence(item, kinds, *, known_background_ids=(), system_jap
                                                 "system_japanese_input": system_japanese is True}):
             # Guided exposure never shows unmet material (relaxed is for
             # formal selection only; design 11 section 5, D4) and keeps its
-            # order without the formal top-up of a thin gated pass.
+            # order without the formal top-up of a thin gated pass. Its state
+            # sets neither allowance, so no early or stem-gloss task comes here.
             if candidate["reviewed_practice"] and not candidate.get("relaxed") and not candidate.get("top_up"):
                 choices.append(candidate)
     choices.sort(key=lambda candidate: (candidate["stage"], candidate["variant"]))
