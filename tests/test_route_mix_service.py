@@ -19,8 +19,8 @@ from kanamemory.route_mix import service as service_module
 from kanamemory.route_mix import sources
 from kanamemory.route_mix.placement import MixCancelled
 from kanamemory.route_mix.plan import MixPlan, plan_mix, snapshot
-from kanamemory.route_mix.params import kind_groups
-from kanamemory.route_mix.readiness import Readiness, group_key, kind_key
+from kanamemory.route_mix.params import ALGORITHM_VERSION, MixParams
+from kanamemory.route_mix.readiness import Readiness, choice_key
 from kanamemory.route_mix.service import REFUSED, MainRouteMix, main_route_mix, prepare_in_background
 from kanamemory.route_mix.store import DIRECTORY, FILE_NAME, MAX_BYTES, TEMPORARY_NAME, PlanFile
 from kanamemory.study_path import StudyPathService
@@ -254,10 +254,59 @@ def test_one_mix_per_data_directory_is_handed_on(tmp_path):
     assert isinstance(first, MainRouteMix)
     assert main_route_mix(SimpleNamespace(route_mix=first), tmp_path) is first
     assert main_route_mix(SimpleNamespace(route_mix=first), tmp_path / "other") is not first
-    # the learner's settings groups are part of the mix's parameters (and so of its plan key)
-    grouped = main_route_mix(SimpleNamespace(route_mix=first), tmp_path, {"G": {"vocab_recall"}})
-    assert grouped is not first and grouped.params.groups == (("G", ("vocab_recall",)),)
-    assert main_route_mix(SimpleNamespace(route_mix=grouped), tmp_path, {"G": ["vocab_recall"]}) is grouped
+    # the learner's switched-on kinds are part of a new mix's parameters (and so of its plan key); they
+    # are read (a callable) only when a new mix is made
+    reads = []
+
+    def switches():
+        reads.append(1)
+        return ["vocab_recall", "vocab_meaning"]
+    own = main_route_mix(None, tmp_path, switches)
+    assert own.params.kinds == ("vocab_meaning", "vocab_recall") and reads == [1]
+    assert main_route_mix(None, tmp_path, {"vocab_recall"}).params.kinds == ("vocab_recall",)
+    # switches changed while the app runs: the mix (and the plan in use) stays until the next start-up
+    assert main_route_mix(SimpleNamespace(route_mix=own), tmp_path, switches) is own and reads == [1]
+    assert main_route_mix(SimpleNamespace(route_mix=own), tmp_path, ["vocab_usage"]) is own
+
+
+def test_the_plan_is_keyed_by_the_switched_on_kinds_and_the_algorithm(tmp_path):
+    tree, computed = small_tree(), []
+
+    def mix(kinds):
+        def readiness(ids, items):
+            computed.append(kinds)
+            return Readiness(TABLE)
+        return MainRouteMix(tmp_path, params=MixParams(kinds=kinds), identity=lambda: {"core": ["x"]},
+                            readiness=readiness)
+    default = ("vocab_meaning", "vocab_recall")
+    assert mix(default).job(tree, [], None)() is True and computed == [default]
+    stored = MixPlan.from_json(json.loads(PlanFile(tmp_path).path.read_text("utf-8")))
+    assert stored.key["params"]["kinds"] == list(default) and stored.key["algorithm"] == ALGORITHM_VERSION
+    # the same switches in a new process: the stored plan (read from the file) is used, nothing computed
+    same = mix(default)
+    assert same.mixed(tree) is not None and same.job(tree, [], None)() is False and len(computed) == 1
+    # other switches: the stored plan of the old ones stays in use (never the derivation order in between)
+    # while the warm-up computes the plan of the new ones and replaces it (one file)
+    other = mix(("vocab_meaning",))
+    kept = other.mixed(tree)
+    assert kept is not None and section_ids(kept) == section_ids(same.mixed(tree)) and other.generation == 0
+    assert same.current_for(tree) and not other.current_for(tree)  # in use, but not this learner's plan yet
+    assert other.job(tree, [], None)() is True and computed[-1] == ("vocab_meaning",) and other.generation == 1
+    assert other.current_for(tree)
+    assert other.mixed(tree) is not None and sorted(p.name for p in PlanFile(tmp_path).path.parent.iterdir()) == [
+        FILE_NAME]
+    stored = MixPlan.from_json(json.loads(PlanFile(tmp_path).path.read_text("utf-8")))
+    assert stored.key["params"]["kinds"] == ["vocab_meaning"]  # the file now holds the plan of the new switches
+    back = mix(default)  # and the old switches would go on with it until their own plan is computed again
+    assert back.mixed(tree) is not None and back.job(tree, [], None)() is True and computed[-1] == default
+    # only the switches may differ: another algorithm version, tree or content gives the derivation order
+    newer = MainRouteMix(tmp_path, params=MixParams(kinds=default, algorithm=ALGORITHM_VERSION + 1),
+                         identity=lambda: {"core": ["x"]}, readiness=lambda ids, items: Readiness(TABLE))
+    assert newer.mixed(tree) is None
+    changed = MainRouteMix(tmp_path, params=MixParams(kinds=default), identity=lambda: {"core": ["y"]},
+                           readiness=lambda ids, items: Readiness(TABLE))
+    assert changed.mixed(tree) is None
+    assert newer.prepare(snapshot(tree), {}, {}) is True
 
 
 def test_prepare_in_background_runs_the_job_on_a_worker_thread(tmp_path):
@@ -294,11 +343,15 @@ def test_prepare_in_background_runs_the_job_on_a_worker_thread(tmp_path):
 # --- StudyPathService with a mix -----------------------------------------------------------------
 
 class FakeMix:
-    """mixed() reverses the first unit's sections; records the trees it was given."""
+    """mixed() reverses the first unit's sections; records the trees it was given. ``current``: whether the
+    plan it applies is the one of the learner's present switches (MainRouteMix.current_for)."""
     generation = 0
 
-    def __init__(self, applies=True):
-        self.seen, self.applies = [], applies
+    def __init__(self, applies=True, current=True):
+        self.seen, self.applies, self.current = [], applies, current
+
+    def current_for(self, tree):
+        return self.applies and self.current
 
     def mixed(self, tree, library_of=None):
         self.seen.append(tree)
@@ -326,7 +379,12 @@ def test_study_path_service_uses_the_mixed_tree_and_hands_over_the_derivation_tr
     assert service.entries.keys() == plain.entries.keys()
     assert [s["id"] for s in service.sections] == [s["id"] for s in service.path["stages"][0]["units"][0]["sections"]]
     assert service.overview()["stages"][0]["units"][0]["sections"][0]["id"] == service.sections[0]["id"]
-    assert service.route_mix_job() is None  # a plan is applied: nothing to compute
+    assert service.route_mix_job() is None  # the current plan is applied: nothing to compute
+    # a plan of other switches is applied as well, but the job is still made (for the derivation tree)
+    stale = StudyPathService(repo, store, LearningStore(store), catalogue=catalogue, route_mix=FakeMix(current=False))
+    assert stale.path is not stale.derivation_path
+    marker, tree, _, _ = stale.route_mix_job()()
+    assert marker == "job" and tree is stale.derivation_path
     again = StudyPathService(repo, store, LearningStore(store), catalogue=catalogue, previous=service, route_mix=fake)
     assert again.derivation_path is service.derivation_path  # never a mixed tree as derivation input
     assert fake.seen[-1] is service.derivation_path and again.path is not service.path
@@ -344,8 +402,8 @@ def test_the_app_keys_its_service_by_the_mix_generation(setup_path):
     first = StudyPathRuntimeMixin.study_path_service(app)
     mix = first.route_mix
     assert isinstance(mix, MainRouteMix) and mix.data_dir == store.data_dir
-    from kanamemory.learning_ui import KIND_GROUPS
-    assert mix.params.groups == kind_groups(KIND_GROUPS)  # the app's kind switches, as plain data
+    # the learner's switched-on kinds, as plain data: no saved setting, the default kinds
+    assert mix.params.kinds == tuple(sorted(questions.DEFAULT_KINDS))
     assert first.path is first.derivation_path  # no plan file yet
     assert StudyPathRuntimeMixin.study_path_service(app) is first
     mix.generation += 1  # what a saved plan does
@@ -353,6 +411,24 @@ def test_the_app_keys_its_service_by_the_mix_generation(setup_path):
     assert second is not first and second.route_mix is mix
     assert second.derivation_path is first.derivation_path
     assert not (store.data_dir / DIRECTORY).exists()  # reading never writes the plan file
+
+
+def test_the_app_passes_the_learners_switched_on_kinds_and_keeps_them_for_the_run(setup_path):
+    repo, store, _, _, _, _ = setup_path
+    only = [questions.CONTEXT_CHOICE_KIND]
+    store.set_setting("learning_preferences_v1", {"enabled": only,
+                                                  questions.SOUND_PREFERENCE_VERSION: questions.PREFERENCE_VERSION})
+    app = SimpleNamespace(repo=repo, store=store, learning_store=LearningStore(store))
+    first = StudyPathRuntimeMixin.study_path_service(app)
+    assert first.route_mix.params.kinds == tuple(only)
+    # a switch flipped in this run: the same mix (and its plan key) until the next start-up
+    store.set_setting("learning_preferences_v1", {"enabled": ["vocab_meaning"],
+                                                  questions.SOUND_PREFERENCE_VERSION: questions.PREFERENCE_VERSION})
+    first.route_mix.generation += 1  # a new service is built
+    assert StudyPathRuntimeMixin.study_path_service(app).route_mix is first.route_mix
+    # the next start-up (no service to hand over): the new switches
+    fresh = SimpleNamespace(repo=repo, store=store, learning_store=LearningStore(store))
+    assert StudyPathRuntimeMixin.study_path_service(fresh).route_mix.params.kinds == ("vocab_meaning",)
 
 
 # --- the start-up step, end to end (the real MainRouteMix, a synthetic readiness source) ---------------
@@ -386,6 +462,7 @@ def mix_app(setup_path, monkeypatch):
 
     def readiness(ids, items, **kwargs):
         app.read.append(threading.current_thread())
+        app.kinds = kwargs.get("kinds")
         if getattr(app, "close_while_reading", False):
             app._backup_closing = True
         return Readiness({W1: {"use": [("1" * 64, [BASE])]}, W2: {"use": [("2" * 64, [MORE])]}})
@@ -399,6 +476,7 @@ def test_the_start_up_step_saves_a_plan_and_the_app_then_serves_the_mixed_route(
     assert [s["id"] for s in first.sections] == ["section:g1", "section:g2", "section:w1", "section:w2"]
     assert asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(mix_app)) is True
     assert mix_app.read and mix_app.read[0] is not threading.main_thread()  # computed on a worker thread
+    assert mix_app.kinds == tuple(sorted(questions.DEFAULT_KINDS))          # the learner's switches, as data
     assert mix_app.refreshed == ["home"]                                    # home refreshed once
     assert (mix_app.store.data_dir / DIRECTORY / FILE_NAME).is_file()
     second = mix_app.study_path_service()
@@ -407,6 +485,31 @@ def test_the_start_up_step_saves_a_plan_and_the_app_then_serves_the_mixed_route(
     # the next start: the plan is current, nothing is computed and home is not refreshed again
     assert asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(mix_app)) is False
     assert mix_app.refreshed == ["home"] and len(mix_app.read) == 1
+
+
+def test_after_a_switch_change_the_next_start_keeps_the_route_mixed_and_computes_the_new_plan(mix_app):
+    assert asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(mix_app)) is True and len(mix_app.read) == 1
+    mix_app.store.set_setting("learning_preferences_v1", {"enabled": ["vocab_meaning"],
+                                                         questions.SOUND_PREFERENCE_VERSION: questions.PREFERENCE_VERSION})
+    # the next start-up: a new app object over the same data directory
+    fresh = SimpleNamespace(repo=mix_app.repo, store=mix_app.store, learning_store=LearningStore(mix_app.store),
+                            _background_assembly=True, page="home", refreshed=[])
+    fresh.refresh_home_actions = lambda: fresh.refreshed.append(fresh.page)
+    fresh.study_path_service = lambda: StudyPathRuntimeMixin.study_path_service(fresh)
+    service = fresh.study_path_service()
+    mix = service.route_mix
+    assert mix.params.kinds == ("vocab_meaning",)
+    # the stored plan of the old switches is in use at once: never the derivation order in between ...
+    assert [s["id"] for s in service.sections] == MIXED and not mix.current_for(service.derivation_path)
+    # ... and the warm-up still computes the plan of the new switches and replaces the stored one
+    assert asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(fresh)) is True
+    assert len(mix_app.read) == 2 and mix_app.kinds == ("vocab_meaning",)
+    stored = json.loads((mix_app.store.data_dir / DIRECTORY / FILE_NAME).read_text("utf-8"))
+    assert stored["key"]["params"]["kinds"] == ["vocab_meaning"]
+    after = fresh.study_path_service()
+    assert after is not service and mix.current_for(after.derivation_path)
+    assert [s["id"] for s in after.sections] == MIXED
+    assert asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(fresh)) is False and len(mix_app.read) == 2
 
 
 def test_the_start_up_step_refreshes_only_home_and_never_while_closing(mix_app):
@@ -501,25 +604,27 @@ def test_readiness_follows_the_selection_rules(monkeypatch):
     meaning = tuple(sorted([(sha(a), ("word:x",)),                  # declared
                             (sha(c), ("grammar:y", "word:z")),      # declared + background, not itself
                             (sha(d), ("word:q",))]))                # background only
-    # each template under its ability and under its kind (M5 per kind); b: oov, never; e: nothing
-    # declared; the sound kind is left out
-    assert readiness.abilities("word:main") == {"understanding": meaning, kind_key("vocab_meaning"): meaning,
-                                                "use": ((sha(r), ()),), kind_key("vocab_recall"): ((sha(r), ()),)}
-    assert set(readiness.abilities("word:narrow")) == {"understanding", kind_key("vocab_meaning")}  # its abilities
+    # each template under its ability; b: oov, never; e: nothing declared; the sound kind is left out;
+    # no switched-on kinds given: no choice keys
+    assert readiness.abilities("word:main") == {"understanding": meaning, "use": ((sha(r), ()),)}
+    assert set(readiness.abilities("word:narrow")) == {"understanding"}  # its abilities
     retired_rows = ((sha(a), ()),)  # the retirement table
-    assert readiness.abilities("word:retired") == {"understanding": retired_rows,
-                                                   kind_key("vocab_meaning"): retired_rows}
+    assert readiness.abilities("word:retired") == {"understanding": retired_rows}
     # the cognate rule (class S): one bare meaning task and the base-form recall task stay
-    assert readiness.abilities("word:cognate") == {
-        "understanding": ((sha(bare), ()),), kind_key("vocab_meaning"): ((sha(bare), ()),),
-        "use": ((sha(base_form), ()),), kind_key("vocab_recall"): ((sha(base_form), ()),)}
-    # with the learner's settings groups: a key per (ability, group); a kind no group has keeps its own
-    groups = kind_groups({"G": {"vocab_meaning"}, "H": {"vocab_meaning", "grammar_cloze"}})
-    grouped = sources.read_readiness(["word:main"], items, groups=groups,
-                                     load=lambda name, default: namespaces.get(name, default))
-    assert grouped.abilities("word:main") == {"understanding": meaning, group_key("understanding", "G"): meaning,
-                                              group_key("understanding", "H"): meaning,
-                                              "use": ((sha(r), ()),), kind_key("vocab_recall"): ((sha(r), ()),)}
+    assert readiness.abilities("word:cognate") == {"understanding": ((sha(bare), ()),),
+                                                   "use": ((sha(base_form), ()),)}
+
+    def switched(kinds):
+        return sources.read_readiness(["word:main"], items, kinds=kinds,
+                                      load=lambda name, default: namespaces.get(name, default))
+    # with the learner's switched-on kinds: the templates of those kinds once more, per ability; a kind
+    # switched on that this item has no template of (grammar_cloze) adds nothing
+    on = switched(("grammar_cloze", "vocab_meaning"))
+    assert on.abilities("word:main") == {"understanding": meaning, choice_key("understanding"): meaning,
+                                         "use": ((sha(r), ()),)}
+    both = switched(("vocab_audio_word", "vocab_meaning", "vocab_recall"))  # a sound kind is never counted
+    assert both.abilities("word:main") == {"understanding": meaning, choice_key("understanding"): meaning,
+                                           "use": ((sha(r), ()),), choice_key("use"): ((sha(r), ()),)}
 
 
 class _Connection:

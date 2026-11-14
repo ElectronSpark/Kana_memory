@@ -65,6 +65,18 @@ def plan_key(params: MixParams, digest: str, content) -> dict:
     return {"algorithm": params.algorithm, "params": params.key(), "tree": digest, "content": content}
 
 
+def same_apart_from_switches(stored: Mapping, key: Mapping) -> bool:
+    """Whether two plan keys name the same algorithm, parameters, derivation tree and content, the
+    learner's switched-on kinds (params "kinds") aside."""
+    def rest(value):
+        value = dict(value)
+        params = value.get("params")
+        if isinstance(params, Mapping):
+            value["params"] = {name: number for name, number in params.items() if name != "kinds"}
+        return value
+    return rest(stored) == rest(key)
+
+
 @dataclass(frozen=True)
 class MixPlan:
     """stages: ((stage id, ((section id, unit id), ...)), ...) in route order; summary: report only."""

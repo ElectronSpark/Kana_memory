@@ -318,13 +318,17 @@ class StudyPathRuntimeMixin:
         # as does a route enable/disable or personal route change.
         from .study_routes import ROUTES_SETTING
         from .route_mix.service import main_route_mix
-        from .learning_ui import KIND_GROUPS
+        from .learning_questions import stored_enabled_kinds
+        from .learning_ui import LEARNING_PREFS
         view = self.learning_store.availability()
         previous = getattr(self, "_study_path_service_value", None)
         # Design 11 section 16 (M10): the main route mix of this data directory, kept by the service it
         # replaces; a newly saved plan raises its generation, so the next call builds the mixed tree. Its M5
-        # floor follows the learner's kind switches (KIND_GROUPS, plain data for route_mix).
-        mix = main_route_mix(previous, getattr(store, "data_dir", None), KIND_GROUPS)
+        # floor follows the kinds the learner has switched on, read here (plain data for route_mix) only
+        # when a new mix is made: a switch changed later applies from the plan the next start-up computes
+        # (the stored plan stays in use until then).
+        mix = main_route_mix(previous, getattr(store, "data_dir", None),
+                             lambda: stored_enabled_kinds(store.get_setting(LEARNING_PREFS, {})))
         key = (id(self.store), ids, view.unavailable_ids, registry_service_key(getattr(view, "registry", None)),
                routes_service_key(self.store.get_setting(ROUTES_SETTING, None)), getattr(mix, "generation", 0))
         if getattr(self, "_study_path_service_key", None) != key:

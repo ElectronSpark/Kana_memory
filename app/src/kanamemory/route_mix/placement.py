@@ -7,12 +7,11 @@ nor a reading-rule section). M4 word sections and reading-rule sections
 sections are tried both fixed and movable, and the better score wins (fixed on
 a tie). M5 a movable section stands only where each of its entries, in section
 order, has its hard prerequisites before it and, per ability, at least
-min(derivation count, floor) gated questions, and per ability and settings group
-(the learner's kind switches; a kind no group switches: per kind) that had any,
-at least min(derivation count, choice floor = 1): so a learner who keeps only one
-group switched on still meets its questions only with what they use learned
-(readiness keys per group); every placement is checked on what is actually
-before it. M6 windows, the lower bound L0 and the balanced placements L0 ...
+min(derivation count, floor) gated questions, and per ability, among the kinds
+the learner has switched on (readiness choice keys), at least min(derivation
+count, choice floor = 1): so where the learner had such a question, they still
+meet one that uses only what is learned; every placement is checked on what is
+actually before it. M6 windows, the lower bound L0 and the balanced placements L0 ...
 L0 + width, scored by max(longest word run / word target, longest non-word run /
 non-word target), then the shorter word run, then the smaller L. The balanced
 filling places words; a movable section without words (a reading rule, when
@@ -39,21 +38,21 @@ a place only when they outnumber those places). The score is taken of the final
 order. The floors hold because every deferred section stands before each
 section that needs it (its deadline) and because the stage's final order is
 checked again (M9): each item of a movable section has its M5 floors (per
-ability and per settings group), each skeleton and each deferred item its full
-derivation count per ability and per group, and every hard prerequisite stands
+ability and per choice key), each skeleton and each deferred item its full
+derivation count per ability and per choice key, and every hard prerequisite stands
 before. When that check fails, the stage takes none of its deferred sections:
 they stay in their source stages and the route is placed again without them.
 They keep no unit of their own (M7). Deterministic: ties follow the derivation
 order.
 
-Full counts are per template, so per group (and per kind) too: a skeleton or
+Full counts are per template, so per choice key too: a skeleton or
 deferred item keeps every template it had in the derivation. What stands before
 it only grows (the skeleton keeps its order, movable sections only move earlier,
 deferred sections are inserted, a deferred item stands in a later stage), except
 for sections deferred past it; and each such deferral was allowed only if the
 item, a passed entry, kept its full count with that section gone, i.e. with a
 subset of what stood before it, which is the same templates. The checks also
-hold per group key (counts0 has them), so they are checked, not assumed.
+hold per choice key (counts0 has them), so they are checked, not assumed.
 """
 from __future__ import annotations
 
@@ -499,8 +498,8 @@ def _deferred_keep(order, chain_ids, readiness, floors, known_before) -> bool:
 
 def _stage_holds(order, movable, *, readiness, counts0, floors, prereqs, positions0, known_before) -> bool:
     """M9 on the final order of a stage, with what stands before the stage (``known_before``): each item
-    of a movable section (``movable``: their ids) has its M5 floors per ability and per choice (settings
-    group, or kind) (``floors``), each other item, skeleton or deferred, its derivation count per key (``counts0``),
+    of a movable section (``movable``: their ids) has its M5 floors per ability and per choice key
+    (``floors``), each other item, skeleton or deferred, its derivation count per key (``counts0``),
     and each hard prerequisite that stood before an entry in the derivation (``positions0``) stands
     before it."""
     seen = set()

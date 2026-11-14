@@ -2,7 +2,9 @@
 
 mixed(tree, library_of) is the UI-thread read: the mixed tree when the stored
 plan was computed for exactly this derivation tree and content and applies to
-it, else None (the derivation order, as before). prepare(...) is the
+it, else None (the derivation order, as before); a plan computed for other
+kind switches of the learner is used until the worker has saved the plan of
+the current ones. prepare(...) is the
 worker-thread computation: it reads the readiness of the route's items,
 computes a plan, checks that the plan applies to its own tree, saves it and
 then raises ``generation``; the app keys its StudyPathService by it. A worker
@@ -19,9 +21,9 @@ from pathlib import Path
 import threading
 import time
 
-from .params import DEFAULT_PARAMS, MixParams, kind_groups
+from .params import DEFAULT_PARAMS, MixParams, switched_kinds
 from .placement import MixCancelled
-from .plan import MixPlan, apply_plan, plan_key, plan_mix, snapshot, tree_digest
+from .plan import MixPlan, apply_plan, plan_key, plan_mix, same_apart_from_switches, snapshot, tree_digest
 from .store import PlanFile
 
 _UNREAD = object()
@@ -105,12 +107,23 @@ class MainRouteMix:
         result = None
         if plan is not None:
             key = self.key_for(tree)
-            if key is not None and dict(plan.key) == key:
+            # A plan of this very tree, content and algorithm that was computed for other switches stays in
+            # use until prepare (which compares the whole key) has saved the plan of the current ones: after
+            # a switch change the route does not fall back to the derivation order in between.
+            if key is not None and same_apart_from_switches(plan.key, key):
                 from .sources import library_entries, mixable_stage_ids
                 result = apply_plan(tree, plan, mixable=mixable_stage_ids(tree),
                                     providers=library_entries(tree, library_of))
         self._applied = (tree, generation, bare, result)  # a later generation reads again
         return result
+
+    def current_for(self, tree) -> bool:
+        """Whether the stored plan was computed for exactly this derivation tree, content, algorithm and
+        switches (the whole key). mixed() also applies a plan of other switches: that plan is in use but
+        not current, and the warm-up still has to compute this learner's (StudyPathService.route_mix_job)."""
+        plan = self.stored()
+        key = self.key_for(tree) if plan is not None else None
+        return key is not None and dict(plan.key) == key
 
     # ------------------------------------------------------------------ computation (worker thread)
 
@@ -139,7 +152,7 @@ class MainRouteMix:
         mixable = sources.mixable_stage_ids(tree)
         needed = sources.needed_items(tree, mixable, providers)
         if self._readiness_source is None:
-            readiness = sources.read_readiness(needed, items, cancelled=self._cancel.is_set, groups=self.params.groups)
+            readiness = sources.read_readiness(needed, items, cancelled=self._cancel.is_set, kinds=self.params.kinds)
         else:
             readiness = self._readiness_source(needed, items)
         read = time.perf_counter()
@@ -186,17 +199,21 @@ class MainRouteMix:
         return True
 
 
-def main_route_mix(previous, data_dir, groups=None):
-    """The MainRouteMix of this data directory and these settings groups (``groups``: the learner's kind
-    switches, learning_ui.KIND_GROUPS, title -> kinds; part of the plan key): the replaced service's,
-    else a new one; None without a data directory."""
+def main_route_mix(previous, data_dir, kinds=()):
+    """The MainRouteMix of this data directory: the replaced service's, else a new one for these
+    switches; None without a data directory.
+
+    ``kinds``: the learner's switched-on kinds, or a zero-argument callable returning them, called only
+    when a new mix is made (part of its plan key). The replaced service's mix is kept whatever the
+    switches are now: a switch changed while the app runs keeps the plan in use, and the next start-up
+    warm-up computes the plan of the new switches in the background; until it is saved, mixed() goes on
+    with the stored plan of the old switches (the stored file holds one plan)."""
     if data_dir is None:
         return None
-    params = MixParams(groups=kind_groups(groups or {}))
     mix = getattr(previous, "route_mix", None)
-    if isinstance(mix, MainRouteMix) and mix.data_dir == Path(data_dir) and mix.params == params:
+    if isinstance(mix, MainRouteMix) and mix.data_dir == Path(data_dir):
         return mix
-    return MainRouteMix(data_dir, params=params)
+    return MainRouteMix(data_dir, params=MixParams(kinds=switched_kinds(kinds() if callable(kinds) else kinds)))
 
 
 async def prepare_in_background(source) -> bool:

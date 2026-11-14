@@ -356,10 +356,13 @@ class StudyPathService:
 
     def route_mix_job(self):
         """Design 11 section 16 (M10): a worker-thread job computing the mix plan of this derivation
-        tree (route_mix.service.MainRouteMix.job), or None without a route_mix or when one is applied."""
-        if getattr(self, "route_mix", None) is None or self.path is not self.derivation_path:
+        tree (route_mix.service.MainRouteMix.job), or None without a route_mix or when the plan applied
+        is the current one. A plan computed for other kind switches is applied but not current (section
+        16.10): the job is still made, so the warm-up replaces it."""
+        mix = getattr(self, "route_mix", None)
+        if mix is None or (self.path is not self.derivation_path and mix.current_for(self.derivation_path)):
             return None
-        return self.route_mix.job(self.derivation_path, self._route_inputs[1], self.library_of)
+        return mix.job(self.derivation_path, self._route_inputs[1], self.library_of)
 
     # ------------------------------------------------------------ routes (design 10, WP-R2)
 

@@ -7,10 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from kanamemory.route_mix import placement
-from kanamemory.route_mix.params import MixParams, kind_groups
+from kanamemory.route_mix.params import ALGORITHM_VERSION, MixParams, switched_kinds
 from kanamemory.route_mix.placement import RULES_FIXED, RULES_MOVED, runs, section_of
-from kanamemory.route_mix.plan import (MixPlan, apply_plan, assign_units, plan_mix, snapshot, tree_digest)
-from kanamemory.route_mix.readiness import Readiness, ReadinessCounter, group_key, kind_key
+from kanamemory.route_mix.plan import (MixPlan, apply_plan, assign_units, plan_key, plan_mix,
+                                       same_apart_from_switches, snapshot, tree_digest)
+from kanamemory.route_mix.readiness import Readiness, ReadinessCounter, choice_key, is_choice_key
 from kanamemory.route_mix.sections import _digest, split_library_sections
 from kanamemory.route_mix.sources import library_entries, overridden_entries, route_library_of
 
@@ -151,47 +152,76 @@ def group_case():
     return tree, templates(["grammar:g2"], [], [], [])
 
 
-def test_a_move_that_keeps_the_ability_floor_but_empties_a_settings_group_is_refused():
-    # M5 per settings group: before g2 the ability keeps 3 of its 4 questions (its floor), but the group
-    # of the context task (a group of its own) keeps none: a learner who keeps only that group on would
-    # meet w with the unlearned g2, so w may not stand before g2.
+def test_the_default_switches_keep_a_question_among_the_switched_on_kinds():
+    # Default switches: the context task (needs g2) and three other "use" tasks are all switched on, so
+    # the choice key holds all four; before g2 three of them are met: w moves (variant C = no choice floor).
     tree, rows = group_case()
     plan, result = mixed(tree, {"word:w": {"use": rows}})
     assert ids(result).index("w") < ids(result).index("g2")  # by ability alone it moves
-    by_group = {"use": rows, group_key("use", "读句选词"): rows[:1], group_key("use", "读法与词汇提取"): rows[1:]}
-    plan, result = mixed(tree, {"word:w": by_group})
-    assert ids(result) == ["g1", "g2", "w"]
-    # the choice floor is min(derivation count, 1): a group without gated questions where the item
-    # stood in the derivation binds nothing
-    free, never = templates([], [], []), [("f" * 64, ["grammar:never"])]
-    unmet = {"use": free + never, group_key("use", "读法与词汇提取"): free, group_key("use", "读句选词"): never}
-    plan, result = mixed(tree, {"word:w": unmet})
+    default = {"use": rows, choice_key("use"): rows}
+    plan, result = mixed(tree, {"word:w": default})
     assert ids(result).index("w") < ids(result).index("g2")
     assert MixParams().choice_floor == 1 and MixParams().key()["choice_floor"] == 1
 
 
-def test_a_kind_that_empties_while_its_group_keeps_a_question_does_not_bind():
-    # the recall task (needs g2) and three orthography tasks share a group: before g2 recall alone has
-    # none, but a learner cannot switch recall off without orthography, so w moves; a kind that no group
-    # switches keeps its own floor (kind_key)
+def test_a_learner_with_one_kind_on_keeps_a_question_of_that_kind():
+    # Only the context task is switched on: before g2 the ability keeps 3 of its 4 questions (its floor),
+    # but none of this learner's kinds; that learner would meet w with the unlearned g2, so w may not
+    # stand before g2.
     tree, rows = group_case()
-    one_group = {"use": rows, group_key("use", "读法与词汇提取"): rows}
-    plan, result = mixed(tree, {"word:w": one_group})
+    only_context = {"use": rows, choice_key("use"): rows[:1]}
+    plan, result = mixed(tree, {"word:w": only_context})
+    assert ids(result) == ["g1", "g2", "w"]
+    # one of the switched-on kinds needs nothing: that one question is the floor, w moves
+    plan, result = mixed(tree, {"word:w": {"use": rows, choice_key("use"): rows[:2]}})
     assert ids(result).index("w") < ids(result).index("g2")
-    ungrouped = {"use": rows, group_key("use", "读法与词汇提取"): rows[1:], kind_key("vocab_new"): rows[:1]}
-    plan, result = mixed(tree, {"word:w": ungrouped})
+
+
+def test_the_choice_floor_binds_only_where_the_old_position_had_a_question_of_a_switched_on_kind():
+    tree, rows = group_case()
+    # min(derivation count, 1): the switched-on kind's only question can never be met here (its
+    # requirement is off the route), so at the old position it had none and binds nothing
+    free, never = templates([], [], []), [("f" * 64, ["grammar:never"])]
+    plan, result = mixed(tree, {"word:w": {"use": free + never, choice_key("use"): never}})
+    assert ids(result).index("w") < ids(result).index("g2")
+    # a switched-on kind with no template for this item: no choice key at all, nothing binds
+    plan, result = mixed(tree, {"word:w": {"use": rows}})
+    assert ids(result).index("w") < ids(result).index("g2")
+    # the floor is per ability: a choice key of another ability does not bind "use"
+    other = {"use": rows, choice_key("understanding"): templates([]), "understanding": templates([])}
+    plan, result = mixed(tree, {"word:w": other})
+    assert ids(result).index("w") < ids(result).index("g2")
+    # the ability floor min(d, 3) still binds whatever the switches: three "use" questions need g2
+    hard = templates(["grammar:g2"], ["grammar:g2"], ["grammar:g2"], [])
+    plan, result = mixed(tree, {"word:w": {"use": hard, choice_key("use"): hard[3:]}})
     assert ids(result) == ["g1", "g2", "w"]
 
 
-def test_the_settings_groups_are_plain_data_in_the_plan_key():
-    groups = kind_groups({"B": {"vocab_recall", "vocab_orthography"}, "A": ["vocab_meaning"]})
-    assert groups == (("A", ("vocab_meaning",)), ("B", ("vocab_orthography", "vocab_recall")))
-    params = MixParams(groups=groups)
-    assert params.key()["groups"] == [["A", ["vocab_meaning"]], ["B", ["vocab_orthography", "vocab_recall"]]]
+def test_the_switched_on_kinds_are_plain_data_in_the_plan_key():
+    kinds = switched_kinds(["vocab_recall", "vocab_meaning", "vocab_recall", 7])
+    assert kinds == ("vocab_meaning", "vocab_recall")
+    assert switched_kinds({"vocab_usage"}) == ("vocab_usage",)
+    assert switched_kinds("vocab_meaning") == () and switched_kinds(None) == ()  # a malformed setting
+    params = MixParams(kinds=kinds)
+    assert params.key()["kinds"] == ["vocab_meaning", "vocab_recall"] and "groups" not in params.key()
     assert params.key() != MixParams().key()  # another set of switches: another plan
+    assert params.key() == MixParams(kinds=switched_kinds({"vocab_recall", "vocab_meaning"})).key()
     assert json.loads(json.dumps(params.key())) == params.key()  # what the plan file stores compares equal
-    with pytest.raises(ValueError):
-        MixParams(groups=(("A", "vocab_meaning"),))
+    for bad in (["vocab_meaning"], ("vocab_recall", "vocab_meaning"), ("x", "x"), (1,)):
+        with pytest.raises(ValueError):
+            MixParams(kinds=bad)
+    assert is_choice_key(choice_key("use")) and not is_choice_key("use")
+
+
+def test_two_plan_keys_are_the_same_apart_from_the_switches_only_when_all_else_is_equal():
+    def key(kinds=("vocab_meaning",), digest="t" * 64, content="x", **params):
+        return plan_key(MixParams(kinds=kinds, **params), digest, {"core": [content]})
+    one, other = key(), key(kinds=("vocab_meaning", "vocab_recall"))
+    assert one != other and same_apart_from_switches(one, other) and same_apart_from_switches(one, one)
+    assert same_apart_from_switches(json.loads(json.dumps(one)), other)  # as the plan file gives it back
+    for different in (key(floor=2), key(algorithm=ALGORITHM_VERSION + 1), key(digest="u" * 64), key(content="y"),
+                      {}, {"params": None}, {**one, "params": {"kinds": []}}):
+        assert not same_apart_from_switches(one, different) and not same_apart_from_switches(different, one)
 
 
 def test_entries_of_one_section_count_their_earlier_entries_and_keep_hard_prerequisites():
@@ -775,3 +805,36 @@ def test_apply_plan_moves_only_deferrable_library_grammar_to_a_later_stage():
     forced = MixPlan({}, (("stage:one", tuple(r for r in stages["stage:one"] if r[0] != "section:lpractice")),
                           ("stage:two", (*stages["stage:two"], ("section:lpractice", stages["stage:two"][-1][1])))))
     assert apply(needed, forced, mixable=mixable, providers=needed_providers) is None  # someone needs it
+
+
+# --- imports: the pure modules stay pure, the adapters read no learner store and no UI ---------------
+
+ROUTE_MIX_IMPORTS = {
+    "params": {"__future__", "dataclasses"},
+    "readiness": {"__future__", "collections.abc"},
+    "sections": {"__future__", "collections.abc", "hashlib", ".params"},
+    "placement": {"__future__", "bisect", "collections.abc", "dataclasses", ".params", ".readiness"},
+    "plan": {"__future__", "collections.abc", "dataclasses", "hashlib", "json", ".params", ".placement",
+             ".readiness"},
+    "store": {"__future__", "json", "os", "pathlib", "threading"},
+    "service": {"__future__", "asyncio", "functools", "pathlib", "threading", "time", ".params", ".placement",
+                ".plan", ".store", ".sources", "."},
+    "sources": {"__future__", "collections.abc", "contextlib", "pathlib", "re", "sqlite3", ".placement",
+                ".readiness", "..study_path_catalog", "..content_availability", "..", "..material_review",
+                "..build_info"},
+}
+
+
+def test_route_mix_modules_import_nothing_new():
+    import ast
+    from pathlib import Path
+    folder = Path(placement.__file__).parent
+    assert {path.stem for path in folder.glob("*.py")} - {"__init__"} == set(ROUTE_MIX_IMPORTS)
+    for name, expected in ROUTE_MIX_IMPORTS.items():
+        found = set()
+        for node in ast.walk(ast.parse((folder / f"{name}.py").read_text("utf-8"))):  # lazy imports too
+            if isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                found.add("." * node.level + (node.module or ""))
+        assert found == expected, name

@@ -6,36 +6,34 @@ counted by fingerprint. Fallback templates (nothing declared), relaxed tiers and
 generated sound tasks are not in the table, nor templates that can never be met
 (an out-of-vocabulary surface): the adapter (sources) leaves them out.
 
-Each template is listed under its ability and under the learner's choice it
-belongs to: group_key(ability, settings group) for each settings group that
-switches its kind, kind_key(kind) for a kind no group switches. M5 floors both
-(per ability, and per choice: what a learner who keeps only that group on meets).
+Each template is listed under its ability and, when the learner has its kind
+switched on, also under choice_key(ability): the questions that learner can be
+given for that ability. M5 floors both (per ability over every kind, and per
+ability over the switched-on kinds: what this learner meets).
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 
-KIND_PREFIX, GROUP_PREFIX = "kind:", "group:"
+CHOICE_PREFIX = "on:"
 
 
-def kind_key(kind: str) -> str:
-    """The table key of one question kind no settings group switches (beside the ability keys)."""
-    return KIND_PREFIX + kind
+def choice_key(ability: str) -> str:
+    """The table key of the switched-on kinds' templates of one ability (beside the ability keys).
 
-
-def group_key(ability: str, group: str) -> str:
-    """The table key of one settings group's kinds of one ability."""
-    return f"{GROUP_PREFIX}{ability}:{group}"
+    Seam for device variants (no system keyboard, speech not ready): each would be one more choice key
+    per ability with its own prefix, listed in is_choice_key and filled by the adapter (sources)."""
+    return CHOICE_PREFIX + ability
 
 
 def is_choice_key(key: str) -> bool:
-    """A group or kind key (choice floor), not an ability (ability floor)."""
-    return key.startswith((KIND_PREFIX, GROUP_PREFIX))
+    """A choice key (choice floor), not an ability (ability floor)."""
+    return key.startswith(CHOICE_PREFIX)
 
 
 class Readiness:
-    """item id -> key -> ((template fingerprint, requirement ids), ...), read-only; a key is an ability,
-    a group_key or a kind_key.
+    """item id -> key -> ((template fingerprint, requirement ids), ...), read-only; a key is an ability
+    or a choice_key.
 
     One fingerprint may appear more than once (the same raw template under two
     kinds of one ability); it is one question, met when any of its rows is met.

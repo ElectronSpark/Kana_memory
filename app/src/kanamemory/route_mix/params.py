@@ -4,20 +4,25 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 
 # 2: the M5 floor per question kind as well; 3: per settings group instead (kinds outside every group keep
-# the per-kind floor); 4: readiness counts only templates open at introduction (design 11 section 18, Q8)
-ALGORITHM_VERSION = 4
+# the per-kind floor); 4: readiness counts only templates open at introduction (design 11 section 18, Q8);
+# 5: the choice floor follows the kinds the learner has switched on (one choice per ability), not the groups
+ALGORITHM_VERSION = 5
 
 
-def kind_groups(mapping) -> tuple:
-    """The learner's kind switches (learning_ui.KIND_GROUPS: title -> kinds) as plain, ordered data."""
-    return tuple(sorted((str(title), tuple(sorted(str(kind) for kind in kinds))) for title, kinds in mapping.items()))
+def switched_kinds(kinds) -> tuple:
+    """The learner's switched-on question kinds (learning_questions.stored_enabled_kinds) as plain, ordered
+    data: the distinct strings, sorted. Anything that is not a list, tuple or set of kinds (a malformed
+    setting) is no switch at all: (), the plan then has no choice floor."""
+    if not isinstance(kinds, (list, tuple, set, frozenset)):
+        return ()
+    return tuple(sorted({kind for kind in kinds if isinstance(kind, str)}))
 
 
 @dataclass(frozen=True)
 class MixParams:
     """floor: M5 floor of gated questions per ability (min(derivation count, floor)); choice_floor: the
-    same per (ability, settings group) and, for a kind in no group, per kind (min(derivation count,
-    choice_floor)); groups: the settings groups (kind_groups), empty: every kind on its own.
+    same over the templates of the switched-on kinds of each ability (min(derivation count, choice_floor));
+    kinds: the learner's switched-on kinds (switched_kinds), empty: no choice floor.
 
     library_word_limit / library_word_chunk: M8(a), a library word section with
     more words is cut into sections of this many words. word_target /
@@ -34,25 +39,22 @@ class MixParams:
     nonword_target: int = 3
     search_width: int = 24
     algorithm: int = ALGORITHM_VERSION
-    groups: tuple = ()
+    kinds: tuple = ()
 
     def __post_init__(self):
         for field in fields(self):
-            if field.name == "groups":
+            if field.name == "kinds":
                 continue
             value = getattr(self, field.name)
             if type(value) is not int or value < (0 if field.name in {"floor", "choice_floor", "search_width"} else 1):
                 raise ValueError("Invalid main route mix parameter: " + field.name)
-        if not isinstance(self.groups, tuple) or any(
-                not isinstance(row, tuple) or len(row) != 2 or not isinstance(row[0], str)
-                or not isinstance(row[1], tuple) or not all(isinstance(kind, str) for kind in row[1])
-                for row in self.groups):
-            raise ValueError("Invalid main route mix parameter: groups")
+        if not isinstance(self.kinds, tuple) or self.kinds != switched_kinds(self.kinds):
+            raise ValueError("Invalid main route mix parameter: kinds")
 
     def key(self) -> dict:
-        """The plain (JSON) value a stored plan is keyed by."""
+        """The plain (JSON) value a stored plan is keyed by (the switched-on kinds included)."""
         value = {field.name: getattr(self, field.name) for field in fields(self)}
-        value["groups"] = [[title, list(kinds)] for title, kinds in self.groups]
+        value["kinds"] = list(self.kinds)
         return value
 
 

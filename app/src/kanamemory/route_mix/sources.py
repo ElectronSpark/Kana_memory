@@ -19,7 +19,7 @@ import re
 import sqlite3
 
 from .placement import RULE, WORD, MixCancelled, section_of
-from .readiness import Readiness, group_key, kind_key
+from .readiness import Readiness, choice_key
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -120,12 +120,12 @@ def _binding(item, source, identity):
 
 def read_readiness(item_ids: Iterable[str], items: Mapping[str, Mapping], *, chunk: int = 64,
                    load: Callable | None = None, cancelled: Callable[[], bool] | None = None,
-                   groups: tuple = ()) -> Readiness:
+                   kinds: Iterable[str] = ()) -> Readiness:
     """Readiness of these catalogue items (content id -> catalogue item or view).
 
-    ``groups``: the learner's settings groups (params.kind_groups); each template is listed under its
-    ability and under group_key(ability, group) of every group with its kind, or kind_key(kind) when
-    none has it. Meant for a worker thread: its shard reads share one read-only connection per pack
+    ``kinds``: the learner's switched-on kinds (params.MixParams.kinds); each template is listed under
+    its ability and, when its kind is one of them, under choice_key(ability) too. Meant for a worker
+    thread: its shard reads share one read-only connection per pack
     file (content_pack.shard_reads, this thread only, closed at the end). ``cancelled`` is asked
     before each chunk; True raises placement.MixCancelled.
     """
@@ -136,10 +136,7 @@ def read_readiness(item_ids: Iterable[str], items: Mapping[str, Mapping], *, chu
     providers = _providers(questions)
     ids = [cid for cid in dict.fromkeys(item_ids) if isinstance(items.get(cid), Mapping)]
     table, strings = {}, {}
-    groups_of = {}
-    for title, kinds in groups:
-        for kind in kinds:
-            groups_of.setdefault(kind, []).append(title)
+    switched = frozenset(kinds)
     with content_pack.shard_reads():
         for start in range(0, len(ids), max(1, chunk)):
             if cancelled is not None and cancelled():
@@ -151,7 +148,7 @@ def read_readiness(item_ids: Iterable[str], items: Mapping[str, Mapping], *, chu
             for cid in ids[start:start + chunk]:
                 table[cid] = _item_readiness(items[cid], declared, varied, provided, providers, questions, sound,
                                              content_pack.DEPENDENCY_ID_FIELDS, strings.setdefault,
-                                             groups_of=groups_of)
+                                             switched=switched)
             del dependencies, declared, varied, provided  # this chunk's decoded shards go with them
     return Readiness(table)
 
@@ -199,10 +196,10 @@ def _item_templates(item, varied, provided, providers, identity) -> dict:
 
 
 def _item_readiness(item, declared, varied, provided, providers, questions, sound, id_fields, shared, *,
-                    groups_of=None):
+                    switched=frozenset()):
     """key -> [(fingerprint, requirement ids)] of one item's declared templates that can be met, each under
-    its ability and under group_key(ability, group) for each settings group with its kind (``groups_of``:
-    kind -> group titles), or kind_key(kind) when no group has it."""
+    its ability and, when its kind is switched on (``switched``: the learner's kinds), under
+    choice_key(ability) too."""
     from ..material_review import item_fingerprint
     cid = item["id"]
     memo = []
@@ -241,8 +238,9 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
         # retired one. Only templates that name a level are fingerprinted for this.
         gone = retired.get(kind, set()) | {fingerprint(raw) for raw in templates.get(kind, ()) if _opens_later(raw)}
         never, merged = set(), {}
-        titles = (groups_of or {}).get(kind)
-        choices = [group_key(ability, title) for title in titles] if titles else [kind_key(kind)]
+        # M5 over the switched-on kinds of the ability. Device variants (no system keyboard, speech not
+        # ready) would add their own choice keys here, per template; not done (design 11 section 16.10).
+        choices = (choice_key(ability),) if kind in switched else ()
         requirements = entry.get(kind)
         for sha, requirement in (requirements.items() if isinstance(requirements, Mapping) else ()):
             if sha in gone or not isinstance(requirement, Mapping):
@@ -264,7 +262,7 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
         for sha, needed in merged.items():
             needed.discard(cid)
             rows.setdefault(ability, []).append((sha, needed))
-            for key in choices:  # M5 per settings group (a kind no group switches: per kind)
+            for key in choices:
                 rows.setdefault(key, []).append((sha, needed))
     return rows
 

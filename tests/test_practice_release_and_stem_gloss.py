@@ -452,4 +452,4 @@ def test_readiness_counts_only_templates_open_at_introduction(monkeypatch):
 
 
 def test_a_plan_of_the_old_readiness_is_not_reused():
-    assert ALGORITHM_VERSION == 4 and MixParams().key()["algorithm"] == 4
+    assert ALGORITHM_VERSION == 5 and MixParams().key()["algorithm"] == 5
