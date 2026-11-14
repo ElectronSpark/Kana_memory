@@ -424,6 +424,7 @@ environment/android-runtime.lock.txt
 environment/bootstrap_windows.ps1
 tools/build_environment.py
 tests/test_build_environment.py
+tests/test_apk_launcher_class.py
 docs/build-environment.txt
 tools/run_evidence.py
 tests/test_run_evidence.py
@@ -439,6 +440,7 @@ docs/practice_round_0300.txt
 tests/test_practice_round.py
 tests/test_practice_archive.py
 tests/support/__init__.py
+tests/support/dex_files.py
 tests/support/learning_store_fixtures.py
 app/src/kanamemory/answer_result_ui.py
 app/src/kanamemory/learning_dispatch_types.py
