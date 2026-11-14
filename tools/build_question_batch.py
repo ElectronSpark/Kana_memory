@@ -8,7 +8,7 @@ Three commands:
 
     ``<stem>.variants.json``  a ``kanamemory-template-variants`` v1 staging file; each variant is
                               ``{"key", "target_id", "kind", "template", ["new_word"]}``
-    ``<stem>.fields.json``    ``{key: {"opens_after_reviews", "scenario_id", ["glosses"]}}``, the side fields the
+    ``<stem>.fields.json``    ``{key: {"opens_after_reviews", "scenario_id", ["glosses"], ["needs"]}}``, the side fields the
                               merge tool writes into the template before fingerprinting
 
 ``assemble BATCH_DIR [--out-dir DIR] [--source-prefix P]``
@@ -20,6 +20,7 @@ Three commands:
     replaces the stand-in target of new-word variants by the real lesson id once the lesson exists, recomputes
     what depends on the target (``target_id``, ``practice.assessed_ids``, ``practice.context_id``) and drops
     ``new_word``. The result equals what ``build`` writes when the entry names the real id as ``target_id``.
+    ``needs`` (in the fields file) are left alone; with ``--fields``, a need naming a stand-in id is reported.
 
 Compact entry (one object per template):
   key          unique template key, the primary key of everything downstream
@@ -42,6 +43,9 @@ Compact entry (one object per template):
   scenario     fields ``scenario_id`` (required)
   release      fields ``opens_after_reviews``, 0..40 (default 0)
   glosses      fields ``glosses``: objects; only surface, reading, meaning, lesson_id and start are kept
+  needs        fields ``needs``: 1..8 distinct content ids the question really depends on and the dependency tool
+               cannot detect (never for timing); the merge puts them first in practice.background_ids. Never a
+               new word's stand-in id (name the real lesson id)
 
 The output is written exactly as the question writer's first builder wrote it (UTF-8, ``indent=1``, text mode,
 so the platform's line ending), which keeps old batches byte-identical when rebuilt.
@@ -66,6 +70,7 @@ GAP = "（　）"
 REORDER_CUE = "＿＿"
 REORDER_TASK = "排成一句话。"
 MAX_RELEASE = 40
+MAX_NEEDS = 8  # tools/practice_authoring_fields.MAX_NEEDS; the merge checks the ids against the catalogue
 GLOSS_FIELDS = ("surface", "reading", "meaning", "lesson_id", "start")
 PROXY_NOTE = "target_id / assessed_ids are a proxy: replace by the new lesson id"
 ASSEMBLED_PROXY_NOTE = "target_id / assessed_ids are proxies: replace by the new lesson id (new_word.entry_id)"
@@ -146,6 +151,30 @@ def find_occurrence(prompt, quote, index):
     return start
 
 
+def needs_problems(key, needs, target_id=None):
+    """Messages for an authored ``needs`` list: 1..MAX_NEEDS distinct non-empty strings, never the target.
+    Whether each is a known learning item is the merge tool's check (it has the catalogue)."""
+    if (not isinstance(needs, list) or not 1 <= len(needs) <= MAX_NEEDS
+            or any(not isinstance(cid, str) or not cid.strip() for cid in needs)):
+        return [f"{key}: needs must be a list of 1..{MAX_NEEDS} non-empty content ids (leave it out when none)"]
+    problems = []
+    if len(set(needs)) != len(needs):
+        problems.append(f"{key}: needs repeats an id")
+    if target_id in needs:
+        problems.append(f"{key}: needs names the entry's own target {target_id!r}")
+    return problems
+
+
+def proxy_need_problems(key, needs, proxies, target_id=None):
+    """A need naming a new word's stand-in id is a mistake: stand-ins are replaced only as targets (retarget),
+    never inside needs, so it would stay a dependency nobody can learn. (The entry's own target is reported by
+    needs_problems.)"""
+    if not isinstance(needs, list):
+        return []
+    return [f"{key}: need {cid!r} is a new word's stand-in id; name the real lesson id" for cid in needs
+            if cid in proxies and cid != target_id]
+
+
 def entry_problems(entry):
     """Messages for an entry the builder cannot turn into a valid template (empty when it can)."""
     key = entry.get("key")
@@ -183,6 +212,8 @@ def entry_problems(entry):
     glosses = entry.get("glosses")
     if glosses and (not isinstance(glosses, list) or any(not isinstance(g, dict) for g in glosses)):
         problems.append(f"{key}: glosses must be a list of objects")
+    if "needs" in entry:
+        problems += needs_problems(key, entry["needs"], entry.get("target_id"))
     index = entry.get("span_index", 0)
     if type(index) is not int or index < 0:
         problems.append(f"{key}: span_index {index!r} must be a non-negative integer")
@@ -258,6 +289,8 @@ def fields_of(entry):
     if entry.get("glosses"):
         fields["glosses"] = [{name: gloss[name] for name in GLOSS_FIELDS if name in gloss}
                              for gloss in entry["glosses"]]
+    if "needs" in entry:
+        fields["needs"] = list(entry["needs"])
     return fields
 
 
@@ -298,9 +331,12 @@ def build_batch(entries, source_name, plan=None, source_prefix=SOURCE_PREFIX):
         raise BatchError("new-word entries need plan.json (--plan)")
     entries = resolve_words(entries, plan)
     problems = [message for entry in entries for message in entry_problems(entry)]
+    plan_words = (plan or {}).get("words", {})
+    proxies = {row.get("proxy_id") for row in plan_words.values() if isinstance(row, dict)} - {None}
+    problems += [message for entry in entries
+                 for message in proxy_need_problems(entry["key"], entry.get("needs"), proxies, entry.get("target_id"))]
     if problems:
         raise BatchError("\n".join(problems))
-    plan_words = (plan or {}).get("words", {})
     document = {"format": FORMAT, "version": VERSION, "source": f"{source_prefix}:{source_name}",
                 "variants": [build_variant(entry, plan_words) for entry in entries]}
     fields = {entry["key"]: fields_of(entry) for entry in entries}
@@ -396,6 +432,17 @@ def retarget_document(document, index):
             isinstance(variant, dict) and "new_word" in variant for variant in variants):
         del result["note"]  # an assembled draft's proxy note, now untrue
     return result
+
+
+def fields_needs_problems(document, fields):
+    """Messages for needs in a fields map that name a stand-in id of the document's new-word variants.
+
+    retarget rewrites stand-ins only as targets; a need is the author's own declaration and is never rewritten.
+    """
+    proxies = {variant["new_word"].get("proxy_id") for variant in document.get("variants", ())
+               if isinstance(variant, dict) and isinstance(variant.get("new_word"), dict)} - {None}
+    return [message for key, entry in fields.items() if isinstance(entry, dict)
+            for message in proxy_need_problems(key, entry.get("needs"), proxies)]
 
 
 def fields_key_problems(document, fields):
@@ -541,7 +588,10 @@ def run_assemble(args, validate):
 def run_retarget(args, validate):
     document = read_json(args.variants)
     result = retarget_document(document, lesson_id_index(read_json(args.ids)))
-    problems = fields_key_problems(result, read_json(args.fields)) if args.fields else []
+    problems = []
+    if args.fields:
+        fields = read_json(args.fields)
+        problems = fields_key_problems(result, fields) + fields_needs_problems(document, fields)
     if validate is not None:
         problems += app_problems(result, validate)
     if problems:

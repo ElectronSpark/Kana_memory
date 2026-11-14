@@ -172,6 +172,12 @@ def test_optional_fields_are_checked_and_bound_by_the_review(damage):
         compile_batch(authored, review, items, None, scenarios=scenarios)
 
 
+def test_needs_is_refused_because_a_compile_row_declares_its_dependencies_in_background_ids():
+    authored, review = choice_batch(needs=[HALL])
+    with pytest.raises(ValueError, match=r'^synthetic\|choice\|1: needs is not a field of a reviewed compile row'):
+        compile_batch(authored, review, lessons(), None)
+
+
 def test_glosses_never_replace_the_context_of_an_already_published_template_silently():
     first = compile_batch(*choice_batch(), lessons(), None)
     again = compile_batch(*choice_batch(), lessons(), first)

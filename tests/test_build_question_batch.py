@@ -388,3 +388,64 @@ def test_retarget_errors():
     with pytest.raises(bqb.BatchError, match="no lesson id"):
         bqb.lesson_id_index({"test:2": ""})
     assert bqb.fields_key_problems(proxy_doc, {}) == ["fields file lacks 3 keys: ['w.001', 'w.002', 'g.001']"]
+
+
+# --- needs (author-declared dependencies the dependency tool cannot detect) ----------------------------------
+
+NEEDS = ["grammar:test:listing_to", "word:test:5:real:sense:1"]
+
+
+def test_needs_go_to_the_fields_file_only_and_leave_everything_else_byte_identical(tmp_path):
+    plain, with_needs = tmp_path / "plain", tmp_path / "needs"
+    write_authored(plain, [entry(), entry("grammar_meaning", key="t.m.001")])
+    write_authored(with_needs, [entry(needs=NEEDS), entry("grammar_meaning", key="t.m.001")])
+    for folder in (plain, with_needs):
+        assert bqb.main(["build", str(folder / "authored" / "pt.authored.json")], validate=no_check) == 0
+    assert ((plain / "authored" / "pt.variants.json").read_bytes()
+            == (with_needs / "authored" / "pt.variants.json").read_bytes())
+    plain_fields = json.loads((plain / "authored" / "pt.fields.json").read_text("utf8"))
+    fields = json.loads((with_needs / "authored" / "pt.fields.json").read_text("utf8"))
+    assert "needs" not in plain_fields["t.grammar_cloze.001"] and "needs" not in fields["t.m.001"]
+    assert fields["t.grammar_cloze.001"] == {**plain_fields["t.grammar_cloze.001"], "needs": NEEDS}
+    assert list(fields["t.grammar_cloze.001"]) == ["opens_after_reviews", "scenario_id", "needs"]
+
+
+@pytest.mark.parametrize("needs,message", [
+    ([], "needs must be a list of 1..8"), ("grammar:x:y", "needs must be a list of 1..8"),
+    ([f"grammar:n{i}" for i in range(9)], "needs must be a list of 1..8"),
+    (["grammar:a", ""], "needs must be a list of 1..8 non-empty"), (["grammar:a", " "], "needs must be a list"),
+    (["grammar:a", 3], "needs must be a list"), (["grammar:a", "grammar:a"], "needs repeats an id"),
+    (["grammar:x"], "needs names the entry's own target 'grammar:x'")])
+def test_needs_errors_name_the_key(needs, message):
+    with pytest.raises(bqb.BatchError, match=f"t.grammar_cloze.001: {message}"):
+        build_one(entry(needs=needs))
+
+
+def test_a_need_naming_a_stand_in_id_is_reported_at_build_and_at_retarget(tmp_path):
+    with pytest.raises(bqb.BatchError, match=f"g.001: need '{PROXY}' is a new word's stand-in id"):
+        bqb.build_batch([entry(key="g.001", needs=[PROXY])], "w", PLAN)
+    # A word entry naming its own stand-in names its own target.
+    with pytest.raises(bqb.BatchError, match="names the entry's own target"):
+        bqb.build_batch([entry("vocab_meaning", key="w.001", target_id=None, word="新語", needs=[PROXY])], "w", PLAN)
+    # retarget never rewrites a need; a stand-in among the needs of the fields file is reported.
+    proxy_doc, fields = bqb.build_batch(word_entries(), "w", PLAN)
+    fields["g.001"]["needs"] = [PROXY, "grammar:test:listing_to"]
+    source, ids, fields_path, out = (tmp_path / n for n in ("w.variants.json", "ids.json", "f.json", "out.json"))
+    bqb.write_json(source, proxy_doc)
+    bqb.write_json(ids, {"test:2": REAL})
+    bqb.write_json(fields_path, fields)
+    argv = ["retarget", str(source), "--ids", str(ids), "--fields", str(fields_path), "-o", str(out)]
+    assert bqb.main(argv, validate=no_check) == 1 and not out.exists()
+    assert bqb.fields_needs_problems(proxy_doc, fields) == [
+        f"g.001: need '{PROXY}' is a new word's stand-in id; name the real lesson id"]
+    fields["g.001"]["needs"] = [REAL, "grammar:test:listing_to"]
+    bqb.write_json(fields_path, fields)
+    assert bqb.main(argv, validate=no_check) == 0
+    assert json.loads(fields_path.read_text("utf8"))["g.001"]["needs"] == [REAL, "grammar:test:listing_to"]
+
+
+def test_the_builders_own_limits_equal_the_helpers_and_the_apps():
+    # The builder runs without the app and without the helper, so its two limits are copies of theirs.
+    from kanamemory.learning_questions import MAX_OPENS_AFTER_REVIEWS
+    from practice_authoring_fields import MAX_NEEDS
+    assert (bqb.MAX_NEEDS, bqb.MAX_RELEASE) == (MAX_NEEDS, MAX_OPENS_AFTER_REVIEWS)

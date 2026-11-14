@@ -10,7 +10,8 @@ from kanamemory import learning_content, learning_questions
 from kanamemory.learning_questions import build_learning_question, template_fingerprint, validate_practice
 from kanamemory.question_support import _practice_background_context, learning_question_display
 from practice_authoring_fields import (AuthoringFieldError, apply_pacing, check_scenario, context_row, gloss_rows,
-                                       pacing_keys, scenario_ids, scenario_payload, split_fields)
+                                       background_ids, needs_ids, pacing_keys, scenario_ids, scenario_payload,
+                                       split_fields)
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.learning_fixtures import learning_app  # noqa: F401
 
@@ -235,6 +236,71 @@ def glossed_question(monkeypatch, request):
     question = build_learning_question(lesson, KIND, variant=1)
     assert question["prompt"] == PROMPT and question["practice_source"]["template_sha256"] == template_fingerprint(raw)
     return question
+
+
+# ------------------------------------------------------------------ needs: author-declared dependencies
+
+LISTING = "grammar:synthetic:listing_to"
+
+
+def test_needs_are_checked_and_an_absent_field_gives_none():
+    assert needs_ids(None, key="k", target_id=CID) == [] and needs_ids({}, key="k", target_id=CID) == []
+    assert needs_ids({"needs": [LISTING, HALL]}, key="k", target_id=CID, known_items={CID, HALL, LISTING}) == [
+        LISTING, HALL]
+    # split_fields accepts the field (it is an authoring field) and leaves it to needs_ids.
+    assert split_fields({"needs": [LISTING], "scenario_id": "x"}, key="k") == ({"scenario_id": "x"}, [])
+
+
+@pytest.mark.parametrize("needs,message", [
+    ([], "needs must be a list of 1..8"), (LISTING, "needs must be a list of 1..8"),
+    ([f"grammar:synthetic:n{i}" for i in range(9)], "needs must be a list of 1..8"),
+    ([LISTING, ""], "every need must be a non-empty content id"), ([" "], "every need must be a non-empty"),
+    ([LISTING, None], "every need must be a non-empty"), ([LISTING, LISTING], "needs repeats an id"),
+    ([CID], f"need '{CID}' is the template's own target"),
+    (["grammar:synthetic:unknown"], "need 'grammar:synthetic:unknown' is not a known learning item")])
+def test_each_bad_need_is_refused_with_the_template_key(needs, message):
+    with pytest.raises(AuthoringFieldError, match=f"^k3: {message}"):
+        needs_ids({"needs": needs}, key="k3", target_id=CID, known_items={CID, HALL, LISTING})
+
+
+def test_needs_come_first_and_only_derived_ids_are_dropped_at_the_cap():
+    assert background_ids([], ["b", "a"], CID) == (["b", "a"], 0)
+    assert background_ids([LISTING], [HALL, LISTING, CID], CID) == ([LISTING, HALL], 0)
+    needs = [f"grammar:synthetic:need{i}" for i in range(8)]
+    derived = [f"word:synthetic:w{i:02}" for i in range(45)]
+    ids, dropped = background_ids(needs, derived, CID)
+    assert len(ids) == 40 and ids[:8] == needs and ids[8:] == derived[:32] and dropped == 13
+    ids, dropped = background_ids([], derived, CID)
+    assert ids == derived[:40] and dropped == 5
+
+
+def test_a_need_in_background_ids_is_required_by_the_app_gate_and_survives_a_rederivation(monkeypatch, request):
+    from kanamemory import learning_conditions, learning_dependencies, question_support, structured_lessons
+    from kanamemory.learning_questions import question_requires, template_requires
+    from kanamemory.material_review import item_fingerprint
+    lesson = _lesson()
+    monkeypatch.setattr(learning_content, "_ITEMS", {CID: deepcopy(lesson)})
+    raw = template()
+    raw["practice"]["background_ids"], _ = background_ids(
+        needs_ids({"needs": [LISTING]}, key="k1", target_id=CID, known_items={CID, HALL, LISTING}), [HALL], CID)
+    validate_practice(raw, target_id=CID)
+    sha = template_fingerprint(raw)
+    monkeypatch.setattr(learning_questions, "_PRACTICE", {"schema_version": 1, "items": {CID: {
+        "item_fingerprint": item_fingerprint(lesson), "item_revision": lesson["revision"],
+        "templates": {KIND: [raw]}, "contexts": {sha: {"background_glosses": []}}}}})
+    for cached in (learning_conditions._reviewed_index, learning_dependencies._bundled_dependency_signature,
+                   learning_dependencies._bundled_fingerprint, question_support._background_word_senses,
+                   learning_questions._word_pool, structured_lessons.catalogue):
+        cached.cache_clear()
+        request.addfinalizer(cached.cache_clear)
+    question = build_learning_question(lesson, KIND, variant=1)
+    assert question["practice_source"]["template_sha256"] == sha
+    assert {LISTING, HALL} <= set(template_requires(lesson, KIND, raw))
+    assert {LISTING, HALL} <= set(question_requires(lesson, question))
+    # A later derivation that misses the construction (its entry names only the word) still leaves the need.
+    monkeypatch.setattr(learning_questions, "_DEPENDENCIES", {"schema_version": 1, "items": {CID: {KIND: {
+        sha: {"words": [HALL], "grammar": [], "kana": [], "oov": []}}}}})
+    assert LISTING in template_requires(lesson, KIND, raw)
 
 
 def test_a_built_question_shows_the_stored_glosses(glossed_question):

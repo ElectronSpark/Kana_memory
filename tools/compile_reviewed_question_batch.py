@@ -143,6 +143,11 @@ def compile_batch(authoring, review, items, previous, *, reviewer='gpt-6.1-sol',
             'reviewed': True}
         # Pacing keys belong to the practice, so they are set before validation and the fingerprint.
         pacing, glosses = split_fields({k: row[k] for k in OPTIONAL_FIELDS if k in row}, key=identity)
+        if 'needs' in row:
+            # A compile row declares its dependencies in its own reviewed background_ids column; a second
+            # channel could disagree with it, so the merge tool's needs field is refused here.
+            raise ValueError(f'{identity}: needs is not a field of a reviewed compile row; '
+                             'list the dependency in background_ids')
         check_scenario(pacing, scenarios, key=identity)
         raw = apply_pacing(raw, pacing, key=identity)
         validate_practice(raw, target_id=target)

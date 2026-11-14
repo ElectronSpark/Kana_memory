@@ -1,13 +1,18 @@
-"""The author's three optional fields of a new reviewed template, as the content pack stores them.
+"""The author's optional fields of a new reviewed template, as the content pack stores them.
 
 Design 11 section 18 (Q1-Q3). An authoring row of a NEW template may carry
   "opens_after_reviews": int 0..40  -> practice.opens_after_reviews (0 is not written),
   "scenario_id": str                -> practice.scenario_id (written as given),
   "glosses": [{"surface", "reading", "meaning", "lesson_id"?, "start"?}]
-                                    -> contexts[template sha256]["background_glosses"] rows.
+                                    -> contexts[template sha256]["background_glosses"] rows,
+  "needs": [content id, ...] (1..8) -> first in practice.background_ids, before the derived ids.
 The two pacing keys are part of the practice and therefore of the template's fingerprint: they are set before
 validate_practice and before the fingerprint, never added to an existing template. Glosses sit beside the
 template, keyed by its fingerprint, so they may also be added to an existing template without changing it.
+needs are real dependencies the dependency tool cannot detect (a construction it does not recognise); they are not
+for timing (that is opens_after_reviews). They go into background_ids, which the App's gate unions with the derived
+question_dependencies entry (learning_questions.template_requires), so a later re-derivation keeps them; being
+part of the practice they are part of the fingerprint as well.
 
 A gloss row is refused unless the App would show it to a learner who does not know the word: every condition of
 question_support._practice_background_context is checked here, with the App's own normalisers, and a refusal names
@@ -21,7 +26,9 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
-AUTHORING_FIELDS = frozenset({"glosses", "opens_after_reviews", "scenario_id"})
+AUTHORING_FIELDS = frozenset({"glosses", "opens_after_reviews", "scenario_id", "needs"})
+MAX_NEEDS = 8
+MAX_BACKGROUND = 40  # learning_questions.validate_practice: at most 40 background_ids
 GLOSS_REQUIRED = ("surface", "reading", "meaning")
 GLOSS_OPTIONAL = ("lesson_id", "start")
 SCENARIO_NAMESPACE = "question_scenarios"
@@ -43,8 +50,9 @@ def _fail(key, message):
 def split_fields(fields, *, key):
     """The optional authoring fields of one template: (pacing fields, gloss entries).
 
-    fields: the mapping of the three optional keys (absent ones are simply missing). Any other key is refused, so a
-    misspelt field is never silently dropped.
+    fields: the mapping of the optional keys (absent ones are simply missing). Any other key is refused, so a
+    misspelt field is never silently dropped. needs is read by needs_ids (a caller that takes authoring fields must
+    call it too, or refuse the field).
     """
     if fields is None:
         return {}, []
@@ -57,6 +65,41 @@ def split_fields(fields, *, key):
     if not isinstance(glosses, list):
         _fail(key, "glosses must be a list")
     return {name: fields[name] for name in ("opens_after_reviews", "scenario_id") if name in fields}, glosses
+
+
+def needs_ids(fields, *, key, target_id, known_items=None):
+    """The author's needs of one template's authoring fields ([] when absent), checked.
+
+    1..8 distinct non-empty content ids (an empty list is refused: leave the field out), never the template's
+    target and, with a catalogue (known_items), each a known learning item of any family.
+    """
+    if not isinstance(fields, dict) or "needs" not in fields:
+        return []
+    needs = fields["needs"]
+    if not isinstance(needs, list) or not 1 <= len(needs) <= MAX_NEEDS:
+        _fail(key, f"needs must be a list of 1..{MAX_NEEDS} content ids (leave the field out when there are none)")
+    if any(not isinstance(cid, str) or not cid.strip() for cid in needs):
+        _fail(key, "every need must be a non-empty content id")
+    if len(set(needs)) != len(needs):
+        _fail(key, "needs repeats an id")
+    for cid in needs:
+        if cid == target_id:
+            _fail(key, f"need {cid!r} is the template's own target")
+        if known_items is not None and cid not in known_items:
+            _fail(key, f"need {cid!r} is not a known learning item")
+    return list(needs)
+
+
+def background_ids(needs, derived, target_id):
+    """(final practice.background_ids, derived ids dropped by the cap).
+
+    The author's needs first, in their order, then the derived ids (in their order) that are not needs, never the
+    target, at most 40 in all. Only derived ids are dropped at the cap; needs (at most 8) always stay.
+    """
+    needs = [cid for cid in needs if cid != target_id]
+    rest = [cid for cid in dict.fromkeys(derived) if cid != target_id and cid not in set(needs)]
+    room = MAX_BACKGROUND - len(needs)
+    return needs + rest[:room], max(0, len(rest) - room)
 
 
 def pacing_keys(fields, *, key):
