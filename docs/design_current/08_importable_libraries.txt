@@ -188,7 +188,8 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   requires: { app_min_version, teaching_format: 1, namespace_version: 1 }
     app_min_version（可选）：能用这个库的最早应用版本，点分数字（0.36 或 0.36.0）。导入时与应用自己的版本逐段比较，应用较旧就
     拒绝并说明需要哪个版本（I，2026-11-14；0.35.0 及更早的应用只保存这个字段、不比较）。不是点分数字的旧写法无法比较，不据此
-    拒绝；打包工具只写可比较的值（--app-min-version）。
+    拒绝；打包工具只写可比较的值（--app-min-version）。用了设计 11 第 18 节 Q1、Q2 的键或 Q4 的字段的库写 0.36.0（旧版会
+    整课出不了题）；只带 loanword_origins 命名空间的库在旧版上照常安装，那个命名空间被忽略，不必为它写。
   profile: "core" | "extension"；core 必须满足 PERSONAL_REQUIRED_NAMESPACES（demo 另有 demo 子型），
     extension 可以只带部分命名空间
   layers: 各分层相对路径列表
