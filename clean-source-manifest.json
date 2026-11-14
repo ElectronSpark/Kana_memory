@@ -3,7 +3,7 @@
   "files": {
     ".github/workflows/python-quality.yml": "09f6b19976496a4ec5117e40ba84de7896e05d916fac24f8616ee4a36e845d4e",
     ".gitignore": "5eba08acfc54c950e1ad0473ad2a22222e9931693354827d29af7dea0b6d7395",
-    "CLAUDE.md": "323028e62bb213a4e142851ca7086e3324ee5e4ee10c3f1b4ef134d6b8b74b4c",
+    "CLAUDE.md": "044c607ca3dbff5d0b005f59367cefb0c86ad02ed537bdbfa320e34302cc11a2",
     "LICENSE": "71561116e1d16a4432a9bf8980b6f6b5f1bfa83560f2dc38a3b7000d11d033cd",
     "LICENSE-SCOPE.txt": "63ae288bae6b98c131f56ce113f68b1c01b96c5b2f77822a3ecbc62faf704dac",
     "README.en.md": "3add8eb0b23dac66fa0f30cc8e4e74fa92d95e77990e12d4de00c6fa41765ca1",
@@ -515,7 +515,7 @@
     "docs/pronunciation_coverage.txt": "e38bec173a530a381c2278ec5f0b0c7d6caf7581f69a8bdfbfbe6f176b3a29f0",
     "docs/pronunciation_expansion_0292.txt": "d5a47056a05a1c7f9c8259d28b859514d2bb72a0b685417f7e48427ae8ec91cb",
     "docs/public-build.txt": "33f2c72f64a55727014d817ff8779d1e2490b8f8b6a01e3a94ba887385ce6205",
-    "docs/python-engineering.txt": "fe261d03f7f68fd4d464f85845efd904113e5465315c5316d09d22fafb6ac6ac",
+    "docs/python-engineering.txt": "fd3999f6f8a6d0c7539c3d59d7b63f9fdda9e9701ddf3939e7ebdf806cb04d5b",
     "docs/python-refactor-20261102.txt": "aabe725ec8b1efd6e29ab06cbb7538cb282a5ddcbe87b21bc61b1a6ad9f30f8d",
     "docs/question_type_catalog_v2.json": "5266a3f7f732e3f34e247d3664c692750db430f5a149decc90cfd4d558775a1d",
     "docs/reading_lessons_0262.txt": "5a063dc0958e3c0536a0bab093a873a23fc00530f66697ed577b9c1a5e45001e",
