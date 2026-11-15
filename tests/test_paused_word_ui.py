@@ -70,7 +70,7 @@ def test_sole_disabled_word_shows_pause_then_restores_widgets_without_new_review
     app.resume_practice()
     assert app.page == state["page"]
     if state is DRAFT:
-        assert app.word_answer == app.word_answer_label.text == "か"
+        assert kana_support.word_answer(app) == app.word_answer_label.text == "か"
     else:
         assert kana_support.answered_text(app) == "かき"
         assert kana_support.answer_submitted_at(app) == state["submitted_at_utc"]
@@ -127,7 +127,7 @@ def test_reverse_word_lane_recovers_exact_parts_and_plan_after_other_word(paused
     before = evidence(app.store)
     app.show_question()
     assert app.page == ("feedback" if feedback else "question")
-    assert app.word_romaji_parts == parts and app.word_romaji_plan == plan
+    assert kana_support.word_romaji_parts(app) == parts and kana_support.word_romaji_plan(app) == plan
     assert app.store.load_session_progress()["state"]["word_romaji_parts"] == parts
     if feedback:
         assert kana_support.answered_text(app) == "kaki"
@@ -148,11 +148,11 @@ def test_rating_other_question_restores_parked_word_with_screen_checkpoint(pause
     set_kinds(app, ["kana_romaji"])
     app.resume_practice()
     assert app.page == "question" and kana_support.question(app).content_id == other.content_id
-    app.romaji_answer = "k"
+    kana_support.set_romaji_answer(app, "k")
     app._checkpoint()
     set_kinds(app, [*KINDS, "kana_romaji"])
     app.resume_practice()
-    assert app.romaji_answer == "k"
+    assert kana_support.romaji_answer(app) == "k"
     app.store.record_review(other.content_id, other.kind, other.script, 4,
         session_id=sid, question_index=kana_support.question_index(app), outcome="correct", now=NOW)
     before = evidence(app.store)
@@ -165,7 +165,7 @@ def test_rating_other_question_restores_parked_word_with_screen_checkpoint(pause
     assert app.page == state["page"]
     saved = app.store.load_session_progress()["state"]
     if state is DRAFT:
-        assert app.word_answer == app.word_answer_label.text == saved["word_answer"] == "か"
+        assert kana_support.word_answer(app) == app.word_answer_label.text == saved["word_answer"] == "か"
     else:
         assert kana_support.answered_text(app) == saved["answered_text"] == "かき"
         assert saved["feedback_pending"]

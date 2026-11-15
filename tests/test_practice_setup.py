@@ -503,7 +503,7 @@ def test_romaji_typing_renders_editable_input_and_submits_without_audio(question
     assert app.romaji_input in list(descendants(app.body))
     app.romaji_input.value = "shi"
     app.romaji_input.on_change(app.romaji_input)
-    assert app.romaji_answer == "shi"
+    assert kana_support.romaji_answer(app) == "shi"
     app._checkpoint.assert_called()
     app.romaji_input.on_confirm(app.romaji_input)
     assert app.page == "feedback" and kana_support.answer_correct(app)
@@ -540,8 +540,8 @@ def test_meaning_mode_displays_meaning_and_romaji_with_kana_keyboard_without_aud
     assert "shi" in text_of(app.body) and "poem" in text_of(app.body)
     assert "播放词语" not in text_of(app.body)
     app.append_word_key("し")
-    assert app.word_answer == "し"
-    app.check_answer(app.word_answer)
+    assert kana_support.word_answer(app) == "し"
+    app.check_answer(kana_support.word_answer(app))
     assert kana_support.answer_correct(app)
 
 
@@ -552,7 +552,7 @@ def test_stale_romaji_input_cannot_overwrite_current_answer(question_app):
     render_question(app, "kana_romaji")
     previous.value = "shi"
     app.change_romaji_answer(previous)
-    assert app.romaji_answer == ""
+    assert kana_support.romaji_answer(app) == ""
 
 
 def typed_count(app, value):

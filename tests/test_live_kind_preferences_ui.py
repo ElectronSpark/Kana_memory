@@ -33,7 +33,7 @@ def test_resume_discards_disabled_current_handwriting_state_only(question_app, t
         before = evidence(store)
         app.resume_practice()
         assert unrouted(kana_support.question(app)) == survivor and app.page == "question"
-        assert app.romaji_answer == app.romaji_input.value == ""
+        assert kana_support.romaji_answer(app) == app.romaji_input.value == ""
         assert not kana_support.answer_revealed(app) and kana_support.answered_text(app) is None
         assert kana_support.question_index(app) == 1 and kana_support.session_right(app) == 0
         assert app._attempt_key() not in kana_support.assisted_attempts(app)
@@ -62,7 +62,7 @@ def test_resume_preserves_allowed_current_draft_after_disabled_tail_moves(questi
         before = evidence(store)
         app.resume_practice()
         assert unrouted(kana_support.question(app)) == survivor and kana_support.question_index(app) == 1
-        assert app.romaji_answer == saved["romaji_answer"]
+        assert kana_support.romaji_answer(app) == saved["romaji_answer"]
         assert app.page == ("feedback" if feedback else "question")
         assert kana_support.answered_text(app) == ("a" if feedback else None)
         pending = store.load_session_progress()
@@ -103,7 +103,7 @@ def test_empty_selection_pauses_saved_queue_until_user_chooses_a_type(question_a
         app._practice_preferences = preferences("kana_romaji")
         store.set_setting("practice_preferences", app._practice_preferences)
         app.resume_practice()
-        assert app.page == "question" and app.romaji_answer == "partial"
+        assert app.page == "question" and kana_support.romaji_answer(app) == "partial"
 
 
 def test_temporary_queue_policy_survives_restart_but_regular_change_overrides_it(question_app, tmp_path):
@@ -120,7 +120,7 @@ def test_temporary_queue_policy_survives_restart_but_regular_change_overrides_it
         store = StudyStore(data)
         configure(app, store, "kana_choice")
         app.resume_practice()
-        assert unrouted(kana_support.question(app)) == original and app.romaji_answer == "partial"
+        assert unrouted(kana_support.question(app)) == original and kana_support.romaji_answer(app) == "partial"
         # A later ordinary setting change invalidates the old temporary plan.
         app._practice_preferences = preferences("romaji_kana", "kana_choice")
         store.set_setting("practice_preferences", app._practice_preferences)

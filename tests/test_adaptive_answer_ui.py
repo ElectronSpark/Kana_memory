@@ -43,12 +43,12 @@ def test_full_table_has_visual_cue_single_script_and_composes_groups(question_ap
     assert ("平假名" if script == "hiragana" else "片假名") in text
     for char in kana_support.question(app).answer:
         button(app, char).on_press(None)
-    assert app.word_answer == kana_support.question(app).answer
+    assert kana_support.word_answer(app) == kana_support.question(app).answer
     stale_key = button(app, kana_support.question(app).answer[0])
     button(app, "提交答案").on_press(None)
     assert app.page == "feedback" and kana_support.answer_correct(app) and "很轻松" in text_of(app.body)
     stale_key.on_press(None)
-    assert app.word_answer == kana_support.question(app).answer
+    assert kana_support.word_answer(app) == kana_support.question(app).answer
     app.play_question_audio.assert_not_called()
     app.store.record_review.assert_not_called()
 
@@ -122,7 +122,7 @@ def test_new_production_modes_checkpoint_backup_resume_keep_input_without_tts(le
         app.resume_practice()
         assert kana_support.session_id(app) == kana_support.session_id(original) and kana_support.question_audio_ok(app)
         if kind == "romaji_kana_full":
-            assert app.word_answer == app.word_answer_label.text == "あ"
+            assert kana_support.word_answer(app) == app.word_answer_label.text == "あ"
         else:
             assert [[p[:2] for p in stroke] for stroke in app.strokes] == [[(10, 20), (20, 30)]]
             assert app.strokes[0][1][2] - app.strokes[0][0][2] == 20

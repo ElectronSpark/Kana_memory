@@ -71,9 +71,9 @@ def test_append_restores_original_draft_feedback_audio_and_question_settings(que
         if feedback:
             assert app.page == "feedback" and kana_support.answered_text(app) == original.answer
         elif kind == "kana_romaji":
-            assert app.romaji_input.value == app.romaji_answer == "partial"
+            assert app.romaji_input.value == kana_support.romaji_answer(app) == "partial"
         elif kind == "word_kana":
-            assert app.word_answer == app.word_answer_label.text == "あ"
+            assert kana_support.word_answer(app) == app.word_answer_label.text == "あ"
         else:
             assert [[point[:2] for point in stroke] for stroke in app.strokes] == [[(10, 20), (20, 40)]]
             assert app.strokes[0][1][2] - app.strokes[0][0][2] == 20

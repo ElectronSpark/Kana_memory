@@ -272,3 +272,94 @@ def replace_asked(monkeypatch, name, value):
     for module in list(sys.modules.values()):
         if getattr(module, "__name__", "").startswith("kanamemory") and getattr(module, name, None) is current:
             monkeypatch.setattr(module, name, value)
+
+
+# --- the typed draft of the answer on the page ---------------------------------------------------------------------
+
+def romaji_answer(app):
+    """The romaji typed so far for a kana question."""
+    return app.romaji_answer
+
+
+def set_romaji_answer(app, value):
+    app.romaji_answer = value
+
+
+def word_answer(app):
+    """The kana typed so far for a word."""
+    return app.word_answer
+
+
+def set_word_answer(app, value):
+    app.word_answer = value
+
+
+def word_romaji_parts(app):
+    """The romaji parts chosen so far for a word that is answered part by part; the practice's own list."""
+    return app.word_romaji_parts
+
+
+def set_word_romaji_parts(app, value):
+    app.word_romaji_parts = value
+
+
+def word_romaji_plan(app):
+    """The plan of the parts of a word that is answered part by part."""
+    return app.word_romaji_plan
+
+
+def set_word_romaji_plan(app, value):
+    app.word_romaji_plan = value
+
+
+def word_romaji_unit_mode(app):
+    """Whether the word on the page is answered part by part."""
+    return app.word_romaji_unit_mode
+
+
+def set_word_romaji_unit_mode(app, value):
+    app.word_romaji_unit_mode = value
+
+
+def word_conversion_source(app):
+    """The romaji typed into the converter of a word question and not yet taken into the answer."""
+    return app.word_conversion_source
+
+
+def set_word_conversion_source(app, value):
+    app.word_conversion_source = value
+
+
+def word_conversion_convention(app):
+    """How the converter reads romaji: by reading or by keyboard."""
+    return app.word_conversion_convention
+
+
+def set_word_conversion_convention(app, value):
+    app.word_conversion_convention = value
+
+
+def word_used_conversion(app):
+    """Whether the converter showed kana for the question on the page (the answer is then no unaided recall)."""
+    return app.word_used_conversion
+
+
+def set_word_used_conversion(app, value):
+    app.word_used_conversion = value
+
+
+DRAFT = ("romaji_answer", "word_answer", "word_romaji_parts", "word_romaji_plan", "word_romaji_unit_mode",
+         "word_conversion_source", "word_conversion_convention", "word_used_conversion")
+
+_SETTERS.update({
+    "romaji_answer": set_romaji_answer, "word_answer": set_word_answer,
+    "word_romaji_parts": set_word_romaji_parts, "word_romaji_plan": set_word_romaji_plan,
+    "word_romaji_unit_mode": set_word_romaji_unit_mode, "word_conversion_source": set_word_conversion_source,
+    "word_conversion_convention": set_word_conversion_convention, "word_used_conversion": set_word_used_conversion,
+})
+
+
+def kept_draft(**fields):
+    """What a question page kept for Back holds of the typed draft: the entries of its saved bindings that give
+    these values (named like the readers above) back to the practice when the learner returns to it."""
+    return dict(fields)

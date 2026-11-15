@@ -440,7 +440,7 @@ def test_a_head_that_changed_during_the_restore_gets_only_its_own_saved_draft(pr
                       "assisted_indices": [], "state": {"page": "question", "romaji_answer": "ka"}},
                 active=active, drawn=drawn)
     KanaMemory.resume_practice(app)
-    assert app.romaji_answer == restored and app.romaji_input.value == restored
+    assert kana_support.romaji_answer(app) == restored and app.romaji_input.value == restored
     assert kana_support.question_index(app) == 1 and kana_support.question(app) is saved[1]
 
 
@@ -841,7 +841,8 @@ def romaji_tool_app(affected, **fields):
         text_style=lambda **kw: None, MUTED="muted", selection=lambda items, value, style: View(items=items, value=value),
         label=lambda text, **kw: View(text=text), button=lambda text, handler, **kw: View(text=text, on_press=handler),
         row=lambda *children, **kw: View(*children))
-    app = set_position(SimpleNamespace(page="romaji_tool", store=Mock(), screen=Mock(), word_used_conversion=False),
+    app = set_position(kana_support.with_state(SimpleNamespace(page="romaji_tool", store=Mock(), screen=Mock()),
+        word_used_conversion=False),
                        **fields)
     app.store.mark_pending_word_conversion.return_value = affected
     romaji_input_ui.show_romaji_tool(app, u)
@@ -860,7 +861,7 @@ def test_the_romaji_tool_marks_the_word_on_the_page_only_when_its_attempt_was_af
     composer.source_input.value = "ka"
     composer.change()
     app.store.mark_pending_word_conversion.assert_called_once_with()
-    assert app.word_used_conversion is used
+    assert kana_support.word_used_conversion(app) is used
 
 
 @pytest.mark.parametrize("index,revealed", [(1, True), (0, False)])

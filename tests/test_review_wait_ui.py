@@ -116,7 +116,7 @@ def test_due_tick_enters_same_question_once_and_old_button_keeps_new_draft(waiti
     app.romaji_input.on_change(app.romaji_input)
     entered = database_contents(app)
     old_button.on_press(None)
-    assert app.romaji_answer == "a" and app._page_token == token
+    assert kana_support.romaji_answer(app) == "a" and app._page_token == token
     assert database_contents(app) == entered
     assert app.store.stats()["total_reviews"] == 0
 

@@ -329,7 +329,7 @@ def test_word_keyboard_remains_incremental_input_without_summary(preview_app):
     render(app, "word_meaning_kana")
     app.append_word_key("か")
     app.append_word_key("な")
-    assert app.word_answer == "かな"
+    assert kana_support.word_answer(app) == "かな"
     assert app.page == "word_question" and not app.practice_preview_slot.children
     app.platform.preview_index.assert_not_called()
 

@@ -19,7 +19,7 @@ def app(monkeypatch):
     draft = View(text="input"); draft.value = "きっ"
     content = View(draft)
     original = PageState(("show_question", None), "question", "拼写", content,
-                         {"word_answer": "きっ", "_practice_context": True})
+                         {**kana_support.kept_draft(word_answer="きっ"), "_practice_context": True})
     context = {"page": {"name": "question", "title": "拼写"}, "completeness": {"complete": True, "warnings": []}}
     monkeypatch.setattr(module, "capture_feedback_context", lambda *a, **k: context.copy())
     monkeypatch.setattr(KanaMemory, "_update_chrome", lambda self: None)
@@ -28,9 +28,9 @@ def app(monkeypatch):
         _audio_serial=3, _ink_revision=1, _feedback_return_stack=[], _capture_page=lambda: original, platform=SimpleNamespace(capture_feedback_screenshot=lambda: b"png"),
         _checkpoint=Mock(), _sync_back_handler=Mock(), back_stack=BackStack(),
         content_slot=View(content), title_label=View(text="拼写"), _review_wait_handle=None,
-        loop=SimpleNamespace(call_soon=lambda fn, *args: fn(*args)), alert=Mock(),
-        word_answer="きっ"),
-        question_started=100, answered_attempts=set(), assisted_attempts=set())
+        loop=SimpleNamespace(call_soon=lambda fn, *args: fn(*args)), alert=Mock()),
+        question_started=100, answered_attempts=set(), assisted_attempts=set(),
+        word_answer="きっ")
     result.back_stack.pages.append(original_back)
     for name, value in vars(FeedbackLifecycleMixin).items():
         if callable(value):
@@ -55,7 +55,7 @@ def test_report_returns_exact_widgets_draft_stack_and_ungraded_attempt(app):
     state.return_from_feedback()
     assert state.content_slot.children == [original.content]
     assert state.content_slot.children[0].children[0] is draft
-    assert draft.value == state.word_answer == "きっ"
+    assert draft.value == kana_support.word_answer(state) == "きっ"
     assert state.back_stack.pages == prior_stack
     assert state._view_key == original.key
     assert kana_support.answered_attempts(state) == kana_support.assisted_attempts(state) == set()

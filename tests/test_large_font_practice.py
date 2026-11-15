@@ -91,7 +91,7 @@ def test_word_questions_scroll_as_a_whole_when_space_is_constrained(focused_app,
     assert {"删除末字", "提交答案", "显示答案"} <= controls.keys()
     controls["き"].on_press(None)
     app.append_word_key.assert_called_once_with("き")
-    app.word_answer = "きゃ"
+    kana_support.set_word_answer(app, "きゃ")
     controls["提交答案"].on_press(None)
     app.check_answer.assert_called_once_with("きゃ")
 

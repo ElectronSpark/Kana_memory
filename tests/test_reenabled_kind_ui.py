@@ -78,7 +78,7 @@ def test_reenable_preserves_survivor_draft_or_feedback_and_restores_only_saved_s
             assert kana_support.question(app).content_id == "survivor"
             assert kana_support.question_index(app) == survivor_index
             assert app.page == ("feedback" if feedback else "question")
-            assert app.romaji_answer == state["romaji_answer"]
+            assert kana_support.romaji_answer(app) == state["romaji_answer"]
             assert kana_support.answered_text(app) == ("a" if feedback else None)
             assert_one_saved_repeat(store, repeat)
             assert evidence(store) == unchanged
@@ -149,7 +149,7 @@ def test_repeated_off_on_cycles_never_duplicate_the_saved_repeat(question_app, t
             set_regular(app, TYPED, AUDIO)
             app.page = "home"
             app.resume_practice()
-            assert kana_support.question(app).content_id == "survivor" and app.romaji_answer == "draft"
+            assert kana_support.question(app).content_id == "survivor" and kana_support.romaji_answer(app) == "draft"
             assert_one_saved_repeat(store, repeat)
             assert evidence(store) == unchanged
         app.alert.assert_not_called()
@@ -202,7 +202,7 @@ def test_temporary_reenable_policy_restores_once_after_reopening_store(question_
             configure(app, reopened, TYPED)
             app.resume_practice()
             assert kana_support.question(app).content_id == "survivor"
-            assert app.romaji_answer == "before restart"
+            assert kana_support.romaji_answer(app) == "before restart"
             assert_one_saved_repeat(reopened, repeat)
             assert evidence(reopened) == unchanged
             assert app._practice_preferences["mixed_kinds"] == [TYPED]
