@@ -726,6 +726,7 @@ tests/support/review_wait_ui_support.py
 tests/support/sentence_annotation_ui_support.py
 tests/support/study_home_support.py
 tests/support/continue_support.py
+tests/support/course_support.py
 tests/support/study_path_runtime_support.py
 tests/support/study_path_service_support.py
 tests/support/text_layout_support.py
@@ -963,6 +964,7 @@ tests/test_library_availability_candidates.py
 tests/test_home_counts.py
 tests/test_next_step_pages.py
 tests/test_continue_characterisation.py
+tests/test_course_decision_characterisation.py
 tests/test_continue_decide.py
 tests/test_question_presentation_copula_cue.py
 docs/design_current/11_content_focus_dependency_and_expansion.txt

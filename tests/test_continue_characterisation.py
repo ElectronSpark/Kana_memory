@@ -58,6 +58,7 @@ from kanamemory.arrangement.services import ArrangementPreferences, ExtraSession
 from kanamemory.learning_store import LearningStore
 from kanamemory.practice_availability import QueueAvailability
 from support import continue_support as cs
+from support import course_support
 from support.app_fixtures import question_app, setup_app  # noqa: F401
 from support.fake_ui import ScrollView, View
 from support.learning_fixtures import learning_app  # noqa: F401
@@ -850,7 +851,7 @@ def test_w2_the_worker_head_is_used_once_and_the_line_gets_the_actions_read(app,
     clock = cs.controlled_wait_clock(monkeypatch)
     calls = course_calls(monkeypatch)
     log = cs.watch(app, monkeypatch, real=True, take_over=False)
-    cs.record_entries(app, monkeypatch, real=True, log=log, names=("_queue_missing_learning_questions",))
+    course_support.record_queueing(app, monkeypatch, log=log)
     seen, tasks = cs.in_loop(app, lambda: app.continue_study_path(_checkpoint_saved=True))
     assert seen[0] == cs.WAIT_PAGE and tasks == [cs.course_wait_task(app)] and cs.kana_wait_task(app) is None
     assert cs.names(log).count("_queue_missing_learning_questions") == 1      # the resume skips P2-P7
@@ -878,7 +879,7 @@ def test_w2_guards_on_the_way_back(app, monkeypatch, change):
         monkeypatch.setattr(learning_store._LearningRead, "seed", lambda self, *args: False)
     log = cs.watch(app, monkeypatch, real=True, take_over=False)
     # The whole preparation (P2-P7) runs again only on the inline fallback, not on the resumed decision.
-    cs.record_entries(app, monkeypatch, real=True, log=log, names=("_queue_missing_learning_questions",))
+    course_support.record_queueing(app, monkeypatch, log=log)
 
     def meanwhile():
         if change == "left":
