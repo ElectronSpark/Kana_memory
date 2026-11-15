@@ -72,6 +72,7 @@
   "app/src/kanamemory/course_line/ui/teaching_pages.py": ["__future__", "collections.abc", "dataclasses", "kanamemory.ui_components", "..teaching_display", "..teaching_model"],
   "app/src/kanamemory/kana_line/__init__.py": [],
   "app/src/kanamemory/kana_line/attempt.py": ["__future__", "collections.abc", "dataclasses", ".fields"],
+  "app/src/kanamemory/kana_line/draft.py": ["__future__", "dataclasses", ".fields"],
   "app/src/kanamemory/kana_line/fields.py": ["__future__", "dataclasses"],
   "app/src/kanamemory/kana_line/session.py": ["__future__", "dataclasses", ".fields"],
   "app/src/kanamemory/kana_line/rating_model.py": ["__future__", "collections.abc", "dataclasses", "datetime", "..practice_preferences", ".attempt", ".session"],
@@ -253,7 +254,7 @@
     "app_state": {
       "app/src/kanamemory/ai_service_ui.py": 19,
       "app/src/kanamemory/ai_ui.py": 24,
-      "app/src/kanamemory/app.py": 162,
+      "app/src/kanamemory/app.py": 157,
       "app/src/kanamemory/backup_ui.py": 13,
       "app/src/kanamemory/content_library_ui.py": 6,
       "app/src/kanamemory/example_ui.py": 19,

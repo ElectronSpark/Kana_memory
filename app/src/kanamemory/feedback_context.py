@@ -18,6 +18,7 @@ from pathlib import PurePath
 
 from .arrangement.services.preferences import KEYS as ARRANGEMENT_KEYS
 from .kana_line.attempt import KanaAttempt
+from .kana_line.draft import KanaDraft
 from .kana_line.session import KanaSession
 
 FORMAT = "kanamemory-feedback-context"
@@ -32,6 +33,8 @@ MAX_TARGETS = 200
 MAX_WARNINGS = 200
 
 _MISSING = object()
+_TYPED_FIELDS = frozenset({"word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_plan",
+                           "word_romaji_unit_mode"})
 _SECRET_KEYS = frozenset({"apikey", "password", "secret", "authorization", "credential",
     "credentials", "accesstoken", "refreshtoken", "bearertoken", "clientsecret", "privatekey"})
 _SECRET_TEXT = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9_.-]{12,})\b")
@@ -471,9 +474,13 @@ def _capture_practice(c, app, page):
                             ("answer_correct", "correct"), ("question_audio_ok", "audio_ok")):
             if field in evidence:
                 result.setdefault("draft", {})[name] = c.copy(evidence[field], "practice/draft/" + name)
+        typed = c.attr(app, "_kana_typed", "practice/draft/typed")
+        typed = typed.set_fields() if isinstance(typed, KanaDraft) else {}
         for name in ("word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_position",
                      "word_romaji_choices", "word_romaji_current", "word_romaji_plan", "word_romaji_unit_mode"):
-            value = c.attr(app, name, "practice/draft/" + name, _MISSING)
+            # The typed values are fields of the draft object; the page's controls are still attributes.
+            value = (typed.get(name, _MISSING) if name in _TYPED_FIELDS
+                     else c.attr(app, name, "practice/draft/" + name, _MISSING))
             if value is not _MISSING:
                 result.setdefault("draft", {})[name] = c.copy(value, "practice/draft/" + name)
         index = _position(c, app, "practice/index").get("question_index")

@@ -50,7 +50,7 @@ def test_feedback_system_back_confirms_exit_without_restoring_unanswered_questio
 def test_cancel_then_confirm_preserves_real_saved_draft_and_does_not_grade(focused_app, tmp_path, kind, draft_field, draft):
     app = focused_app
     question, _ = render(app, kind)
-    setattr(app, draft_field, draft)
+    kana_support.with_state(app, **{draft_field: draft})
     if kind == "kana_romaji":
         app.romaji_input.value = draft
     with StudyStore(tmp_path / "learner", time_zone="UTC") as store:
@@ -67,7 +67,7 @@ def test_cancel_then_confirm_preserves_real_saved_draft_and_does_not_grade(focus
         app.go_back()
         resolve_confirmation(app, False)
         assert app.content_slot.children[0] is current_view
-        assert getattr(app, draft_field) == draft
+        assert kana_support.draft(app)[draft_field] == draft
         assert store.load_session_progress()["state"] == before["state"]
         assert store.stats()["total_reviews"] == 0
         app.go_back()

@@ -12,8 +12,10 @@ import importlib
 import sys
 
 from kanamemory import kana_attempt_runtime as _line
+from kanamemory import kana_draft_runtime as _typed
 from kanamemory import kana_session_runtime as _position
 from kanamemory.kana_line.attempt import AttemptMarks, KanaAttempt
+from kanamemory.kana_line.draft import KanaDraft
 from kanamemory.kana_line.session import KanaSession
 
 
@@ -278,74 +280,74 @@ def replace_asked(monkeypatch, name, value):
 
 def romaji_answer(app):
     """The romaji typed so far for a kana question."""
-    return app.romaji_answer
+    return _typed.romaji_answer(app)
 
 
 def set_romaji_answer(app, value):
-    app.romaji_answer = value
+    _typed.set_romaji_answer(app, value)
 
 
 def word_answer(app):
     """The kana typed so far for a word."""
-    return app.word_answer
+    return _typed.word_answer(app)
 
 
 def set_word_answer(app, value):
-    app.word_answer = value
+    _typed.set_word_answer(app, value)
 
 
 def word_romaji_parts(app):
     """The romaji parts chosen so far for a word that is answered part by part; the practice's own list."""
-    return app.word_romaji_parts
+    return _typed.word_romaji_parts(app)
 
 
 def set_word_romaji_parts(app, value):
-    app.word_romaji_parts = value
+    _typed.set_word_romaji_parts(app, value)
 
 
 def word_romaji_plan(app):
     """The plan of the parts of a word that is answered part by part."""
-    return app.word_romaji_plan
+    return _typed.word_romaji_plan(app)
 
 
 def set_word_romaji_plan(app, value):
-    app.word_romaji_plan = value
+    _typed.set_word_romaji_plan(app, value)
 
 
 def word_romaji_unit_mode(app):
     """Whether the word on the page is answered part by part."""
-    return app.word_romaji_unit_mode
+    return _typed.word_romaji_unit_mode(app)
 
 
 def set_word_romaji_unit_mode(app, value):
-    app.word_romaji_unit_mode = value
+    _typed.set_word_romaji_unit_mode(app, value)
 
 
 def word_conversion_source(app):
     """The romaji typed into the converter of a word question and not yet taken into the answer."""
-    return app.word_conversion_source
+    return _typed.word_conversion_source(app)
 
 
 def set_word_conversion_source(app, value):
-    app.word_conversion_source = value
+    _typed.set_word_conversion_source(app, value)
 
 
 def word_conversion_convention(app):
     """How the converter reads romaji: by reading or by keyboard."""
-    return app.word_conversion_convention
+    return _typed.word_conversion_convention(app)
 
 
 def set_word_conversion_convention(app, value):
-    app.word_conversion_convention = value
+    _typed.set_word_conversion_convention(app, value)
 
 
 def word_used_conversion(app):
     """Whether the converter showed kana for the question on the page (the answer is then no unaided recall)."""
-    return app.word_used_conversion
+    return _typed.word_used_conversion(app)
 
 
 def set_word_used_conversion(app, value):
-    app.word_used_conversion = value
+    _typed.set_word_used_conversion(app, value)
 
 
 DRAFT = ("romaji_answer", "word_answer", "word_romaji_parts", "word_romaji_plan", "word_romaji_unit_mode",
@@ -362,7 +364,7 @@ _SETTERS.update({
 def kept_draft(**fields):
     """What a question page kept for Back holds of the typed draft: the entries of its saved bindings that give
     these values (named like the readers above) back to the practice when the learner returns to it."""
-    return dict(fields)
+    return {"_kana_typed": KanaDraft(**fields)}
 
 
 # --- the whole typed draft at once, and what a kept practice page holds of it --------------------------------------
@@ -370,18 +372,20 @@ def kept_draft(**fields):
 def draft(app):
     """What the practice holds of the typed draft, as one dict named like the readers above (only the values
     that were ever set)."""
-    return {name: getattr(app, name) for name in DRAFT if hasattr(app, name)}
+    held = _typed.draft(app).set_fields()
+    return {name: held[name] for name in DRAFT if name in held}
 
 
 def kept_draft_values(page):
     """What a practice page kept for Back holds of the typed draft, named like the readers above (only the
     values it holds)."""
-    return {name: page.bindings[name] for name in DRAFT if name in page.bindings}
+    kept = page.bindings.get("_kana_typed")
+    held = kept.set_fields() if isinstance(kept, KanaDraft) else {}
+    return {name: held[name] for name in DRAFT if name in held}
 
 
 def forget_draft(app, *names):
     """Make the practice hold the named typed values (named like the readers above) as if they had never been
     typed or set since the app started."""
-    for name in names:
-        if hasattr(app, name):
-            delattr(app, name)
+    held = _typed.draft(app).set_fields()
+    _typed.set_draft(app, KanaDraft(**{name: value for name, value in held.items() if name not in names}))

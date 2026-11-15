@@ -48,6 +48,12 @@ class PartlySet:
             raise AttributeError(name)
         return value
 
+    def only(self, names):
+        """A new object of the same kind that holds only the named fields of this one, as far as they were
+        set: what a page that shows just these fields keeps of the state."""
+        held = self.set_fields()
+        return type(self)(**{name: held[name] for name in names if name in held})
+
     def set_fields(self) -> dict:
         """The fields that were set, by name."""
         return {item.name: getattr(self, item.name) for item in fields(self) if getattr(self, item.name) is not UNSET}

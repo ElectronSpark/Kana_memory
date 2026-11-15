@@ -88,6 +88,7 @@ from .kana_line.model import QUESTION_PAGES
 # WP5: short wait page while a worker assembles the kana queue.
 from .next_step.display import KANA_ASSEMBLY_PAGE
 from . import kana_attempt_runtime as kana_attempt
+from . import kana_draft_runtime as kana_draft
 from . import kana_rating_runtime as kana_rating
 from . import kana_runtime
 from .kana_line import display as kana_display
@@ -108,7 +109,7 @@ CARD_STATES = {"全部状态": "all", "已到期": "due", "未开始": "new", "�
                "复习中": "review", "重新学习": "relearning", "已暂停": "suspended", "今日暂缓": "buried"}
 INK_PAGES = {"free_ink", "ink_question"}
 INK_BINDINGS = "free_ink strokes ink_width ink_height _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
-PRACTICE_BINDINGS = "_kana_session use_full_keyboard _kana_attempt question_notice practice_preview_slot word_conversion_source word_conversion_convention word_used_conversion".split()
+PRACTICE_BINDINGS = "_kana_session use_full_keyboard _kana_attempt question_notice practice_preview_slot".split()
 PAGE_BINDINGS = {
     "learning_familiarity": ["_course_teaching"],
     "learning_intro": ["_course_teaching"],
@@ -157,13 +158,13 @@ PAGE_BINDINGS = {
     "practice_setup": "kind_picker mixed_kind_switches practice_kinds_slot practice_mode_hint rounds_input schedule_picker rounds_slot schedule_hint script_picker word_table_picker practice_word_collection_picker research_switch scope_switches scope_inventory_labels batch_picker batch_hint count_picker custom_count_input custom_count_slot practice_scope_card practice_scope_slot practice_scope_hint practice_description practice_script_label practice_script_hint practice_word_card practice_word_slot practice_services practice_start_button practice_count_summary practice_replace_slot _practice_setup_preferences _practice_setup_temporary".split(),
     "word_drill_setup": "word_drill_direction_picker word_drill_keyboard_slot word_drill_count_input word_drill_script_picker word_drill_collection_picker word_drill_keyboard_picker word_drill_start_button word_drill_resume_button word_drill_summary word_drill_resume_slot".split(),
     "cards": "card_query card_state_picker card_kind_picker card_research_switch card_results card_page_label card_offset card_previous_button card_next_button".split(),
-    "word_question": ["word_answer", "word_answer_label", "_word_converter"],
+    "word_question": ["word_answer_label", "_word_converter"],
     "romaji_tool": ["_romaji_tool_context"],
     "diagnostic_scope": ["_diagnostic_scope"],
     "diagnostic_question": ["_diagnostic_context"],
     "diagnostic_feedback": ["_diagnostic_context"],
     "diagnostic_dialogue": ["_diagnostic_context", "_diagnostic_dialogue"],
-    "question": "romaji_answer romaji_input word_romaji_parts word_romaji_plan word_romaji_unit_mode word_romaji_choices word_romaji_position word_romaji_current word_romaji_parts_label word_romaji_answer_label word_romaji_submit word_romaji_delete".split(),
+    "question": "romaji_input word_romaji_choices word_romaji_position word_romaji_current word_romaji_parts_label word_romaji_answer_label word_romaji_submit word_romaji_delete".split(),
 }
 
 
@@ -455,6 +456,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if self.page in INK_PAGES:
             names += INK_BINDINGS
         bindings = {name: getattr(self, name) for name in names if hasattr(self, name)}
+        # The typed draft is one object: the page keeps the fields of it that it shows.
+        kana_draft.keep(self, bindings, self.page, practice_page=self.page in PRACTICE_PAGES)
         bindings["_practice_context"] = getattr(self, "_practice_context", False)
         if self.page in {"learning_wait", "kana_intro_wait"}:
             bindings["_learning_wait_due"] = getattr(self, "_learning_wait_due", None)
@@ -1555,17 +1558,17 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                          answer_duration_ms=kana_attempt.duration_ms(self),
                          answer_correct=bool(kana_attempt.correct(self)))
         if self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind in KANA_WORD_PRACTICE_KINDS | {"romaji_kana_full"}:
-            state["word_answer"] = getattr(self, "word_answer", "")
+            state["word_answer"] = kana_draft.draft(self).get("word_answer", "")
             if kana_session.question(self).kind in WORD_PRACTICE_KINDS:
-                state.update(word_conversion_source=getattr(self, "word_conversion_source", ""),
-                    word_conversion_convention=getattr(self, "word_conversion_convention", "reading"),
-                    word_used_conversion=getattr(self, "word_used_conversion", False) is True)
+                state.update(word_conversion_source=kana_draft.draft(self).get("word_conversion_source", ""),
+                    word_conversion_convention=kana_draft.draft(self).get("word_conversion_convention", "reading"),
+                    word_used_conversion=kana_draft.draft(self).get("word_used_conversion", False) is True)
         if (self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind == "word_romaji"
-                and getattr(self, "word_romaji_unit_mode", False)):
-            state["word_romaji_parts"] = list(self.word_romaji_parts)
-            state["word_romaji_plan"] = self.word_romaji_plan
+                and kana_draft.draft(self).get("word_romaji_unit_mode", False)):
+            state["word_romaji_parts"] = list(kana_draft.word_romaji_parts(self))
+            state["word_romaji_plan"] = kana_draft.word_romaji_plan(self)
         if self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind == "kana_romaji":
-            state["romaji_answer"] = getattr(self, "romaji_answer", "")
+            state["romaji_answer"] = kana_draft.draft(self).get("romaji_answer", "")
         if self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind in {"kana_handwriting", "romaji_handwriting"}:
             state.update(strokes=getattr(self, "strokes", []), ink_width=getattr(self, "ink_width", 360), ink_height=getattr(self, "ink_height", 210))
         assisted = [index for sid,index in kana_attempt.assisted(self) if sid == kana_session.session_id(self)]
@@ -1760,22 +1763,22 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 # still asks for fresh playback before an unsubmitted answer.
                 kana_attempt.set_audio_ok(self, True)
             if kana_session.question(self).kind in KANA_WORD_PRACTICE_KINDS | {"romaji_kana_full"}:
-                self.word_answer = state.get("word_answer", "")
-                self.word_answer_label.text = ui.wrapped(self.word_answer or "＿", columns=18)
+                kana_draft.set_word_answer(self, state.get("word_answer", ""))
+                self.word_answer_label.text = ui.wrapped(kana_draft.word_answer(self) or "＿", columns=18)
                 if kana_session.question(self).kind in WORD_PRACTICE_KINDS:
                     from .romaji_input_ui import restore_word_converter
                     restore_word_converter(self, state)
             elif kana_session.question(self).kind == "word_romaji":
                 if "word_romaji_parts" in state:
-                    self.word_romaji_plan = word_romaji_unit_plan(kana_session.question(self), state["word_romaji_plan"])
-                    self.word_romaji_parts = list(state["word_romaji_parts"])
+                    kana_draft.set_word_romaji_plan(self, word_romaji_unit_plan(kana_session.question(self), state["word_romaji_plan"]))
+                    kana_draft.set_word_romaji_parts(self, list(state["word_romaji_parts"]))
                     KanaMemory._refresh_word_romaji_units(self)
                 elif state.get("feedback_pending"):
                     # Preserve already selected legacy whole-word feedback.
-                    self.word_romaji_unit_mode = False
+                    kana_draft.set_word_romaji_unit_mode(self, False)
             elif kana_session.question(self).kind == "kana_romaji":
-                self.romaji_answer = state.get("romaji_answer", "")
-                self.romaji_input.value = self.romaji_answer
+                kana_draft.set_romaji_answer(self, state.get("romaji_answer", ""))
+                self.romaji_input.value = kana_draft.romaji_answer(self)
             elif kana_session.question(self).kind in {"kana_handwriting", "romaji_handwriting"}:
                 self.strokes = state.get("strokes", [])
                 points = [point for stroke in self.strokes for point in stroke]
@@ -3470,16 +3473,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.show_word_question(title)
             return
         if kana_session.question(self).kind == "kana_romaji":
-            self.romaji_answer = ""
+            kana_draft.set_romaji_answer(self, "")
             self.romaji_input = toga.TextInput(placeholder="输入罗马音", value="", style=Pack(font_size=24, margin_bottom=12))
             if current_platform == "android":
                 self.romaji_input._impl.native.setInputType(1 | 0x80000)
             self.romaji_input.on_change = self.change_romaji_answer
-            self.romaji_input.on_confirm = lambda w, question=kana_session.question(self), **kw: self.check_answer(self.romaji_answer) if kana_session.question(self) is question else None
+            self.romaji_input.on_confirm = lambda w, question=kana_session.question(self), **kw: self.check_answer(kana_draft.romaji_answer(self)) if kana_session.question(self) is question else None
             self.screen("question", title, self.question_notice,
                         self.content_label(kana_session.question(self).metadata["kana_symbol"], size=52, color=GREEN, bold=True, wrap=False, text_role="study"),
                         answer_hint(self), self.romaji_input,
-                        ui.button("提交答案", lambda w, question=kana_session.question(self), **kw: self.check_answer(self.romaji_answer) if kana_session.question(self) is question else None, primary=True))
+                        ui.button("提交答案", lambda w, question=kana_session.question(self), **kw: self.check_answer(kana_draft.romaji_answer(self)) if kana_session.question(self) is question else None, primary=True))
             return
         reverse = kana_session.question(self).kind == "romaji_kana"
         prompt = ui.label(kana_session.question(self).metadata["romaji"], size=44, color=GREEN, bold=True, wrap=False) if reverse else self.content_label(kana_session.question(self).metadata["kana_symbol"], size=52, color=GREEN, bold=True, wrap=False, text_role="study")
@@ -3624,14 +3627,14 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
     def change_romaji_answer(self, widget, **kwargs):
         if self.page != "question" or kana_session.question(self).kind != "kana_romaji" or widget is not self.romaji_input:
             return
-        self.romaji_answer = widget.value
+        kana_draft.set_romaji_answer(self, widget.value)
         KanaMemory._keystroke_checkpoint(self)
 
     def show_reverse_word_question(self, title):
         question = kana_session.question(self)
-        self.word_romaji_plan = word_romaji_unit_plan(question)
-        self.word_romaji_parts = []
-        self.word_romaji_unit_mode = True
+        kana_draft.set_word_romaji_plan(self, word_romaji_unit_plan(question))
+        kana_draft.set_word_romaji_parts(self, [])
+        kana_draft.set_word_romaji_unit_mode(self, True)
         self.word_romaji_choices = ui.col()
         self.word_romaji_position = ui.label("", size=14, color=MUTED)
         self.word_romaji_current = ui.label("", size=22, bold=True, color=GREEN)
@@ -3658,9 +3661,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         KanaMemory._refresh_word_romaji_units(self)
 
     def _refresh_word_romaji_units(self):
-        units, index = self.word_romaji_plan["units"], len(self.word_romaji_parts)
-        self.word_romaji_parts_label.text = " · ".join(self.word_romaji_parts)
-        self.word_romaji_answer_label.text = compose_romaji_parts(self.word_romaji_plan, self.word_romaji_parts) or "＿"
+        units, index = kana_draft.word_romaji_plan(self)["units"], len(kana_draft.word_romaji_parts(self))
+        self.word_romaji_parts_label.text = " · ".join(kana_draft.word_romaji_parts(self))
+        self.word_romaji_answer_label.text = compose_romaji_parts(kana_draft.word_romaji_plan(self), kana_draft.word_romaji_parts(self)) or "＿"
         self.word_romaji_choices.clear()
         self.word_romaji_delete.enabled = bool(index)
         self.word_romaji_submit.enabled = bool(index)
@@ -3682,33 +3685,33 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     def choose_word_romaji_unit(self, answer, question, unit_index):
         if (self.page != "question" or kana_session.question(self) is not question or question.kind != "word_romaji"
-                or self._preview_pending is not None or unit_index != len(self.word_romaji_parts)):
+                or self._preview_pending is not None or unit_index != len(kana_draft.word_romaji_parts(self))):
             return
-        units = self.word_romaji_plan["units"]
+        units = kana_draft.word_romaji_plan(self)["units"]
         if not 0 <= unit_index < len(units) or answer not in units[unit_index]["options"]:
             return
-        self.word_romaji_parts.append(answer)
+        kana_draft.word_romaji_parts(self).append(answer)
         KanaMemory._refresh_word_romaji_units(self)
         self._checkpoint()
 
     def delete_word_romaji_unit(self, widget=None, **kwargs):
-        if self.page != "question" or kana_session.question(self).kind != "word_romaji" or not self.word_romaji_parts:
+        if self.page != "question" or kana_session.question(self).kind != "word_romaji" or not kana_draft.word_romaji_parts(self):
             return
-        self.word_romaji_parts.pop()
+        kana_draft.word_romaji_parts(self).pop()
         KanaMemory._refresh_word_romaji_units(self)
         self._checkpoint()
 
     def submit_word_romaji(self, widget=None, **kwargs):
         if self.page != "question" or kana_session.question(self).kind != "word_romaji":
             return
-        self.check_answer(compose_romaji_parts(self.word_romaji_plan, self.word_romaji_parts))
+        self.check_answer(compose_romaji_parts(kana_draft.word_romaji_plan(self), kana_draft.word_romaji_parts(self)))
 
     def _word_romaji_submission(self, answer):
         if (kana_session.question(self).kind != "word_romaji" or kana_attempt.revealed(self)
-                or not getattr(self, "word_romaji_unit_mode", False)
-                or answer != compose_romaji_parts(self.word_romaji_plan, self.word_romaji_parts)):
+                or not kana_draft.draft(self).get("word_romaji_unit_mode", False)
+                or answer != compose_romaji_parts(kana_draft.word_romaji_plan(self), kana_draft.word_romaji_parts(self))):
             return {}
-        return {"word_romaji_parts": list(self.word_romaji_parts), "word_romaji_plan": self.word_romaji_plan}
+        return {"word_romaji_parts": list(kana_draft.word_romaji_parts(self)), "word_romaji_plan": kana_draft.word_romaji_plan(self)}
 
     def show_word_question(self, title):
         from .text_layout import font_scale
@@ -3719,7 +3722,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         # exercise scrollable, including a retained view after settings change.
         scroll_page = (kana_session.question(self).kind in WORD_PRACTICE_KINDS or scale > 1.2
                        or getattr(window_size, "height", 820) < 740)
-        self.word_answer = ""
+        kana_draft.set_word_answer(self, "")
         self.word_answer_label = ui.label("＿", size=28, bold=True, color=GREEN, text_role="study")
         keys = (normalize_word_keyboard_options(kana_session.question(self).answer, kana_session.question(self).options,
                     kana_session.question(self).script, word_table=kana_session.question(self).metadata.get("word_table", "partial"))
@@ -3761,17 +3764,17 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     size=16, masked=True, compact=True))
         self.screen("word_question", title, self.question_notice, *prompts, answer_hint(self), self.word_answer_label,
                      *conversion,
-                     ui.row(ui.button("删除末字", lambda w, question=kana_session.question(self), **kw: self.delete_word_key() if kana_session.question(self) is question and self.page == "word_question" else None, flex=1, margin_right=6), ui.button("提交答案", lambda w, question=kana_session.question(self), **kw: self.check_answer(self.word_answer) if kana_session.question(self) is question and self.page == "word_question" else None, flex=1)),
+                     ui.row(ui.button("删除末字", lambda w, question=kana_session.question(self), **kw: self.delete_word_key() if kana_session.question(self) is question and self.page == "word_question" else None, flex=1, margin_right=6), ui.button("提交答案", lambda w, question=kana_session.question(self), **kw: self.check_answer(kana_draft.word_answer(self)) if kana_session.question(self) is question and self.page == "word_question" else None, flex=1)),
                      keyboard if scroll_page else toga.ScrollContainer(content=keyboard, horizontal=True, style=Pack(flex=1, margin_bottom=6)), scroll=scroll_page)
 
     def append_word_key(self, text):
-        self.word_answer += text
-        self.word_answer_label.text = ui.wrapped(self.word_answer, columns=18)
+        kana_draft.set_word_answer(self, kana_draft.word_answer(self) + text)
+        self.word_answer_label.text = ui.wrapped(kana_draft.word_answer(self), columns=18)
         KanaMemory._keystroke_checkpoint(self)
 
     def delete_word_key(self, widget=None, **kwargs):
-        self.word_answer = self.word_answer[:-1]
-        self.word_answer_label.text = ui.wrapped(self.word_answer or "＿", columns=18)
+        kana_draft.set_word_answer(self, kana_draft.word_answer(self)[:-1])
+        self.word_answer_label.text = ui.wrapped(kana_draft.word_answer(self) or "＿", columns=18)
         KanaMemory._keystroke_checkpoint(self)
 
     @page_view()
@@ -4129,7 +4132,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if not kana_attempt.revealed(self) and answer_matches(kana_session.question(self), answer, **unit_submission) and not analysis["correct"]:
             analysis = {**analysis, "correct": True, "units": [], "errors": [],
                         "evidence_limited": True, "accepted_alternative": True}
-        if kana_session.question(self).kind in WORD_PRACTICE_KINDS and getattr(self, "word_used_conversion", False):
+        if kana_session.question(self).kind in WORD_PRACTICE_KINDS and kana_draft.draft(self).get("word_used_conversion", False):
             analysis.update(used_conversion=True, input_method="romaji_conversion_v1",
                             evidence_limited=True, units=[])
             return rows, analysis, []
@@ -4159,7 +4162,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return
         # Save the typed draft as a question-page checkpoint before grading.
         KanaMemory.flush_drafts(self)
-        if kana_session.question(self).kind in WORD_PRACTICE_KINDS and getattr(self, "word_used_conversion", False):
+        if kana_session.question(self).kind in WORD_PRACTICE_KINDS and kana_draft.draft(self).get("word_used_conversion", False):
             if self._checkpoint() is False:
                 return
         if not kana_attempt.audio_ok(self):
@@ -4191,7 +4194,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             unit_submission = KanaMemory._word_romaji_submission(self, answer)
             if unit_submission and not kana_attempt.correct(self) and answer == kana_session.question(self).answer:
                 mismatches = [f"第 {index + 1} 个「{unit['kana']}」应选 {unit['answer']}（你选 {part}）"
-                    for index, (unit, part) in enumerate(zip(self.word_romaji_plan["units"], self.word_romaji_parts))
+                    for index, (unit, part) in enumerate(zip(kana_draft.word_romaji_plan(self)["units"], kana_draft.word_romaji_parts(self)))
                     if unit["answer"] != part]
                 children.append(ui.label("请按假名对应选择片段：" + "；".join(mismatches), size=13, color=MUTED))
             if kana_attempt.revealed(self):

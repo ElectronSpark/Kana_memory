@@ -229,11 +229,13 @@ app/src/kanamemory/intro_batch.py
 app/src/kanamemory/intro_batch_quiz.py
 app/src/kanamemory/intro_batch_runtime.py
 app/src/kanamemory/kana_attempt_runtime.py
+app/src/kanamemory/kana_draft_runtime.py
 app/src/kanamemory/kana_session_runtime.py
 app/src/kanamemory/kana_rating_runtime.py
 app/src/kanamemory/kana_runtime.py
 app/src/kanamemory/kana_line/__init__.py
 app/src/kanamemory/kana_line/attempt.py
+app/src/kanamemory/kana_line/draft.py
 app/src/kanamemory/kana_line/fields.py
 app/src/kanamemory/kana_line/session.py
 app/src/kanamemory/kana_line/rating_model.py
@@ -1022,6 +1024,7 @@ tests/test_kana_attempt.py
 tests/test_kana_session.py
 tests/test_kana_rating.py
 tests/test_kana_next.py
+tests/test_kana_draft.py
 tests/test_kana_line_pages.py
 tests/test_course_guide_service.py
 tests/test_course_batch_pages.py

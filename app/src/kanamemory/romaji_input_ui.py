@@ -1,5 +1,6 @@
 """Romaji utility and word-spelling composer using the same offline parser."""
 from .romaji_input import convert_romaji
+from . import kana_draft_runtime as kana_draft
 from . import kana_session_runtime as kana_session
 
 CONVENTIONS = {"本 App 罗马音": "reading", "输入法拼写": "keyboard"}
@@ -68,9 +69,9 @@ class RomajiComposer:
 
 def word_converter(app, u, question):
     app._word_converter = None
-    app.word_conversion_source = ""
-    app.word_conversion_convention = "reading"
-    app.word_used_conversion = False
+    kana_draft.set_word_conversion_source(app, "")
+    kana_draft.set_word_conversion_convention(app, "reading")
+    kana_draft.set_word_used_conversion(app, False)
     # A romaji-to-kana prompt tests this conversion itself. Keep its answer
     # control in kana; copying the displayed romaji is not a response mode.
     if question.kind != 'word_kana' or question.metadata.get('word_romaji_drill'):
@@ -83,24 +84,26 @@ def word_converter(app, u, question):
     def changed(source, convention, exposed):
         if not active():
             return False
-        app.word_conversion_source, app.word_conversion_convention = source[:10000], convention
-        app.word_used_conversion = bool(app.word_used_conversion or exposed)
-        notice.text = "转换辅助 · 本题不调整假名间隔" if app.word_used_conversion else ""
+        kana_draft.set_word_conversion_source(app, source[:10000])
+        kana_draft.set_word_conversion_convention(app, convention)
+        kana_draft.set_word_used_conversion(app, bool(kana_draft.word_used_conversion(app) or exposed))
+        notice.text = "转换辅助 · 本题不调整假名间隔" if kana_draft.word_used_conversion(app) else ""
         return app._checkpoint()
 
     def apply(text):
         # Persist the append and consumption of its source as one checkpoint.
         # A restart must see either the original draft or the consumed draft,
         # never an appended answer with the same source still ready to apply.
-        old_answer, old_source = app.word_answer, app.word_conversion_source
-        app.word_answer = old_answer + text
-        app.word_conversion_source = ""
+        old_answer, old_source = kana_draft.word_answer(app), kana_draft.word_conversion_source(app)
+        kana_draft.set_word_answer(app, old_answer + text)
+        kana_draft.set_word_conversion_source(app, "")
         if app._checkpoint() is False:
-            app.word_answer, app.word_conversion_source = old_answer, old_source
+            kana_draft.set_word_answer(app, old_answer)
+            kana_draft.set_word_conversion_source(app, old_source)
             composer.status.text = "答案未保存，请重试。"
             return False
-        app.word_answer_label.text = u.wrapped(app.word_answer, columns=18)
-        composer.restore("", app.word_conversion_convention)
+        app.word_answer_label.text = u.wrapped(kana_draft.word_answer(app), columns=18)
+        composer.restore("", kana_draft.word_conversion_convention(app))
         return True
 
     composer = RomajiComposer(u, active, changed, apply, script=question.script, convention="reading", caption="加入答案")
@@ -111,18 +114,18 @@ def word_converter(app, u, question):
 
 def restore_word_converter(app, state):
     composer = getattr(app, "_word_converter", None)
-    app.word_conversion_source = state.get("word_conversion_source", "")
-    app.word_conversion_convention = state.get("word_conversion_convention", "reading")
+    kana_draft.set_word_conversion_source(app, state.get("word_conversion_source", ""))
+    kana_draft.set_word_conversion_convention(app, state.get("word_conversion_convention", "reading"))
     # Retain old drafts and the help already seen even when this question no
     # longer offers a converter. Never append its source during restoration.
-    preview = convert_romaji(app.word_conversion_source, script=kana_session.question(app).script,
-                             convention=app.word_conversion_convention)['text']
-    app.word_used_conversion = state.get("word_used_conversion") is True or bool(preview)
+    preview = convert_romaji(kana_draft.word_conversion_source(app), script=kana_session.question(app).script,
+                             convention=kana_draft.word_conversion_convention(app))['text']
+    kana_draft.set_word_used_conversion(app, state.get("word_used_conversion") is True or bool(preview))
     if composer is None:
         return
-    composer.restore(app.word_conversion_source, app.word_conversion_convention)
-    composer.notice.text = "转换辅助 · 本题不调整假名间隔" if app.word_used_conversion else ""
-    if app.word_used_conversion and not state.get("word_used_conversion"):
+    composer.restore(kana_draft.word_conversion_source(app), kana_draft.word_conversion_convention(app))
+    composer.notice.text = "转换辅助 · 本题不调整假名间隔" if kana_draft.word_used_conversion(app) else ""
+    if kana_draft.word_used_conversion(app) and not state.get("word_used_conversion"):
         app._checkpoint()
 
 
@@ -139,7 +142,7 @@ def show_romaji_tool(app, u):
         try:
             affected = app.store.mark_pending_word_conversion()
             if (kana_session.session(app).get("session_id"), kana_session.session(app).get("question_index")) in affected:
-                app.word_used_conversion = True
+                kana_draft.set_word_used_conversion(app, True)
             if affected:
                 status.text = "未完成的单词题将按转换辅助作答处理。"
             return True
