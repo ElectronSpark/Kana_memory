@@ -948,6 +948,7 @@ app/src/kanamemory/next_step/model.py
 app/src/kanamemory/next_step/ui/__init__.py
 app/src/kanamemory/next_step/ui/end_pages.py
 app/src/kanamemory/home_runtime.py
+app/src/kanamemory/continue_runtime.py
 tests/support/library_availability_support.py
 tests/test_content_availability.py
 tests/test_library_availability_store.py
@@ -962,6 +963,7 @@ tests/test_library_availability_candidates.py
 tests/test_home_counts.py
 tests/test_next_step_pages.py
 tests/test_continue_characterisation.py
+tests/test_continue_decide.py
 tests/test_question_presentation_copula_cue.py
 docs/design_current/11_content_focus_dependency_and_expansion.txt
 docs/design_current/12_time_share_scheduling.txt

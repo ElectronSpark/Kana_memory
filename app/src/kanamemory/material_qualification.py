@@ -49,6 +49,11 @@ def bind_resources(store, *, repo=None, examples=None):
                                  examples if examples is not None else previous[1])
 
 
+def bound_resources(store):
+    """(content repository, example store) bound to ``store`` by bind_resources; (None, None) before any."""
+    return getattr(store, '_material_resources', (None, None))
+
+
 def _resources(store, repo, examples):
     saved = getattr(store, '_material_resources', (None, None))
     return repo if repo is not None else saved[0], examples if examples is not None else saved[1]

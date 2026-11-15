@@ -4669,7 +4669,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return
         if error is None and not ticket.data_current(self.store):
             plan = None
-        from .study_path_runtime import cancel_continue_wait, continue_failed
+        from .study_path_runtime import cancel_continue_wait
+        from .continue_runtime import continue_failed
         cancel_continue_wait(self)
         try:
             self.continue_study_path(_checkpoint_saved=True, _kana_plan=plan,

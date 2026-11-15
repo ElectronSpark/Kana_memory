@@ -519,14 +519,15 @@ class StudyPathUIMixin:
             return
         self._study_path_adding = True
         try:
-            self._enroll_notice = None
+            from .continue_runtime import continue_state
+            continue_state(self).notice = None
             if identities:
                 result = self.study_path_service().add_sections(list(identities), start_learning=True,
                                                                 **route_kwargs(route_id))
                 from .practice_round import restart
                 restart(self.store, lane="main")
                 from .study_path_runtime import enrollment_notice
-                self._enroll_notice = enrollment_notice(result, identities)
+                continue_state(self).notice = enrollment_notice(result, identities)
             self.continue_study_path()
         except (ValueError, KeyError) as exc:
             self.alert(str(exc))

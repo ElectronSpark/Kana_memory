@@ -14,6 +14,8 @@ from .model import EndAction, EndActionKind
 
 DONE_PAGE = "learning_done"
 WAIT_PAGE = "learning_wait"
+# The waiting page both background waits of the continue action draw.
+KANA_ASSEMBLY_PAGE = "kana_queue_assembly"
 # 本轮已保存
 ROUND_END_TITLE = "本轮已保存"
 ROUND_END_TEXT = "作答记录和复习安排已保存。"

@@ -7,7 +7,7 @@ The tests reach the action's state and seams only through tests/support/continue
 changes that accessor and not these tests. Expected values are what the code does, including what looks odd
 (each such test says so).
 
-Outcome labels. P: before the decision (_continue_study_path), D: the decision (_continue_dispatch), each
+Outcome labels. P: before the decision (continue_action), D: the decision (decide), each
 taken by the first line that applies; "no lane" = neither lane head was chosen; a "token" is the prepared kana
 head (_prepared), passed only when there is one:
   P1  resuming from W2: only the decision runs again, with the worker's course head (P2-P7 skipped).

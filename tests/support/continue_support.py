@@ -7,14 +7,18 @@ KANA_ASSEMBLY_PAGE) and then decides the next step: an item of the kana or the
 course line (app.resume_practice / app.continue_learning), the reference page
 (app.show_study_reference), an extra-practice step (the take-over), or one of
 its own pages (本轮已保存, 暂时没有可进行的假名题型, 本次学习已保存, the waiting
-page and the error page "无法准备下一题"). How the action keeps its own state
-(the background switch, the wait tasks, the wait timer and view, the
-enrollment notice, the teaching passed over this run, the extra-practice step
-counter, the mark on an error already shown) and where it looks names up (the
-dispatch itself, the share dispatch, the wait delay, the two background
-runners, the queue summary, the promotion, the take-over) is known only here:
-tests never name the module or the attributes behind these functions, so the
-decision and its state can move without a test changing.
+page and the error page "无法准备下一题"). The decision and the course-head wait
+live in kanamemory.continue_runtime (decide returns the next step, perform
+makes its call); the action's own state between its moments (the enrollment
+notice, the waiting page and its timer, the course-head wait's task) is one
+ContinueState object on the app. How the action keeps its state (also the
+background switch, the kana assembly wait's task, the teaching passed over
+this run, the extra-practice step counter, the mark on an error already
+shown) and where it looks names up (the decision itself, the share dispatch,
+the wait delay, the two background runners, the queue summary, the
+promotion, the take-over) is known only here. Tests never name the module or
+the attributes behind these functions, so the decision and its state can move
+without a test changing.
 
 What stays outside, because it is the outer contract of every page: the fake
 screen's app.page / app.title / app.body, and the app's own methods (the line
@@ -43,9 +47,14 @@ def _runtime():
     return study_path_runtime
 
 
-def _mixin():
-    from kanamemory.study_path_runtime import StudyPathRuntimeMixin
-    return StudyPathRuntimeMixin
+def _continue():
+    from kanamemory import continue_runtime
+    return continue_runtime
+
+
+def _state(app):
+    from kanamemory.continue_runtime import continue_state
+    return continue_state(app)
 
 
 # --- the action's own state ------------------------------------------------------------------------------
@@ -75,32 +84,32 @@ def kana_wait_task(app):
 
 def course_wait_task(app):
     """The task of the course-head wait of a sealed round (W2) started by the last continue that waited, or None."""
-    return getattr(app, "_course_dispatch_task", None)
+    return _state(app).course_task
 
 
 def wait_timer(app):
     """The handle of the waiting page's 20-second "takes longer" timer, None when none is armed."""
-    return getattr(app, "_continue_wait_timer", None)
+    return _state(app).wait_timer
 
 
 def wait_view(app):
     """(page name, page token) of the last waiting page shown, None before any."""
-    return getattr(app, "_continue_wait_view", None)
+    return _state(app).wait_view
 
 
 def set_wait_view(app, view):
     """As if the waiting page (page name, page token) ``view`` had been shown last."""
-    app._continue_wait_view = view
+    _state(app).wait_view = view
 
 
 def enrollment_notice(app):
     """The armed enrollment notice ("已加入「…」…"), None when none is armed."""
-    return getattr(app, "_enroll_notice", None)
+    return _state(app).notice
 
 
 def set_enrollment_notice(app, notice):
     """Arm ``notice`` (a dict with text, new_ids and anchor) for the next continue action."""
-    app._enroll_notice = notice
+    _state(app).notice = notice
 
 
 def skipped_teaching(app):
@@ -138,7 +147,7 @@ def wait_seconds():
 def replace_dispatch(monkeypatch, replacement):
     """The decision after the queues are prepared becomes ``replacement(app, *args, **kwargs)`` (both the
     inline path and the resumed course wait call it)."""
-    monkeypatch.setattr(_mixin(), "_continue_dispatch", replacement)
+    monkeypatch.setattr(_continue(), "decide", replacement)
 
 
 def make_dispatch_raise(monkeypatch, error):
@@ -154,7 +163,7 @@ def make_dispatch_raise(monkeypatch, error):
 
 def replace_share_dispatch(monkeypatch, replacement):
     """The breadth-first share decision becomes ``replacement(app, *args, **kwargs)``."""
-    monkeypatch.setattr(_mixin(), "_share_dispatch", replacement)
+    monkeypatch.setattr(_continue(), "share_dispatch", replacement)
 
 
 def set_wait_seconds(monkeypatch, seconds):
@@ -176,19 +185,17 @@ def replace_kana_runner(monkeypatch, runner):
 
 def course_runner():
     """The background runner the course-head wait (W2) awaits, as installed now."""
-    from kanamemory import practice_worker
-    return practice_worker.run_in_background
+    return _continue().run_in_background
 
 
 def replace_course_runner(monkeypatch, runner):
     """The course-head wait (W2) awaits ``runner(repo, store, work, options)`` instead."""
-    from kanamemory import practice_worker
-    monkeypatch.setattr(practice_worker, "run_in_background", runner)
+    monkeypatch.setattr(_continue(), "run_in_background", runner)
 
 
 def patch_dispatch_availability(monkeypatch, answer):
     """The decision's kana queue summary (summarize_queue_availability) is ``answer(*args, **kwargs)``."""
-    monkeypatch.setattr(_runtime(), "summarize_queue_availability", answer)
+    monkeypatch.setattr(_continue(), "summarize_queue_availability", answer)
 
 
 def patch_promotion(monkeypatch, replacement):

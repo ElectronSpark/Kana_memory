@@ -121,6 +121,11 @@ def test_every_fixed_text_of_the_end_pages():
     assert display.HOME == "回到今日"
 
 
+def test_the_waiting_page_name_is_the_one_the_app_uses():
+    from kanamemory.app import KANA_ASSEMBLY_PAGE
+    assert display.KANA_ASSEMBLY_PAGE == KANA_ASSEMBLY_PAGE == "kana_queue_assembly"
+
+
 def test_the_display_models():
     home = EndButton("回到今日", EndAction(Kind.HOME))
     hub = EndButton("题型与练习设置", EndAction(Kind.PRACTICE_HUB))

@@ -240,7 +240,7 @@ def patch_home_counts(monkeypatch, replacement):
 
 def patch_kana_availability(monkeypatch, value):
     """The main kana queue summary (summarize_queue_availability) answers ``value`` for every caller it has:
-    the home and can_continue (the home service) and 继续学习's dispatch (study_path_runtime)."""
+    the home and can_continue (the home service) and 继续学习's dispatch (continue_runtime)."""
     from support.continue_support import patch_dispatch_availability
 
     def answer(*args, **kwargs):

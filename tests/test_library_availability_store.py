@@ -244,6 +244,17 @@ def test_store_without_a_registry_keeps_single_pack_behaviour(tmp_path):
         assert learning.counts(KINDS, now=START)["library_unavailable"] == 0
 
 
+def test_bound_resources_reads_what_bind_resources_bound():
+    from types import SimpleNamespace
+    from kanamemory.material_qualification import bind_resources, bound_resources
+    store, repo, examples = SimpleNamespace(), object(), object()
+    assert bound_resources(store) == (None, None)
+    bind_resources(store, repo=repo)
+    assert bound_resources(store) == (repo, None)
+    bind_resources(store, examples=examples)
+    assert bound_resources(store) == (repo, examples)
+
+
 def test_dictionary_only_words_follow_the_dictionary_layer(learner, monkeypatch):
     import kanamemory.content_library_service as service
     from kanamemory.material_qualification import bind_resources
