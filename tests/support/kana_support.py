@@ -363,3 +363,17 @@ def kept_draft(**fields):
     """What a question page kept for Back holds of the typed draft: the entries of its saved bindings that give
     these values (named like the readers above) back to the practice when the learner returns to it."""
     return dict(fields)
+
+
+# --- the whole typed draft at once, and what a kept practice page holds of it --------------------------------------
+
+def draft(app):
+    """What the practice holds of the typed draft, as one dict named like the readers above (only the values
+    that were ever set)."""
+    return {name: getattr(app, name) for name in DRAFT if hasattr(app, name)}
+
+
+def kept_draft_values(page):
+    """What a practice page kept for Back holds of the typed draft, named like the readers above (only the
+    values it holds)."""
+    return {name: page.bindings[name] for name in DRAFT if name in page.bindings}
