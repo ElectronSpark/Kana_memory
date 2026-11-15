@@ -7,6 +7,7 @@ from kanamemory.learning_store import LearningStore
 from kanamemory.domain import StudyStore
 from support.learning_fixtures import legacy_lesson_snapshot
 from support.study_path_runtime_support import source_question
+from support import kana_support
 
 
 KINDS = ["kana_choice", "romaji_kana", "kana_romaji", "romaji_kana_full", "romaji_handwriting", "kana_handwriting"]
@@ -55,10 +56,11 @@ def reopen(app):
 def rate_current(app):
     q = app.question
     app.page = "feedback"
-    app.answer_correct, app.answer_revealed = True, False
-    app.answered_text = q.answer
-    app.question_audio_ok = True
-    app._answer_submitted_at = None
+    kana_support.set_answer_correct(app, True)
+    kana_support.set_answer_revealed(app, False)
+    kana_support.set_answered_text(app, q.answer)
+    kana_support.set_question_audio_ok(app, True)
+    kana_support.set_answer_submitted_at(app, None)
     app.alert.reset_mock()
     KanaMemory.save_rating(app, 4)
     assert not app.alert.called, app.alert.call_args_list

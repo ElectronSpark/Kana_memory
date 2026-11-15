@@ -24,6 +24,7 @@ SAVED_FOCUSED_PAGES = {"session_wait", "session_done", "kana_intro_wait", "depen
 
 
 from support.focused_navigation_support import focused_app, resolve_confirmation
+from support import kana_support
 
 
 def test_feedback_system_back_confirms_exit_without_restoring_unanswered_question(focused_app):
@@ -36,10 +37,10 @@ def test_feedback_system_back_confirms_exit_without_restoring_unanswered_questio
     assert all(state.name != "question" for state in app.back_stack.pages)
     assert app.go_back() is True
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
-    assert app.question is question and app.answer_correct
+    assert app.question is question and kana_support.answer_correct(app)
     resolve_confirmation(app, False)
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
-    assert app.answered_text == "ka" and not app.answer_revealed
+    assert kana_support.answered_text(app) == "ka" and not kana_support.answer_revealed(app)
     assert "记住了" in text_of(feedback)
     app.store.record_review.assert_not_called()
 
@@ -84,14 +85,14 @@ def test_confirmed_feedback_exit_clears_history_without_changing_answer_or_revie
     question, values = render(app)
     app.choose_practice_answer(values[1], question)
     app.back_stack.pages.append(PageState(("show_words", None), "words", "词库", View()))
-    answer = app.answered_text
+    answer = kana_support.answered_text(app)
     app.go_back()
     resolve_confirmation(app, True)
     assert app.page == "home" and app._view_key == ("show_home", None)
     assert not app.back_stack.pages and not app._practice_context
-    assert app.answered_text == answer and not app.answer_correct
+    assert kana_support.answered_text(app) == answer and not kana_support.answer_correct(app)
     assert app.question_index == 0 and app.session_right == 0
-    assert app._attempt_key() in app._answered_attempts
+    assert app._attempt_key() in kana_support.answered_attempts(app)
     app.store.record_review.assert_not_called()
     assert not app._leave_confirmation_active and not app._returning_home
 
@@ -288,7 +289,7 @@ def test_detail_back_restores_current_feedback_and_keeps_navigation_hidden(focus
         app.header_back_button.on_press(None)
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
     assert app.practice_preview_slot is preview
-    assert app.question is question and app.answer_correct and app.answered_text == "ka"
+    assert app.question is question and kana_support.answer_correct(app) and kana_support.answered_text(app) == "ka"
     assert app.navigation not in app.root.children
     assert app.header_back_slot.children == [app.header_back_button]
     assert not app.pending_confirmation

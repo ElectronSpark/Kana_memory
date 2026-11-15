@@ -11,20 +11,21 @@ from kanamemory import app as app_module
 from kanamemory.app import KanaMemory
 from kanamemory.kana_links import ContentText, KanaLinkIndex
 from kanamemory.navigation import BackStack, PageState
+from support import kana_support
 
 
 def state(page="question", session="session-1"):
-    value = SimpleNamespace(
+    value = kana_support.with_state(SimpleNamespace(
         page=page, session_id=session, question_index=0, _view_key=("show_question", None),
-        back_stack=BackStack(), _assisted_attempts=set(), _answered_attempts=set(),
-        answer_revealed=False, question_notice=SimpleNamespace(text=""),
+        back_stack=BackStack(), question_notice=SimpleNamespace(text=""),
         question=SimpleNamespace(content_id="kana-304b", kind="kana_choice"),
         platform=Mock(), store=Mock(is_content_available=lambda content_id: True), show_kana_detail=Mock(), alert=Mock(),
         _page_token=5, _ink_revision=2, _audio_serial=0, _paint_handle=None,
         content_slot=Mock(), title_label=SimpleNamespace(text=""),
         _render_key=None, _preview_pending=None, repo=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(),
         _show_practice_preview=Mock(),
-    )
+    ),
+        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False)
     for name in ("_attempt_key", "_sync_back_handler", "_content_page_key", "_mark_lookup_assisted", "_preview_link"):
         setattr(value, name, MethodType(getattr(KanaMemory, name), value))
     value.platform.preview_index = AsyncMock(return_value=True)
@@ -65,10 +66,10 @@ def test_japanese_ui_copy_is_not_linked_even_when_identical_to_content(monkeypat
 def test_question_lookup_marks_assistance_before_navigation_without_writing_review():
     value = state()
     value.show_kana_detail.side_effect = lambda kid: (
-        value.answer_revealed is True and value._attempt_key() in value._assisted_attempts
+        kana_support.answer_revealed(value) is True and value._attempt_key() in kana_support.assisted_attempts(value)
     ) or (_ for _ in ()).throw(AssertionError("Lookup was not marked before capturing the view"))
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
-    assert value._assisted_attempts == {("session-1", 0)}
+    assert kana_support.assisted_attempts(value) == {("session-1", 0)}
     value.platform.preview_index.assert_not_called()
     value.show_kana_detail.assert_not_called()
     value._show_practice_preview.call_args.args[3]()
@@ -84,10 +85,10 @@ def test_lookup_via_word_page_marks_suspended_question_and_survives_stale_snapsh
                      "answer_revealed": False, "question_notice": notice})
     value.back_stack.pages.append(old)
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
-    assert value._assisted_attempts == {("session-1", 0)}
+    assert kana_support.assisted_attempts(value) == {("session-1", 0)}
     value.page = "kana_detail"
     assert KanaMemory.go_back(value) is True
-    assert value.page == "question" and value.answer_revealed is True
+    assert value.page == "question" and kana_support.answer_revealed(value) is True
     assert "仅安排再学一次" in notice.text
     # Back checks the saved queue against current types, without grading it.
     assert value.store.mock_calls == [call.load_session_progress(),
@@ -96,11 +97,11 @@ def test_lookup_via_word_page_marks_suspended_question_and_survives_stale_snapsh
 
 def test_post_answer_lookup_does_not_change_independently_completed_answer():
     value = state(page="feedback")
-    value._answered_attempts.add(value._attempt_key())
+    kana_support.answered_attempts(value).add(value._attempt_key())
     value.back_stack.pages.append(PageState(("show_question", None), "question", "练习", object(),
                                            {"session_id": value.session_id, "question_index": 0}))
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
-    assert not value.answer_revealed and not value._assisted_attempts
+    assert not kana_support.answer_revealed(value) and not kana_support.assisted_attempts(value)
     value.platform.preview_index.assert_not_called()
     value.show_kana_detail.assert_not_called()
     value._show_practice_preview.call_args.args[3]()
@@ -136,9 +137,9 @@ def test_normal_back_rebuilds_diagnostic_without_mounting_stale_page():
 
 def test_stale_feedback_controls_cannot_save_good_after_assisted_lookup():
     value = state(page="feedback")
-    value._assisted_attempts.add(value._attempt_key())
+    kana_support.assisted_attempts(value).add(value._attempt_key())
     KanaMemory.save_rating(value, 3)
-    assert value.answer_revealed
+    assert kana_support.answer_revealed(value)
     value.store.record_review.assert_not_called()
     value.alert.assert_called_once()
 
@@ -146,7 +147,7 @@ def test_stale_feedback_controls_cannot_save_good_after_assisted_lookup():
 def test_nonpractice_lookup_and_current_detail_have_no_review_side_effects():
     value = state(page="home", session=None)
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
-    assert not value._assisted_attempts
+    assert not kana_support.assisted_attempts(value)
     assert value.store.mock_calls == []
     value.page, value._view_key = "kana_detail", ("show_kana_detail", "kana-304b")
     value.show_kana_detail.reset_mock()
@@ -156,8 +157,8 @@ def test_nonpractice_lookup_and_current_detail_have_no_review_side_effects():
 
 def test_assistance_does_not_follow_into_another_attempt():
     value = state(page="words")
-    value._assisted_attempts.add(("session-1", 0))
+    kana_support.assisted_attempts(value).add(("session-1", 0))
     value.question_index = 1
-    assert value._attempt_key() not in value._assisted_attempts
+    assert value._attempt_key() not in kana_support.assisted_attempts(value)
     value.session_id, value.question_index = "session-2", 0
-    assert value._attempt_key() not in value._assisted_attempts
+    assert value._attempt_key() not in kana_support.assisted_attempts(value)

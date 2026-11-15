@@ -10,6 +10,7 @@ import pytest
 from kanamemory import app as app_module
 from kanamemory.app import KanaMemory, PRACTICE_PAGES
 from kanamemory.navigation import BackStack, page_view
+from support import kana_support
 
 
 class View:
@@ -43,7 +44,7 @@ def inline_app(monkeypatch):
     monkeypatch.setattr(component_ui, "label", lambda text, **kw: View(text=text, **kw))
     monkeypatch.setattr(component_ui, "button", lambda text, handler, **kw: View(text=text, on_press=handler, **kw))
     monkeypatch.setattr(app_module.toga, "ScrollContainer", View)
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page="feedback", _view_key=("check_answer", None), _render_key=None,
         _page_token=0, _preview_pending=None, _paint_handle=None, _navigating=False,
         _ink_revision=0, _audio_serial=0, _active_stroke=None, _page_scroll=None,
@@ -53,14 +54,15 @@ def inline_app(monkeypatch):
         question=SimpleNamespace(content_id="kana-304b"),
         store=SimpleNamespace(is_content_available=lambda content_id: True,
                               load_session_progress=lambda **kw: None),
-        questions=[object()], session_right=0, answer_revealed=False, question_notice=View(),
-        answered_text="ka", answer_correct=True, _assisted_attempts=set(),
-        _answered_attempts={("session-1", 0)}, _checkpoint=Mock(),
+        questions=[object()], session_right=0, question_notice=View(),
+        _checkpoint=Mock(),
         entry_card=lambda *children, **kw: View(*children, **kw),
         content_label=Mock(side_effect=AssertionError("Summary must not create content links")),
         mixed_label=Mock(side_effect=AssertionError("Summary must not create content links")),
         alert=Mock(), detail_visits=[],
-    )
+    ),
+        answer_revealed=False, answered_text="ka", answer_correct=True, assisted_attempts=set(),
+        answered_attempts={("session-1", 0)})
     app.platform.preview_index = AsyncMock()
     for name in ("screen", "_capture_page", "_sync_back_handler", "go_back", "_attempt_key",
                  "_content_page_key", "_mark_lookup_assisted", "_preview_link", "_show_practice_preview"):
@@ -143,8 +145,8 @@ def test_detail_back_restores_card_and_its_detail_action_still_works(inline_app)
     app.go_back()
     assert app.page == "feedback" and app.practice_preview_slot is slot
     assert app.content_slot.children[0] is feedback
-    assert app.answered_text == "ka" and app.answer_correct and not app.answer_revealed
-    assert not app._assisted_attempts
+    assert kana_support.answered_text(app) == "ka" and kana_support.answer_correct(app) and not kana_support.answer_revealed(app)
+    assert not kana_support.assisted_attempts(app)
     detail.on_press(None)
     assert app.page == "kana_detail" and app.detail_visits == ["ka", "ka"]
 

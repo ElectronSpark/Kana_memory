@@ -15,6 +15,7 @@ from kanamemory.domain import StudyStore
 
 
 from support.live_kind_preferences_ui_support import preferences, configure, evidence
+from support import kana_support
 
 
 @pytest.mark.parametrize("feedback", [False, True])
@@ -33,9 +34,9 @@ def test_resume_discards_disabled_current_handwriting_state_only(question_app, t
         app.resume_practice()
         assert unrouted(app.question) == survivor and app.page == "question"
         assert app.romaji_answer == app.romaji_input.value == ""
-        assert not app.answer_revealed and app.answered_text is None
+        assert not kana_support.answer_revealed(app) and kana_support.answered_text(app) is None
         assert app.question_index == 1 and app.session_right == 0
-        assert app._attempt_key() not in app._assisted_attempts
+        assert app._attempt_key() not in kana_support.assisted_attempts(app)
         assert store.load_session_progress()["state"]["page"] == "question"
         assert evidence(store) == before
         app.show_ink_page.assert_not_called()
@@ -63,7 +64,7 @@ def test_resume_preserves_allowed_current_draft_after_disabled_tail_moves(questi
         assert unrouted(app.question) == survivor and app.question_index == 1
         assert app.romaji_answer == saved["romaji_answer"]
         assert app.page == ("feedback" if feedback else "question")
-        assert app.answered_text == ("a" if feedback else None)
+        assert kana_support.answered_text(app) == ("a" if feedback else None)
         pending = store.load_session_progress()
         assert unrouted(pending["questions"][pending["question_index"]:]) == [survivor, future]
         assert pending["questions"][-1].metadata["not_before_utc"] == due

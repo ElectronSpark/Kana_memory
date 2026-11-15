@@ -18,6 +18,7 @@ from support.app_fixtures import setup_app, question_app
 from support.learning_fixtures import learning_app
 from support.study_path_runtime_support import path_app, home
 from support import course_support
+from support import kana_support
 
 NOW = START + timedelta(minutes=10)
 
@@ -241,8 +242,10 @@ def test_native_feedback_is_durable_before_navigation_and_lanes_restart_independ
     app.session_id, app.questions = sid, store.get_session_questions(sid)
     app.question_index, app.session_right = 0, 0
     app.question = app.questions[0]
-    app.page, app.question_audio_ok, app.answer_revealed = 'question', True, False
-    app._answer_submitted_at = None
+    app.page = 'question'
+    kana_support.set_question_audio_ok(app, True)
+    kana_support.set_answer_revealed(app, False)
+    kana_support.set_answer_submitted_at(app, None)
     app._checkpoint = MethodType(KanaMemory._checkpoint, app)
     app.check_answer('wrong')
     assert app.page == 'feedback'

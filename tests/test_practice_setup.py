@@ -9,6 +9,7 @@ from kanamemory.app import KanaMemory
 from kanamemory.navigation import PageState
 from support.fake_ui import View, descendants, text_of
 from support.app_fixtures import CHOICE, DEFAULT_CATEGORIES, FULL, HANDWRITING, PARTIAL, WORD, pause_typing, question_app as question_app, render_question, set_mode, setup_app as setup_app
+from support import kana_support
 
 
 def test_default_visual_practice_has_no_unrelated_word_or_service_requirements(setup_app):
@@ -496,7 +497,7 @@ def test_custom_count_changed_during_model_check_does_not_start_old_plan(setup_a
 def test_romaji_typing_renders_editable_input_and_submits_without_audio(question_app):
     app = question_app
     render_question(app, "kana_romaji")
-    assert app.page == "question" and app.question_audio_ok
+    assert app.page == "question" and kana_support.question_audio_ok(app)
     # The kana stimulus and input replace the redundant instruction (0.28.9, c7ac715).
     assert "し" in text_of(app.body) and "拼出对应的罗马音" not in text_of(app.body)
     assert app.romaji_input in list(descendants(app.body))
@@ -505,7 +506,7 @@ def test_romaji_typing_renders_editable_input_and_submits_without_audio(question
     assert app.romaji_answer == "shi"
     app._checkpoint.assert_called()
     app.romaji_input.on_confirm(app.romaji_input)
-    assert app.page == "feedback" and app.answer_correct
+    assert app.page == "feedback" and kana_support.answer_correct(app)
     assert "记住了" in text_of(app.body)
     app.play_question_audio.assert_not_called()
 
@@ -515,7 +516,7 @@ def test_new_modes_reveal_without_voice_and_allow_only_again(question_app, kind)
     app = question_app
     render_question(app, kind)
     app.reveal_answer()
-    assert app.page == "feedback" and not app.answer_correct
+    assert app.page == "feedback" and not kana_support.answer_correct(app)
     assert ("保存并继续" if kind == "word_meaning_kana" else "再学一次") in text_of(app.body)
     assert "很轻松" not in text_of(app.body) and "有些困难" not in text_of(app.body)
     app.alert.assert_not_called()
@@ -524,24 +525,24 @@ def test_new_modes_reveal_without_voice_and_allow_only_again(question_app, kind)
 def test_romaji_prompt_offers_kana_without_exposing_answer_as_prompt(question_app):
     app = question_app
     render_question(app, "romaji_kana")
-    assert app.question_audio_ok
+    assert kana_support.question_audio_ok(app)
     assert any(child.text == "shi" for child in app.body.children)
     options = [child for child in app.body.children if child.text in {"し", "き", "い"}]
     assert len(options) == 3 and all(child.on_press for child in options)
     next(child for child in options if child.text == "し").on_press(None)
-    assert app.answer_correct
+    assert kana_support.answer_correct(app)
 
 
 def test_meaning_mode_displays_meaning_and_romaji_with_kana_keyboard_without_audio(question_app):
     app = question_app
     render_question(app, "word_meaning_kana")
-    assert app.page == "word_question" and app.question_audio_ok
+    assert app.page == "word_question" and kana_support.question_audio_ok(app)
     assert "shi" in text_of(app.body) and "poem" in text_of(app.body)
     assert "播放词语" not in text_of(app.body)
     app.append_word_key("し")
     assert app.word_answer == "し"
     app.check_answer(app.word_answer)
-    assert app.answer_correct
+    assert kana_support.answer_correct(app)
 
 
 def test_stale_romaji_input_cannot_overwrite_current_answer(question_app):

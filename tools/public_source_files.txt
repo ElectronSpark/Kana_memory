@@ -729,6 +729,7 @@ tests/support/sentence_annotation_ui_support.py
 tests/support/study_home_support.py
 tests/support/continue_support.py
 tests/support/course_support.py
+tests/support/kana_support.py
 tests/support/study_path_runtime_support.py
 tests/support/study_path_service_support.py
 tests/support/text_layout_support.py
@@ -993,6 +994,7 @@ tests/test_course_guide_characterisation.py
 tests/test_course_teaching_characterisation.py
 tests/test_course_result_characterisation.py
 tests/test_course_answer_characterisation.py
+tests/test_kana_attempt_characterisation.py
 tests/test_course_answer_pages.py
 tests/test_course_answering.py
 tests/test_course_line_pages.py

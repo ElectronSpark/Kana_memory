@@ -12,6 +12,7 @@ from kanamemory.domain import StudyStore
 from support.fake_ui import View
 from record_test_support import decode_current
 from support.learning_reset_support import populate
+from support import kana_support
 import pytest
 
 
@@ -27,8 +28,8 @@ def reset_app(setup_app, tmp_path):
         app.question, app.question_index, app.session_right = app.questions[2], 2, 2
         app.page, app._page_token = "settings", app._page_token + 1
         app._ink_revision, app._audio_serial = 2, 3
-        app._assisted_attempts = {(app.session_id, 2)}
-        app._answered_attempts = {(app.session_id, 0), (app.session_id, 1)}
+        kana_support.set_assisted_attempts(app, {(app.session_id, 2)})
+        kana_support.set_answered_attempts(app, {(app.session_id, 0), (app.session_id, 1)})
         app.strokes, app._active_stroke = [[[1, 2, 3]]], [(1, 2, 3)]
         app._preview_pending, app._practice_context = object(), True
         app._practice_start_token, app._practice_start_task = object(), None
@@ -60,6 +61,6 @@ def saved_tables(app):
 
 def retained_state(app):
     return (app.session_id, app.questions, app.question, app.question_index, app.session_right,
-            set(app._assisted_attempts), set(app._answered_attempts), list(app.back_stack.pages),
+            set(kana_support.assisted_attempts(app)), set(kana_support.answered_attempts(app)), list(app.back_stack.pages),
             app.strokes, app._active_stroke, app._preview_pending, app._practice_context,
             app._ink_revision, app._audio_serial, app._practice_start_token)

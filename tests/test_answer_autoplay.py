@@ -8,13 +8,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from kanamemory.answer_autoplay import autoplay_answer, MAX_RECENT_ANSWERS
+from support import kana_support
 
 
 def host(page="feedback"):
-    return SimpleNamespace(page=page, _page_token=1, _audio_serial=0,
+    return kana_support.with_state(SimpleNamespace(page=page, _page_token=1, _audio_serial=0,
         platform=SimpleNamespace(play=AsyncMock()), alert=Mock(),
-        store=Mock(), question_audio_ok=False,
-        loop=SimpleNamespace(create_task=lambda coroutine: asyncio.run(coroutine)))
+        store=Mock(), loop=SimpleNamespace(create_task=lambda coroutine: asyncio.run(coroutine))),
+        question_audio_ok=False)
 
 
 @pytest.mark.parametrize("page", ["feedback", "learning_feedback", "learning_guide", "ai_feedback", "diagnostic_feedback"])
@@ -24,7 +25,7 @@ def test_once_per_answer_not_per_render_and_no_evidence(page):
     app._page_token += 1
     assert not autoplay_answer(app, "ア", ("answer", 1))
     app.platform.play.assert_awaited_once_with("ア")
-    assert not app.question_audio_ok
+    assert not kana_support.question_audio_ok(app)
     assert not app.store.mock_calls
     app.alert.assert_not_called()
     assert autoplay_answer(app, "イ", ("answer", 2))
@@ -90,7 +91,7 @@ def test_failure_does_not_show_dialog_change_audio_ready_or_keep_retrying():
     assert not autoplay_answer(app, "ア", 1)
     app.platform.play.assert_awaited_once()
     app.alert.assert_not_called()
-    assert not app.question_audio_ok and not app.store.mock_calls
+    assert not kana_support.question_audio_ok(app) and not app.store.mock_calls
     del app._answer_autoplay_entries  # New process, restored feedback.
     app.platform.play.side_effect = None
     assert autoplay_answer(app, "ア", 1)

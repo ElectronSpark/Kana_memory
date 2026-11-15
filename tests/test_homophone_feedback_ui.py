@@ -11,6 +11,7 @@ from support.word_spelling_ui_support import spelling_app
 from support.word_spelling_ui_support import start
 from support.word_spelling_ui_support import word_question
 from support.word_spelling_ui_support import buttons
+from support import kana_support
 from kanamemory.answer_feedback import build_answer_feedback
 
 
@@ -30,7 +31,7 @@ def test_word_error_category_is_compact_and_persisted(spelling_app, expected, an
     start(app, question)
     original = deepcopy(app.store.get_session_questions(app.session_id))
     app.check_answer(answer)
-    assert not app.answer_correct and caption in text_of(app.body)
+    assert not kana_support.answer_correct(app) and caption in text_of(app.body)
     assert "保存并继续" in buttons(app)
     assert "有些困难" not in buttons(app)
     assert not app.store._db.execute("SELECT 1 FROM word_spelling_attempt").fetchone()
@@ -52,7 +53,7 @@ def test_permitted_word_variant_has_one_answer_and_keeps_unfinished_tail(spellin
     start(app, question, extra=[tail])
     original = deepcopy(app.store.get_session_questions(app.session_id))
     app.check_answer("せかいぢゅう")
-    assert app.answer_correct
+    assert kana_support.answer_correct(app)
     assert "允许的写法" in text_of(app.body)
     # Only the canonical answer is rendered; no duplicate input block.
     assert text_of(app.body).count("せかいじゅう") == 1

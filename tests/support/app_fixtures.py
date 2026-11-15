@@ -12,6 +12,7 @@ from kanamemory import app as app_module
 from kanamemory.app import KanaMemory
 from kanamemory.navigation import BackStack
 from support.fake_ui import View, ScrollView
+from support import kana_support
 
 CHOICE = "看假名选读音"
 
@@ -47,7 +48,7 @@ def setup_app(monkeypatch):
     monkeypatch.setattr(app_module.toga, "ScrollContainer", ScrollView)
     monkeypatch.setattr(app_module, "kana_scope_inventory", lambda *args, scopes, **kw:
         {title: {"total": 0, "learned": 0, "queued": 0, "not_included": 0} for title in scopes})
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page="home", _page_token=8, _starting_practice=False, loop=Mock(),
         # These legacy configuration cases exercise fixed-round practice;
         # interval-review defaults are covered in test_joint_practice_ui.
@@ -59,13 +60,13 @@ def setup_app(monkeypatch):
         heading=lambda text: View(text=text), note=lambda text: View(text=text),
         entry_card=lambda *children, **kw: View(*children, **kw),
         go_back=Mock(), show_settings=Mock(), show_tutor_center=Mock(), show_retention_check_center=Mock(), alert=Mock(), repo=Mock(), store=Mock(),
-        back_stack=BackStack(), _assisted_attempts=set(), _answered_attempts=set(),
-        show_question=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(), refresh_shared_material_notice=Mock(),
+        back_stack=BackStack(), show_question=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(), refresh_shared_material_notice=Mock(),
         practice_plan_summary=Mock(return_value={"total": 10, "due": 0, "new": 10}),
         # The production app always offers study-path next steps on completion/wait pages.
         study_path_service=lambda: SimpleNamespace(overview=lambda: {}),
         _path_next_controls=Mock(return_value=[]),
-    )
+    ),
+        assisted_attempts=set(), answered_attempts=set())
     app.store.daily_new_limit = 10
     # App-run plans are an explicit startup opt-in (practice_round.enable);
     # a bare Mock would answer that flag with a truthy Mock.
@@ -111,8 +112,9 @@ def question_app(setup_app, monkeypatch):
     app.main_window = SimpleNamespace(size=SimpleNamespace(width=440))
     app.session_id, app.question_index, app.session_right = "session", 0, 0
     # Some focused feedback tests begin at an already displayed question.
-    app._question_started = app_module.time.monotonic()
-    app._answer_submitted_at, app._answer_duration_ms = None, None
+    kana_support.set_question_started(app, app_module.time.monotonic())
+    kana_support.set_answer_submitted_at(app, None)
+    kana_support.set_answer_duration_ms(app, None)
     app.content_label = lambda text, **kw: View(text=text, **kw)
     app.mixed_label = lambda *parts, **kw: View(text="".join(str(getattr(part, "text", part)) for part in parts), **kw)
     app.show_ink_page = Mock()

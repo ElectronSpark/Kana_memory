@@ -11,6 +11,7 @@ from kanamemory.feedback_context import context_sha256
 from kanamemory.navigation import BackStack, PageState
 from support.fake_ui import View
 from support.detail_header_support import chrome
+from support import kana_support
 
 
 @pytest.fixture
@@ -23,13 +24,13 @@ def app(monkeypatch):
     monkeypatch.setattr(module, "capture_feedback_context", lambda *a, **k: context.copy())
     monkeypatch.setattr(KanaMemory, "_update_chrome", lambda self: None)
     original_back = PageState(("show_home", None), "home", "首页", View())
-    result = SimpleNamespace(page="question", _view_key=original.key, _page_token=4,
-        _audio_serial=3, _ink_revision=1, _feedback_return_stack=[], _question_started=100,
-        _capture_page=lambda: original, platform=SimpleNamespace(capture_feedback_screenshot=lambda: b"png"),
+    result = kana_support.with_state(SimpleNamespace(page="question", _view_key=original.key, _page_token=4,
+        _audio_serial=3, _ink_revision=1, _feedback_return_stack=[], _capture_page=lambda: original, platform=SimpleNamespace(capture_feedback_screenshot=lambda: b"png"),
         _checkpoint=Mock(), _sync_back_handler=Mock(), back_stack=BackStack(),
         content_slot=View(content), title_label=View(text="拼写"), _review_wait_handle=None,
         loop=SimpleNamespace(call_soon=lambda fn, *args: fn(*args)), alert=Mock(),
-        _answered_attempts=set(), _assisted_attempts=set(), word_answer="きっ")
+        word_answer="きっ"),
+        question_started=100, answered_attempts=set(), assisted_attempts=set())
     result.back_stack.pages.append(original_back)
     for name, value in vars(FeedbackLifecycleMixin).items():
         if callable(value):
@@ -57,7 +58,7 @@ def test_report_returns_exact_widgets_draft_stack_and_ungraded_attempt(app):
     assert draft.value == state.word_answer == "きっ"
     assert state.back_stack.pages == prior_stack
     assert state._view_key == original.key
-    assert state._answered_attempts == state._assisted_attempts == set()
+    assert kana_support.answered_attempts(state) == kana_support.assisted_attempts(state) == set()
 
 
 @pytest.mark.parametrize("page", ["question", "feedback", "ink_question", "session_wait"])
@@ -77,9 +78,9 @@ def test_feedback_return_keeps_strokes_and_compensates_only_report_duration(app,
     now[0] = 215
     state.return_from_feedback()
     assert state._active_stroke is stroke
-    assert state._question_started == 115
+    assert kana_support.question_started(state) == 115
     assert draft.value == "きっ" and state.content_slot.children == [original.content]
-    assert state._assisted_attempts == state._answered_attempts == set()
+    assert kana_support.assisted_attempts(state) == kana_support.answered_attempts(state) == set()
     assert state._checkpoint.call_count == 1  # Entry saves the draft; return does not replay it.
     assert tick.call_count == int(page == "session_wait")
     assert state._schedule_ink_draw.call_count == int(page == "ink_question")

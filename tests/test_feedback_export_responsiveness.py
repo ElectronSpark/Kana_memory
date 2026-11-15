@@ -22,6 +22,7 @@ from support.app_fixtures import setup_app
 from support.fake_ui import View, descendants, text_of
 from support.feedback_context_support import fake_app
 from support.feedback_ui_support import capture, feedback_app, seed
+from support import kana_support
 
 
 def packet_ids(payload):
@@ -49,7 +50,7 @@ def attach_list_return(app, monkeypatch):
     app._capture_page = lambda: previous
     app._feedback_return_stack = []
     app._audio_serial = app._ink_revision = 0
-    app._question_started = None
+    kana_support.set_question_started(app, None)
     app._checkpoint = Mock()
     app._sync_back_handler = Mock()
     app._review_wait_handle = None

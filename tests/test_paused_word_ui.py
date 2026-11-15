@@ -15,6 +15,7 @@ from support.paused_word_questions_support import KINDS
 from support.word_context_memory_support import NOW
 from support.paused_word_questions_support import evidence
 from support.word_context_memory_support import word_question
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.domain import Question, StudyStore, word_romaji_unit_plan
 
@@ -71,9 +72,9 @@ def test_sole_disabled_word_shows_pause_then_restores_widgets_without_new_review
     if state is DRAFT:
         assert app.word_answer == app.word_answer_label.text == "か"
     else:
-        assert app.answered_text == "かき"
-        assert app._answer_submitted_at == state["submitted_at_utc"]
-        assert app._answer_duration_ms == 2500
+        assert kana_support.answered_text(app) == "かき"
+        assert kana_support.answer_submitted_at(app) == state["submitted_at_utc"]
+        assert kana_support.answer_duration_ms(app) == 2500
     assert evidence(app.store) == before
     app.alert.assert_not_called()
 
@@ -129,8 +130,8 @@ def test_reverse_word_lane_recovers_exact_parts_and_plan_after_other_word(paused
     assert app.word_romaji_parts == parts and app.word_romaji_plan == plan
     assert app.store.load_session_progress()["state"]["word_romaji_parts"] == parts
     if feedback:
-        assert app.answered_text == "kaki"
-        assert app._answer_submitted_at == FEEDBACK["submitted_at_utc"]
+        assert kana_support.answered_text(app) == "kaki"
+        assert kana_support.answer_submitted_at(app) == FEEDBACK["submitted_at_utc"]
     else:
         assert app.word_romaji_answer_label.text == "ka"
     assert evidence(app.store) == before
@@ -166,7 +167,7 @@ def test_rating_other_question_restores_parked_word_with_screen_checkpoint(pause
     if state is DRAFT:
         assert app.word_answer == app.word_answer_label.text == saved["word_answer"] == "か"
     else:
-        assert app.answered_text == saved["answered_text"] == "かき"
+        assert kana_support.answered_text(app) == saved["answered_text"] == "かき"
         assert saved["feedback_pending"]
         assert saved["submitted_at_utc"] == state["submitted_at_utc"]
     assert evidence(app.store) == before

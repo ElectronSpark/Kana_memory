@@ -10,6 +10,7 @@ from support.live_kind_preferences_ui_support import configure
 from support.live_kind_preferences_ui_support import evidence
 from support.live_kind_preferences_ui_support import preferences
 from support.app_fixtures import question_app, setup_app, kana_route_handoff
+from support import kana_support
 from kanamemory import domain
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
@@ -78,7 +79,7 @@ def test_reenable_preserves_survivor_draft_or_feedback_and_restores_only_saved_s
             assert app.question_index == survivor_index
             assert app.page == ("feedback" if feedback else "question")
             assert app.romaji_answer == state["romaji_answer"]
-            assert app.answered_text == ("a" if feedback else None)
+            assert kana_support.answered_text(app) == ("a" if feedback else None)
             assert_one_saved_repeat(store, repeat)
             assert evidence(store) == unchanged
         app.show_ink_page.assert_not_called()

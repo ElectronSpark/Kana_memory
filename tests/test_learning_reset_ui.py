@@ -20,6 +20,7 @@ from kanamemory.navigation import PageState
 
 
 from support.learning_reset_ui_support import CONTENT, reset_app, saved_tables, retained_state
+from support import kana_support
 
 
 def test_settings_exposes_delete_action_without_deleting_until_confirmed(reset_app):
@@ -101,7 +102,7 @@ def test_success_retires_session_views_and_audio_but_retains_preferences_and_res
     asyncio.run(app.delete_learning_data())
     assert app.session_id is None and app.questions == [] and app.question is None
     assert app.question_index == app.session_right == 0
-    assert app._assisted_attempts == app._answered_attempts == set()
+    assert kana_support.assisted_attempts(app) == kana_support.answered_attempts(app) == set()
     assert app.strokes == [] and app._active_stroke is None
     assert app._preview_pending is None and app._practice_context is False
     assert app._practice_start_token is app._practice_start_task is None

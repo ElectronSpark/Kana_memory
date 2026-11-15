@@ -14,19 +14,20 @@ from kanamemory.app import KanaMemory
 from kanamemory.content import ContentRepository
 from kanamemory.kana_links import ContentText, KanaLinkIndex
 from kanamemory.navigation import BackStack, PageState
+from support import kana_support
 
 
 KANA = {"id": "kana-304b", "hiragana": "か", "katakana": "カ", "romaji": "ka", "category": "basic"}
 
 
 def state():
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page="kana", _view_key=("show_kana", None), _render_key=None,
-        session_id=None, question_index=0, answer_revealed=False,
-        _answered_attempts=set(), _assisted_attempts=set(), back_stack=BackStack(),
+        session_id=None, question_index=0, back_stack=BackStack(),
         question_notice=SimpleNamespace(text=""), platform=Mock(), repo=Mock(),
         store=Mock(), show_kana_detail=Mock(), _preview_link=Mock(), _checkpoint=Mock(),
-    )
+    ),
+        answer_revealed=False, answered_attempts=set(), assisted_attempts=set())
     app.repo.get_kana.return_value = KANA
     for method in ("_attempt_key", "_content_page_key", "_mark_lookup_assisted", "open_table_kana", "open_content_kana"):
         setattr(app, method, MethodType(getattr(KanaMemory, method), app))
@@ -39,7 +40,7 @@ def test_table_opens_detail_immediately_without_preview_or_review():
     app.show_kana_detail.assert_called_once_with(KANA["id"])
     app._preview_link.assert_not_called()
     app.platform.preview_index.assert_not_called()
-    assert app.store.mock_calls == [] and not app._assisted_attempts
+    assert app.store.mock_calls == [] and not kana_support.assisted_attempts(app)
 
 
 @pytest.mark.parametrize("self_location", ["_view_key", "_render_key"])
@@ -57,7 +58,7 @@ def test_unknown_table_id_cannot_reveal_or_navigate_a_pending_question():
     app.page, app.session_id = "question", "session-1"
     app.repo.get_kana.return_value = None
     app.open_table_kana("missing")
-    assert not app._assisted_attempts and not app.answer_revealed
+    assert not kana_support.assisted_attempts(app) and not kana_support.answer_revealed(app)
     app.show_kana_detail.assert_not_called()
     assert app.store.mock_calls == []
 
@@ -70,7 +71,7 @@ def test_direct_table_lookup_marks_suspended_attempt_before_capturing_detail():
         {"session_id": "session-1", "question_index": 0, "answer_revealed": False},
     ))
     def navigate(kana_id):
-        assert app.answer_revealed and app._assisted_attempts == {("session-1", 0)}
+        assert kana_support.answer_revealed(app) and kana_support.assisted_attempts(app) == {("session-1", 0)}
     app.show_kana_detail.side_effect = navigate
     app.open_table_kana(KANA["id"])
     app.show_kana_detail.assert_called_once_with(KANA["id"])
@@ -81,13 +82,13 @@ def test_direct_table_lookup_marks_suspended_attempt_before_capturing_detail():
 def test_completed_attempt_is_not_reclassified_by_later_table_lookup():
     app = state()
     app.session_id = "session-1"
-    app._answered_attempts.add(("session-1", 0))
+    kana_support.answered_attempts(app).add(("session-1", 0))
     app.back_stack.pages.append(PageState(
         ("show_question", None), "question", "练习", object(),
         {"session_id": "session-1", "question_index": 0},
     ))
     app.open_table_kana(KANA["id"])
-    assert not app._assisted_attempts and not app.answer_revealed
+    assert not kana_support.assisted_attempts(app) and not kana_support.answer_revealed(app)
     app.show_kana_detail.assert_called_once_with(KANA["id"])
 
 

@@ -15,6 +15,7 @@ from kanamemory.kana_links import ContentText, KanaLinkIndex
 from kanamemory.navigation import BackStack, PageState
 from kanamemory.pitch_display import PITCH_DISPLAY_SETTING
 from support.fake_ui import View
+from support import kana_support
 
 
 KANA = {"id": "ka", "hiragana": "か", "katakana": "カ", "romaji": "ka", "category": "seion"}
@@ -23,16 +24,16 @@ SOURCE = {"id": "jmdict:1", "title": "JMdict entry 1", "license": "CC-BY-SA-4.0"
 
 
 def harness(*, page="words", key=("show_words", None)):
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page=page, _view_key=key, _render_key=None, _page_token=5,
         _preview_pending=None, session_id=None, question_index=0,
-        _assisted_attempts=set(), _answered_attempts=set(), answer_revealed=False,
         question_notice=SimpleNamespace(text=""), back_stack=BackStack(),
         platform=Mock(), repo=Mock(), store=Mock(), alert=Mock(),
         show_kana_detail=Mock(), show_word_detail=Mock(), show_source=Mock(),
         source_map={SOURCE["id"]: SOURCE}, tasks=[], _checkpoint=Mock(), refresh_home_actions=Mock(),
         _show_practice_preview=Mock(),
-    )
+    ),
+        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False)
     app.back_stack.pages.append(PageState(("show_home", None), "home", "Home", object()))
     app.platform.preview_index = AsyncMock(return_value=False)
     app.repo.get_kana.return_value = KANA
@@ -149,7 +150,7 @@ def test_abandoned_nonpractice_preview_task_never_shows_or_marks_assistance():
         app._page_token += 1
         await asyncio.gather(*app.tasks)
         app.platform.preview_index.assert_not_awaited()
-        assert not app._assisted_attempts and not app.answer_revealed
+        assert not kana_support.assisted_attempts(app) and not kana_support.answer_revealed(app)
         assert app._preview_pending is None
     asyncio.run(run())
 
@@ -193,8 +194,8 @@ def test_inline_learning_summary_marks_assistance_before_it_is_shown(kind, page)
         "word_question": "word_meaning_kana", "ink_question": "kana_handwriting"}[page])
 
     def show_inline(*args, **kwargs):
-        assert app._assisted_attempts == {("session-1", 0)}
-        assert app.answer_revealed
+        assert kana_support.assisted_attempts(app) == {("session-1", 0)}
+        assert kana_support.answer_revealed(app)
         assert type(args[2]) is str
 
     app._show_practice_preview.side_effect = show_inline
@@ -211,7 +212,7 @@ def test_inline_learning_summary_marks_assistance_before_it_is_shown(kind, page)
 def test_practice_external_reference_uses_inline_explicit_action():
     app = harness(page="feedback", key=("check_answer", None))
     app.session_id = "session-1"
-    app._answered_attempts.add(app._attempt_key())
+    kana_support.answered_attempts(app).add(app._attempt_key())
     url = "https://example.org/entry/1"
     app.open_url(url, title="例句出处", summary="原始例句与署名")
     app._show_practice_preview.assert_called_once()
@@ -220,7 +221,7 @@ def test_practice_external_reference_uses_inline_explicit_action():
     assert url not in args[2]
     app.platform.open_url.assert_not_called()
     app.platform.preview_index.assert_not_called()
-    assert not app.tasks and not app._assisted_attempts
+    assert not app.tasks and not kana_support.assisted_attempts(app)
     args[3]()
     app.platform.open_url.assert_called_once_with(url)
 

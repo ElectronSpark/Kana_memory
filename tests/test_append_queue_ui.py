@@ -20,6 +20,7 @@ from kanamemory.word_keyboard import normalize_word_question_snapshot
 
 
 from support.append_queue_ui_support import question
+from support import kana_support
 
 
 @pytest.mark.parametrize("kind,feedback", [
@@ -64,11 +65,11 @@ def test_append_restores_original_draft_feedback_audio_and_question_settings(que
         assert saved[0] == json.loads(json.dumps(original.to_dict(), ensure_ascii=False))
         assert app.question_index == 0 and app.session_right == 0
         assert app.script == "hiragana" and not app.research_enabled and not app.use_full_keyboard
-        assert app.question_audio_ok
+        assert kana_support.question_audio_ok(app)
         assert all(view.name not in PRACTICE_PAGES for view in app.back_stack.pages)
         assert store.stats()["total_reviews"] == 0
         if feedback:
-            assert app.page == "feedback" and app.answered_text == original.answer
+            assert app.page == "feedback" and kana_support.answered_text(app) == original.answer
         elif kind == "kana_romaji":
             assert app.romaji_input.value == app.romaji_answer == "partial"
         elif kind == "word_kana":

@@ -15,6 +15,7 @@ from support.app_fixtures import question_app, setup_app
 
 
 from support.answer_option_ui_support import RECORDS, WORD, preview_app, render, control, assert_compact_target, assert_answer_block
+from support import kana_support
 
 
 @pytest.mark.parametrize("kind", ["kana_choice", "romaji_kana"])
@@ -26,9 +27,9 @@ def test_every_choice_has_correct_answer_summary_and_details_without_popup(previ
     answer = values[0 if correct else 1]
     next(v for v in app.body.children if v.text == answer).on_press(None)
     assert app.page == "feedback" and app.question is question and app.question_index == 0
-    assert app.answered_text == answer and app.answer_correct is correct
-    assert app._attempt_key() in app._answered_attempts
-    assert not app.answer_revealed and not app._assisted_attempts
+    assert kana_support.answered_text(app) == answer and kana_support.answer_correct(app) is correct
+    assert app._attempt_key() in kana_support.answered_attempts(app)
+    assert not kana_support.answer_revealed(app) and not kana_support.assisted_attempts(app)
     expected = RECORDS[2 if compound else 0]
     message = assert_compact_target(app, question)
     assert (expected["hiragana"] in message) is (kind == "kana_choice")
@@ -49,7 +50,7 @@ def test_every_choice_has_correct_answer_summary_and_details_without_popup(previ
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == expected["id"]
     app.go_back()
-    assert app.page == "feedback" and app.answered_text == answer and app.answer_correct is correct
+    assert app.page == "feedback" and kana_support.answered_text(app) == answer and kana_support.answer_correct(app) is correct
     assert ("记住了" in text_of(app.content_slot)) is correct
 
 
@@ -65,7 +66,7 @@ def test_detail_back_and_reopen_keep_card_answer_and_success_ratings(preview_app
     app.go_back()
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
     assert app.practice_preview_slot is slot
-    assert app.answered_text == "ka" and app.answer_correct and not app.answer_revealed
+    assert kana_support.answered_text(app) == "ka" and kana_support.answer_correct(app) and not kana_support.answer_revealed(app)
     assert app.question_index == 0 and app.session_right == 0
     detail.on_press(None)
     assert app.page == "kana_detail"
@@ -74,7 +75,7 @@ def test_detail_back_and_reopen_keep_card_answer_and_success_ratings(preview_app
     # Feedback replaces the question. Back must never expose an unanswered
     # copy; the focused-flow confirmation policy is covered separately.
     assert all(state.name != "question" for state in app.back_stack.pages)
-    assert app.page == "feedback" and not app.answer_revealed
+    assert app.page == "feedback" and not kana_support.answer_revealed(app)
 
 
 def test_automatic_result_has_no_collapse_and_removed_card_invalidates_detail(preview_app):
@@ -87,7 +88,7 @@ def test_automatic_result_has_no_collapse_and_removed_card_invalidates_detail(pr
     assert not app.practice_preview_slot.children
     detail.on_press(None)
     assert app.page == "feedback" and not hasattr(app, "opened_kana")
-    assert app.answer_correct and "记住了" in text_of(app.body)
+    assert kana_support.answer_correct(app) and "记住了" in text_of(app.body)
 
 
 @pytest.mark.parametrize("change", ["page", "question", "attempt", "session", "slot"])
@@ -119,7 +120,7 @@ def test_double_tap_and_old_question_button_cannot_submit_another_answer(preview
     old_button.on_press(None)
     old_card = app.practice_preview_slot.children[0]
     app.choose_practice_answer(values[1], old_question)
-    assert app.answered_text == values[0] and app.practice_preview_slot.children == [old_card]
+    assert kana_support.answered_text(app) == values[0] and app.practice_preview_slot.children == [old_card]
     detail = control(app, "详细")
     render(app)
     old_button.on_press(None)
@@ -141,26 +142,28 @@ def test_replacing_lookup_card_makes_only_current_detail_button_active(preview_a
     control(app, "详细").on_press(None)
     assert app.opened_kana == "na"
     app.platform.preview_index.assert_not_called()
-    assert app.answer_correct and not app.answer_revealed
+    assert kana_support.answer_correct(app) and not kana_support.answer_revealed(app)
 
 
 def test_unheard_handwriting_cannot_reveal_summary_or_submit(preview_app):
     app = preview_app
     question, values = render(app, "kana_handwriting")
     app.page, app.free_ink = "ink_question", False
-    app.question_audio_ok = False
+    kana_support.set_question_audio_ok(app, False)
     app.confirm_ink(values[0], question)
     app.platform.preview_index.assert_not_called()
-    assert not app._answered_attempts
+    assert not kana_support.answered_attempts(app)
     assert app.page == "ink_question"
 
 
 def test_wrong_handwriting_confirmation_has_correct_answer_inline_summary(preview_app):
     app = preview_app
     question, values = render(app, "kana_handwriting")
-    app.page, app.free_ink, app.question_audio_ok = "ink_question", False, True
+    app.page = "ink_question"
+    app.free_ink = False
+    kana_support.set_question_audio_ok(app, True)
     app.confirm_ink(values[1], question)
-    assert app.page == "feedback" and app.answered_text == "な"
+    assert app.page == "feedback" and kana_support.answered_text(app) == "な"
     message = assert_compact_target(app, question)
     assert "か" not in message and "な" not in message
     assert_answer_block(app, "か", "な", single=False)
@@ -168,16 +171,18 @@ def test_wrong_handwriting_confirmation_has_correct_answer_inline_summary(previe
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == "ka"
     app.go_back()
-    assert app.page == "feedback" and app.answered_text == "な" and not app.answer_correct
+    assert app.page == "feedback" and kana_support.answered_text(app) == "な" and not kana_support.answer_correct(app)
     app.platform.preview_index.assert_not_called()
 
 
 def test_unknown_handwriting_still_explains_only_correct_answer(preview_app):
     app = preview_app
     question, _ = render(app, "kana_handwriting")
-    app.page, app.free_ink, app.question_audio_ok = "ink_question", False, True
+    app.page = "ink_question"
+    app.free_ink = False
+    kana_support.set_question_audio_ok(app, True)
     app.confirm_ink("漢字", question)
-    assert app.page == "feedback" and not app.answer_correct
+    assert app.page == "feedback" and not kana_support.answer_correct(app)
     message = assert_compact_target(app, question)
     assert "か" not in message
     assert "漢字" not in message and "未收录" not in message
@@ -185,7 +190,7 @@ def test_unknown_handwriting_still_explains_only_correct_answer(preview_app):
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == "ka"
     app.go_back()
-    assert app.page == "feedback" and not app.answer_correct and app.answered_text == "漢字"
+    assert app.page == "feedback" and not kana_support.answer_correct(app) and kana_support.answered_text(app) == "漢字"
     assert "记住了" not in text_of(app.content_slot)
     app.platform.preview_index.assert_not_called()
     app.alert.assert_not_called()
@@ -205,8 +210,8 @@ def test_isolated_homophone_choice_is_correct_and_keeps_target_details(preview_a
         metadata={"kana_symbol": right["hiragana"], "romaji": "ji", "content_version": "test"})]
     app.show_question()
     app.choose_practice_answer(other["hiragana"], app.question)
-    assert app.page == "feedback" and app.answer_correct
-    assert app.answered_text == other["hiragana"]
+    assert app.page == "feedback" and kana_support.answer_correct(app)
+    assert kana_support.answered_text(app) == other["hiragana"]
     message = assert_compact_target(app, app.question)
     assert right["hiragana"] not in message
     assert other["hiragana"] not in message and "同音还有" not in message
@@ -215,7 +220,7 @@ def test_isolated_homophone_choice_is_correct_and_keeps_target_details(preview_a
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == target
     app.go_back()
-    assert app.page == "feedback" and app.answered_text == other["hiragana"] and app.answer_correct
+    assert app.page == "feedback" and kana_support.answered_text(app) == other["hiragana"] and kana_support.answer_correct(app)
     app.repo.kana_list.assert_not_called()
     app.platform.preview_index.assert_not_called()
 
@@ -225,9 +230,10 @@ def test_show_answer_has_question_details_and_only_again_rating(preview_app, kin
     app = preview_app
     render(app, kind)
     if kind == "kana_handwriting":
-        app.page, app.question_audio_ok = "ink_question", True
+        app.page = "ink_question"
+        kana_support.set_question_audio_ok(app, True)
     app.reveal_answer()
-    assert app.page == "feedback" and app.answer_revealed
+    assert app.page == "feedback" and kana_support.answer_revealed(app)
     message = assert_compact_target(app, app.question)
     assert ("か" in message) is (kind in {"kana_choice", "kana_romaji"})
     assert_answer_block(app, app.question.answer, "", single=True)
@@ -237,8 +243,8 @@ def test_show_answer_has_question_details_and_only_again_rating(preview_app, kin
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == "ka"
     app.go_back()
-    assert app.page == "feedback" and app.answer_revealed and not app.answer_correct
-    assert app.answered_text == ""
+    assert app.page == "feedback" and kana_support.answer_revealed(app) and not kana_support.answer_correct(app)
+    assert kana_support.answered_text(app) == ""
     app.platform.preview_index.assert_not_called()
     app.store.record_review.assert_not_called()
 
@@ -250,14 +256,14 @@ def test_romaji_typing_always_opens_target_details_without_changing_result(previ
     app.romaji_input.value = answer
     app.romaji_input.on_change(app.romaji_input)
     app.romaji_input.on_confirm(app.romaji_input)
-    assert app.page == "feedback" and app.answer_correct is correct
+    assert app.page == "feedback" and kana_support.answer_correct(app) is correct
     message = assert_compact_target(app, app.question)
     assert "か" in message and "な" not in message
     assert_answer_block(app, app.question.answer, answer, single=correct)
     control(app, "详细").on_press(None)
     assert app.page == "kana_detail" and app.opened_kana == "ka"
     app.go_back()
-    assert app.page == "feedback" and app.answered_text == answer and app.answer_correct is correct
+    assert app.page == "feedback" and kana_support.answered_text(app) == answer and kana_support.answer_correct(app) is correct
     assert ("记住了" in text_of(app.content_slot)) is correct
     app.platform.preview_index.assert_not_called()
     app.store.record_review.assert_not_called()
@@ -271,7 +277,7 @@ def test_word_feedback_always_has_target_word_details_without_repeated_card(prev
     pitch = Mock(return_value=View(text="调号 [0]"))
     monkeypatch.setattr(KanaMemory, "_pitch_slot", pitch)
     app._show_practice_preview = Mock(side_effect=AssertionError("Result must not use the generic lookup card"))
-    app.question_audio_ok = True
+    kana_support.set_question_audio_ok(app, True)
     if answer:
         for kana in answer:
             app.append_word_key(kana)
@@ -279,7 +285,7 @@ def test_word_feedback_always_has_target_word_details_without_repeated_card(prev
     else:
         app.reveal_answer()
     correct = answer == WORD["reading"]
-    assert app.page == "feedback" and app.answer_correct is correct
+    assert app.page == "feedback" and kana_support.answer_correct(app) is correct
     message = assert_compact_target(app, app.question)
     assert WORD["form"] in message and "kana" in message and WORD["gloss"] in message
     assert "调号 [0]" in message
@@ -291,10 +297,10 @@ def test_word_feedback_always_has_target_word_details_without_repeated_card(prev
     control(app, "详细").on_press(None)
     assert app.page == "word_detail" and app.opened_word == WORD["id"]
     app.go_back()
-    assert app.page == "feedback" and app.answered_text == answer and app.answer_correct is correct
+    assert app.page == "feedback" and kana_support.answered_text(app) == answer and kana_support.answer_correct(app) is correct
     assert "保存并继续" in text_of(app.content_slot)
     assert "记住了" not in text_of(app.content_slot)
-    assert app.answer_revealed is (not answer)
+    assert kana_support.answer_revealed(app) is (not answer)
     app.platform.preview_index.assert_not_called()
     app.store.record_review.assert_not_called()
 
@@ -306,9 +312,10 @@ def test_missing_target_record_keeps_answer_and_missing_notice_without_dead_deta
     app.repo.get_kana.side_effect = lambda kid: None
     app.repo.get_word.side_effect = lambda wid: None
     if kind == "kana_handwriting":
-        app.page, app.question_audio_ok = "ink_question", True
+        app.page = "ink_question"
+        kana_support.set_question_audio_ok(app, True)
     app.reveal_answer()
-    assert app.page == "feedback" and not app.answer_correct
+    assert app.page == "feedback" and not kana_support.answer_correct(app)
     assert "资料尚未收录" in text_of(app.practice_preview_slot)
     assert not [v for v in descendants(app.practice_preview_slot) if v.on_press]
     assert_answer_block(app, app.question.answer, "", single=True)
@@ -342,8 +349,8 @@ def test_resumed_feedback_rebuilds_inline_card_without_new_review(preview_app, t
         app._checkpoint = MethodType(KanaMemory._checkpoint, app)
         app.resume_practice = MethodType(KanaMemory.resume_practice, app)
         app.resume_practice()
-        assert app.page == "feedback" and app.answer_correct is (outcome == "correct")
-        assert app.answer_revealed is (outcome == "revealed")
+        assert app.page == "feedback" and kana_support.answer_correct(app) is (outcome == "correct")
+        assert kana_support.answer_revealed(app) is (outcome == "revealed")
         message = assert_compact_target(app, app.question)
         assert ("か" in message) is (kind != "word_meaning_kana")
         assert (WORD["form"] in message) is (kind == "word_meaning_kana")

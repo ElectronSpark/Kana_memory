@@ -17,6 +17,7 @@ from support.review_wait_ui_support import clock
 from support.review_wait_ui_support import start_wait
 from support.review_wait_ui_support import waiting_app
 from support.text_layout_support import leaf
+from support import kana_support
 from kanamemory import app as app_module
 from kanamemory.app import KanaMemory
 from kanamemory.navigation import PageState
@@ -82,7 +83,7 @@ def test_answer_hint_precedes_answering_area_and_is_a_secondary_control(actions_
         assert control(app, "识别笔迹") is app.recognize_button
         app.recognize_button.on_press(None)
         app.recognize_ink.assert_called_once_with(None)
-        assert not app.answer_revealed
+        assert not kana_support.answer_revealed(app)
     else:
         answer_area = control(app, app.question.options[0])
     assert nodes.index(hint) < nodes.index(answer_area)
@@ -123,11 +124,11 @@ def test_android_hint_has_usable_width_with_real_pack_layout(monkeypatch, scale,
 def test_moved_hint_still_records_assistance_and_offers_only_again(actions_app, kind):
     app = actions_app
     render(app, kind)
-    app.question_audio_ok = True
+    kana_support.set_question_audio_ok(app, True)
     control(app, "显示答案").on_press(None)
-    assert app.page == "feedback" and app.answer_revealed
-    assert not app.answer_correct and app.answered_text == ""
-    assert app._attempt_key() in app._assisted_attempts
+    assert app.page == "feedback" and kana_support.answer_revealed(app)
+    assert not kana_support.answer_correct(app) and kana_support.answered_text(app) == ""
+    assert app._attempt_key() in kana_support.assisted_attempts(app)
     assert control(app, "保存并继续" if kind in {"word_meaning_kana", "word_kana"} else "再学一次").enabled
     for rating in ("有些困难", "记住了", "很轻松"):
         assert rating not in text_of(app.body)
@@ -144,8 +145,8 @@ def test_retired_hint_cannot_reveal_a_new_question(actions_app, kind):
     before, page = app.body, app.page
     old_hint.on_press(None)
     assert app.body is before and app.page == page
-    assert not app.answer_revealed and not app._assisted_attempts
-    assert not app._answered_attempts
+    assert not kana_support.answer_revealed(app) and not kana_support.assisted_attempts(app)
+    assert not kana_support.answered_attempts(app)
     app.store.record_review.assert_not_called()
 
 
@@ -160,8 +161,8 @@ def test_submit_remains_distinct_and_grades_the_entered_answer(actions_app, kind
         for symbol in app.question.answer:
             app.append_word_key(symbol)
     control(app, "提交答案").on_press(None)
-    assert app.page == "feedback" and app.answer_correct
-    assert not app.answer_revealed and not app._assisted_attempts
+    assert app.page == "feedback" and kana_support.answer_correct(app)
+    assert not kana_support.answer_revealed(app) and not kana_support.assisted_attempts(app)
     assert control(app, "保存并继续" if kind == "word_meaning_kana" else "记住了").enabled
 
 
