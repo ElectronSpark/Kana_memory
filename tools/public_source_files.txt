@@ -231,12 +231,17 @@ app/src/kanamemory/intro_batch_runtime.py
 app/src/kanamemory/kana_attempt_runtime.py
 app/src/kanamemory/kana_session_runtime.py
 app/src/kanamemory/kana_rating_runtime.py
+app/src/kanamemory/kana_runtime.py
 app/src/kanamemory/kana_line/__init__.py
 app/src/kanamemory/kana_line/attempt.py
 app/src/kanamemory/kana_line/fields.py
 app/src/kanamemory/kana_line/session.py
 app/src/kanamemory/kana_line/rating_model.py
 app/src/kanamemory/kana_line/rating.py
+app/src/kanamemory/kana_line/model.py
+app/src/kanamemory/kana_line/display.py
+app/src/kanamemory/kana_line/ui/__init__.py
+app/src/kanamemory/kana_line/ui/line_pages.py
 app/src/kanamemory/intro_batch_state.py
 app/src/kanamemory/intro_batch_ui.py
 app/src/kanamemory/kana_ability_bridge.py
@@ -1015,6 +1020,8 @@ tests/test_course_teaching.py
 tests/test_kana_attempt.py
 tests/test_kana_session.py
 tests/test_kana_rating.py
+tests/test_kana_next.py
+tests/test_kana_line_pages.py
 tests/test_course_guide_service.py
 tests/test_course_batch_pages.py
 tests/test_course_decide.py

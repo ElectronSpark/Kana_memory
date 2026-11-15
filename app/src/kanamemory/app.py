@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from math import ceil
 from pathlib import Path
 import secrets
 import sys
@@ -67,9 +66,8 @@ from .ai_ui import AI_PRACTICE_PAGES
 from .tutor_ui import TUTOR_PAGES
 from .retention_session_ui import DIAGNOSTIC_PAGES, RUNNING_PAGES as DIAGNOSTIC_RUNNING
 from .learning_store import LearningStore
-from .study_path_runtime import StudyPathRuntimeMixin, current_route_next
+from .study_path_runtime import StudyPathRuntimeMixin
 from .home_counts import practice_header, record_due_text
-from .kana_learning_intro import should_introduce, intro_wait_until
 
 if current_platform == "android":
     from .platform_android import create_platform
@@ -86,11 +84,13 @@ DETAIL_PAGES = {"kana_detail", "kana_readings", "word_detail", "word_references"
                 "study_path", "study_stage", "study_unit", "study_section", "study_path_add", "study_path_notes",
                 "ai_center", "ai_form", "ai_target_picker", "ai_inbox", "ai_proposal", "ai_question_preview", "ai_candidate", "ai_service", "material_tasks", "material_task", "material_verification", "material_study", "material_enrollment", "material_selection", "material_share_inbox"}
 REPORT_PAGES = {"report_editor", "report_list", "report_detail", "feedback_analysis", "feedback_batch"}
-QUESTION_PAGES = {"question", "word_question", "ink_question"}
+from .kana_line.model import QUESTION_PAGES
 # WP5: short wait page while a worker assembles the kana queue.
 from .next_step.display import KANA_ASSEMBLY_PAGE
 from . import kana_attempt_runtime as kana_attempt
 from . import kana_rating_runtime as kana_rating
+from . import kana_runtime
+from .kana_line import display as kana_display
 from . import kana_session_runtime as kana_session
 from .kana_line import attempt as attempt_rules
 # Header subtitle per page (review 2026-11-08 section 5); "" hides it.
@@ -193,15 +193,7 @@ def error_message(error):
 
 def review_wait_status(due, now=None, checked=False):
     """Keep sub-minute waits visible instead of rounding an ETA down to a minute."""
-    now = now or app_clock.local_now(due.tzinfo)
-    remaining = max(0, ceil((due - now).total_seconds()))
-    if not remaining:
-        return "已到期，可以继续复习。"
-    minutes, seconds = divmod(remaining, 60)
-    hours, minutes = divmod(minutes, 60)
-    duration = ((f"{hours} 小时 " if hours else "")
-                + (f"{minutes} 分 " if hours or minutes else "") + f"{seconds} 秒")
-    return ("已检查：尚未到期，还需 " if checked else "距离下一题还有 ") + duration + "。"
+    return kana_display.wait_status(due, now or app_clock.local_now(due.tzinfo), checked)
 
 
 
@@ -3453,194 +3445,13 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     @page_view(replace=True)
     def show_question(self, *, _first_teaching=False, _first_teaching_targets=None, _prepared=None):
-        from .new_dispatch import study_path_available
-        lazy = KanaMemory._lazy_practice_questions(self)
-        # _prepared (PreparedKana, same action): skip the reconcile/prepare the
-        # caller just did, only while its proof is still current.
-        if _first_teaching:
-            _prepared = None
-        pending = ((self.store.load_session_progress(lazy_questions=True) if lazy else
-                    self.store.load_session_progress()) if kana_session.session(self).get("session_id") else None)
-        waiting_until, prepared = None, None
-        if (pending is None and kana_session.session(self).get("session_id")
-                and kana_session.question_index(self) == 0 and kana_session.session_right(self) == 0):
-            # A just-started queue has no checkpoint yet. Its frozen snapshot
-            # owns the questions: start_session may stamp metadata (the kana
-            # ability route) that the builder's in-memory copies lack.
-            frozen = self.store.get_session_questions(kana_session.session_id(self), lazy=lazy)
-            if len(frozen) == len(kana_session.questions(self)):
-                kana_session.set_questions(self, frozen)
-            pending = KanaMemory._join_collecting_round(self, lazy)
-        if isinstance(pending, dict) and pending["session_id"] == kana_session.session_id(self):
-            reused = KanaMemory._prepared_pending(self, _prepared)
-            if reused is None:
-                _prepared = None
-            pending = reused if reused is not None else KanaMemory._reconcile_practice_kinds(self, pending)
-            if pending is False:
-                return
-            if not pending.get("completed"):
-                if getattr(self.store, "practice_lane", "main") == "main":
-                    from .kana_dependency_repair import ensure_kana_prerequisites
-                    repaired = ensure_kana_prerequisites(self.repo, self.store,
-                        KanaMemory._queue_kinds(self, pending), lazy_questions=lazy,
-                        audio_available=bool(self.platform.tts_ready),
-                        handwriting_available=getattr(self, "model_state", None) == "ready")
-                    if repaired["added"]:
-                        pending = self.store.load_session_progress(lazy_questions=lazy)
-                if _first_teaching:
-                    prepared = self.store.prepare_next_question(kana_session.session_id(self),
-                        lazy_questions=lazy, fair_new=lazy, teaching_only=True,
-                        teaching_kinds=KanaMemory._queue_kinds(self, pending),
-                        teaching_targets=_first_teaching_targets)
-                if (prepared is None and _prepared is not None
-                        and _prepared.current(self.store, kana_session.session_id(self), KanaMemory._queue_kinds(self, pending))):
-                    # Nothing was written since continue prepared this head.
-                    prepared = _prepared.prepared
-                if prepared is None:
-                    prepared = (self.store.prepare_next_question(kana_session.session_id(self),
-                        lazy_questions=True, fair_new=True) if lazy else
-                        self.store.prepare_next_question(kana_session.session_id(self)))
-            if prepared is None:
-                kana_session.set_question_index(self, len(kana_session.questions(self)))
-            elif isinstance(prepared, dict):
-                kana_session.set_questions(self, prepared["questions"])
-                kana_session.set_question_index(self, prepared["question_index"])
-                kana_session.set_session_right(self, prepared["session_right"])
-                kana_attempt.set_assisted(self, attempt_rules.saved_assisted(kana_session.session_id(self), prepared["assisted_indices"]))
-                if prepared["state"].get("answer_revealed"):
-                    kana_attempt.assisted(self).add((kana_session.session_id(self), kana_session.question_index(self)))
-                waiting_until = prepared.get("waiting_until_utc")
-        from .practice_round import seal
-        seal(self.store)
-        if kana_session.question_index(self) >= len(kana_session.questions(self)):
-            from .practice_round import active as fixed_round
-            if (fixed_round(self.store) and study_path_available(self)
-                    and getattr(self.store, "practice_lane", "main") == "main"):
-                self.continue_study_path(_checkpoint_saved=True)
-                return
-            from .practice_round import mark_finished
-            mark_finished(self.store)
-            if KanaMemory._open_practice_deck(self):
-                return
-            item_count = len({getattr(q, "content_id", index) for index, q in enumerate(kana_session.questions(self))})
-            summary = self.store.get_session_summary(kana_session.session_id(self)) if kana_session.session(self).get("session_id") else None
-            answered = len(kana_session.questions(self))
-            extra = ""
-            if isinstance(summary, dict):
-                answered, item_count = summary["answered"], summary["content_count"]
-                if summary["skipped"]:
-                    extra = f"\n跳过 {summary['skipped']} 题（保留原有进度）"
-                if summary.get("practised"):
-                    from .arrangement.services.deck_presenter import practised_line
-                    extra += "\n" + practised_line(summary["practised"])
-            completion = (f"练习 {item_count} 个假名记忆项 · " if item_count else "") + f"完成 {answered} 题\n答对 {kana_session.session_right(self)} 题"
-            if getattr(self.store, "practice_lane", "main") == "word_romaji":
-                self.screen("session_done", "本组单词完成",
-                    ui.label(f"完成 {answered} 词 · 答对 {kana_session.session_right(self)} 词", size=24, bold=True),
-                    self.note("拼写记录已保存；符合条件的假名复习时间已调整。"),
-                    ui.button("再练一组单词", self.show_word_drill_setup, primary=True),
-                    ui.button("回到今日", self.show_home))
-                return
-            from .extra_practice_runtime import extra_button_rows, take_over
-            if take_over(self):
-                return
-            next_controls = (self._path_next_controls(*current_route_next(self.study_path_service()))
-                             if study_path_available(self) else [])
-            self.screen("session_done", "本批完成", ui.label(completion + extra, size=24, bold=True),
-                *next_controls, *extra_button_rows(self), ui.button("查看复习记录", self.show_progress),
-                ui.button("回到今日", self.show_home))
-            return
-        kana_session.set_question(self, kana_session.questions(self)[kana_session.question_index(self)])
-        kana_session.set_script(self, kana_session.question(self).script)
-        if isinstance(prepared, dict) and prepared.get('content_blocked'):
-            from .session_content import RETIRE, retired
-            old = next(q for q in kana_session.questions(self)[kana_session.question_index(self):] if retired(q))
-            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
-            self.screen('session_wait', '题目内容已更新',
-                self.note('原题和草稿已保存。更新后继续使用原有学习记录。'),
-                ui.button('使用更新后的题目', lambda w, sid=kana_session.session_id(self), rid=old.metadata[RETIRE]:
-                    self.replace_content_question(sid, rid), primary=True),
-                ui.button('练习设置', self.show_word_drill_setup if getattr(self.store, 'practice_lane', 'main') == 'word_romaji' else self.show_practice_setup),
-                ui.button('回到今日', self.show_home))
-            return
-        if isinstance(prepared, dict) and prepared.get("settings_blocked"):
-            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
-            self.screen("session_wait", "题型已暂停",
-                self.note("未完成的题目和草稿已保留。开启题型后可继续。"),
-                ui.button("练习设置", self.show_word_drill_setup
-                       if getattr(self.store, "practice_lane", "main") == "word_romaji"
-                       else self.show_practice_setup, primary=True),
-                ui.button("回到今日", self.show_home))
-            return
-        if isinstance(prepared, dict) and prepared.get("dependency_blocked"):
-            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
-            symbols, rule_controls = [], []
-            for identity in prepared.get("blocked_prerequisites", ()):
-                if identity.startswith("pronunciation:"):
-                    from .learning_content import get_learning_item
-                    rule = get_learning_item(identity)
-                    if rule:
-                        rule_controls.append(ui.button(rule["title"],
-                            lambda w, value=rule: self.enroll_learning(value), primary=True, multiline=True))
-                    continue
-                content_id, script = identity.removeprefix("kana:").rsplit(":", 1)
-                item = self.repo.get_kana(content_id)
-                if item and item.get(script):
-                    symbols.append(item[script])
-            self.screen("dependency_wait", "先学所需规则" if rule_controls else "先完成前置假名",
-                self.content_label(" · ".join(dict.fromkeys(symbols)), size=26, color=GREEN, text_role="study"),
-                *rule_controls,
-                ui.label("原题与进度已保留。" + ("先看规则讲解，再继续练习。" if rule_controls else "请检查这些假名是否已暂停，或相应题型是否可用。"), size=15, color=MUTED),
-                ui.button("检查并继续", self.resume_practice, primary=True),
-                ui.button("练习设置", self.show_practice_hub),
-                ui.button("回到今日", self.show_home))
-            return
-        started_answer = (isinstance(prepared, dict)
-                          and prepared["state"].get("page") in QUESTION_PAGES | {"feedback"})
-        if hasattr(self, "learning_store") and not waiting_until and not started_answer:
-            if should_introduce(self, kana_session.question(self)):
-                self.show_kana_introduction(kana_session.question(self))
-                return
-            intro_due = intro_wait_until(self.store, kana_session.question(self))
-            if intro_due and intro_due > app_clock.local_now(intro_due.tzinfo):
-                self.show_kana_intro_wait(intro_due)
-                return
-        config = kana_session.question(self).metadata.get("practice_config", {})
-        self.research_enabled = kana_session.question(self).metadata.get("research_content", config.get("include_research", False))
-        word_table = kana_session.question(self).metadata.get("word_table", config.get("word_table"))
-        if word_table in {"partial", "full"}:
-            self.use_full_keyboard = word_table == "full"
-        if waiting_until:
-            from .extra_practice_runtime import extra_button_rows
-            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
-            self._review_wait_until = app_clock.localize(datetime.fromisoformat(waiting_until))
-            due = self._review_wait_until.strftime("%H:%M:%S")
-            if self._review_wait_until.date() != app_clock.local_now().date():
-                due = self._review_wait_until.strftime("%m月%d日 %H:%M:%S")
-            self._review_wait_checked = False
-            self._review_wait_status = ui.label(review_wait_status(self._review_wait_until), size=20, bold=True, color=GREEN)
-            self._review_wait_button = ui.button("检查并继续复习", self.continue_spaced_practice, primary=True)
-            self.screen("session_wait", "本轮先歇一会儿",
-                self._review_wait_status,
-                ui.label(f"下一题可在 {due} 开始", size=15, color=MUTED),
-                self.note(f"已保存 {summarize_queue_availability(self.store, prepared).waiting_count} 道后续复习题，到期后自动继续。也可以先回到今日。"),
-                self._review_wait_button,
-                # Standalone course controllers have no route runtime.
-                *(self._path_next_controls(*current_route_next(self.study_path_service()), compact=True)
-                  if study_path_available(self) else []),
-                *extra_button_rows(self),
-                ui.button("回到今日", self.show_home))
-            # Start from ready work: a timer scheduled directly in an Android
-            # touch callback does not wake Toga's idle Python event loop.
-            self._review_wait_handle = self.loop.call_soon(KanaMemory._tick_review_wait, self, self._page_token)
-            return
-        if (kana_session.question(self).kind in WORD_PRACTICE_KINDS and started_answer
-                and not getattr(self, "_restoring_practice", False)):
-            # A parked word can become current after rating another question,
-            # without reopening the app. Use the same guarded restore path so
-            # rendering an empty input cannot overwrite its saved draft/feedback.
-            self.resume_practice(preserve_audio=True)
-            return
+        kana_runtime.perform_kana(self, KanaMemory, kana_runtime.decide_kana(
+            self, KanaMemory, first_teaching=_first_teaching, first_teaching_targets=_first_teaching_targets,
+            prepared=_prepared))
+
+    def _ask_question(self, prepared):
+        """The question at the place on its page: a fresh attempt, the notice line, the title, and the page of
+        its kind. ``prepared``: the head as the store prepared it, None for a queue without one."""
         kana_attempt.set_attempt(self, attempt_rules.fresh(
             kana_attempt.attempt(self), self._attempt_key(), kana_attempt.marks(self),
             heard=kana_session.question(self).kind in LISTENING_PRACTICE_KINDS, started=time.monotonic()))
