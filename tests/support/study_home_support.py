@@ -13,8 +13,8 @@ _tick_home_review) is armed on the handle the wait pages share
 app.study_path_can_continue, the records page record_course_due; the
 arrangement and its launch notes are kept in app._study_arrangement_value;
 three names are looked up when they are used: home_counts and
-summarize_queue_availability in kanamemory.home.service (the latter also in
-study_path_runtime, for 继续学习's dispatch), and other_route_rows in
+summarize_queue_availability in kanamemory.home.service (the latter also for
+继续学习's dispatch, through support.continue_support), and other_route_rows in
 kanamemory.home.service, study_path_ui and study_path_display. That knowledge
 lives only here: when step BC moved the home into the service and the page
 module, the inside of this file changed and the tests that use it did not.
@@ -28,7 +28,7 @@ support.fake_ui and kanamemory modules.
 """
 from types import MethodType
 
-from kanamemory import study_path_display, study_path_runtime, study_path_ui
+from kanamemory import study_path_display, study_path_ui
 from kanamemory import ui_components as component_ui
 from kanamemory.app import KanaMemory
 from kanamemory.home import service as overview
@@ -241,10 +241,12 @@ def patch_home_counts(monkeypatch, replacement):
 def patch_kana_availability(monkeypatch, value):
     """The main kana queue summary (summarize_queue_availability) answers ``value`` for every caller it has:
     the home and can_continue (the home service) and 继续学习's dispatch (study_path_runtime)."""
+    from support.continue_support import patch_dispatch_availability
+
     def answer(*args, **kwargs):
         return value
-    for module in (overview, study_path_runtime):
-        monkeypatch.setattr(module, "summarize_queue_availability", answer)
+    monkeypatch.setattr(overview, "summarize_queue_availability", answer)
+    patch_dispatch_availability(monkeypatch, answer)
 
 
 def patch_other_routes(monkeypatch, rows):

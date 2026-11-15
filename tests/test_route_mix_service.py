@@ -26,6 +26,7 @@ from kanamemory.route_mix.store import DIRECTORY, FILE_NAME, MAX_BYTES, TEMPORAR
 from kanamemory.study_path import StudyPathService
 from kanamemory.study_path_runtime import StudyPathRuntimeMixin
 
+from support import continue_support
 from support.study_path_service_support import BASE, MORE, lesson, setup_path  # noqa: F401 - fixture
 
 
@@ -455,8 +456,9 @@ def mix_app(setup_path, monkeypatch):
         {"id": "unit:w", "title": "unit:w", "sections": [section("w1", [learning(W1, "word")], "unit:w"),
                                                          section("w2", [learning(W2, "word")], "unit:w")]}]}]}
     monkeypatch.setattr(study_path_catalog, "build_study_path", lambda *a, **kw: deepcopy(path))
-    app = SimpleNamespace(repo=repo, store=store, learning_store=LearningStore(store), _background_assembly=True,
+    app = SimpleNamespace(repo=repo, store=store, learning_store=LearningStore(store),
                           page="home", refreshed=[], read=[])
+    continue_support.background_on(app)
     app.refresh_home_actions = lambda: app.refreshed.append(app.page)
     app.study_path_service = lambda: StudyPathRuntimeMixin.study_path_service(app)
 
@@ -493,7 +495,8 @@ def test_after_a_switch_change_the_next_start_keeps_the_route_mixed_and_computes
                                                          questions.SOUND_PREFERENCE_VERSION: questions.PREFERENCE_VERSION})
     # the next start-up: a new app object over the same data directory
     fresh = SimpleNamespace(repo=mix_app.repo, store=mix_app.store, learning_store=LearningStore(mix_app.store),
-                            _background_assembly=True, page="home", refreshed=[])
+                            page="home", refreshed=[])
+    continue_support.background_on(fresh)
     fresh.refresh_home_actions = lambda: fresh.refreshed.append(fresh.page)
     fresh.study_path_service = lambda: StudyPathRuntimeMixin.study_path_service(fresh)
     service = fresh.study_path_service()
@@ -527,7 +530,7 @@ def test_the_start_up_step_never_runs_or_refreshes_while_closing_or_outside_the_
     elif state == "backup_busy":
         mix_app._backup_busy = True  # N2: a backup or restore is running
     else:
-        del mix_app._background_assembly
+        continue_support.background_off(mix_app)
     saved = asyncio.run(StudyPathRuntimeMixin.prepare_main_route_mix(mix_app))
     assert mix_app.refreshed == []
     if state == "closing_meanwhile":
