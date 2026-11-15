@@ -226,6 +226,7 @@ app/src/kanamemory/grammar_curriculum.py
 app/src/kanamemory/ink_candidates.py
 app/src/kanamemory/ink_renderer.py
 app/src/kanamemory/intro_batch.py
+app/src/kanamemory/intro_batch_quiz.py
 app/src/kanamemory/intro_batch_state.py
 app/src/kanamemory/intro_batch_ui.py
 app/src/kanamemory/kana_ability_bridge.py
@@ -950,6 +951,7 @@ app/src/kanamemory/next_step/model.py
 app/src/kanamemory/next_step/ui/__init__.py
 app/src/kanamemory/next_step/ui/end_pages.py
 app/src/kanamemory/course_line/__init__.py
+app/src/kanamemory/course_line/batch_display.py
 app/src/kanamemory/course_line/display.py
 app/src/kanamemory/course_line/model.py
 app/src/kanamemory/course_line/ui/__init__.py

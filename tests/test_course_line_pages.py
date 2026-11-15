@@ -155,7 +155,7 @@ def test_the_shared_names_are_the_continue_actions_own():
 
 
 def test_the_paused_texts_are_the_batch_quizs_and_the_lines_own():
-    from kanamemory.intro_batch_ui import QUIZ_PAUSED
+    from kanamemory.course_line.batch_display import QUIZ_PAUSED
     assert display.PAUSED_NO_HEAD_TEXT == QUIZ_PAUSED
 
 

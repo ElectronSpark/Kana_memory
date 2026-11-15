@@ -13,7 +13,7 @@ import pytest
 from kanamemory import learning_questions as lq
 from kanamemory import word_sound_questions as sound
 from kanamemory.course_planning import iter_question_plans, known_ids
-from kanamemory.intro_batch_ui import _quiz_variants
+from kanamemory.intro_batch_quiz import _quiz_variants
 from kanamemory.learning_practice_policy import practice_candidates
 from support.question_dependency_support import GRAMMAR_ID, grammar, install, namespace, requirement
 

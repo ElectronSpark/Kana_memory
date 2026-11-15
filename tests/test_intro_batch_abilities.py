@@ -15,7 +15,8 @@ from support.fake_ui import text_of, descendants
 from support.learning_practice_policy_support import raw
 from kanamemory import intro_batch
 from kanamemory.course_planning import iter_question_plans
-from kanamemory.intro_batch_ui import CARD_BUTTON, intro_quiz_question
+from kanamemory.course_line.batch_display import CARD_BUTTON
+from kanamemory.intro_batch_quiz import intro_quiz_question
 from kanamemory.learning_questions import PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION
 from kanamemory.learning_ui import LEARNING_PREFS
 

@@ -6,7 +6,7 @@ from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of
 from kanamemory import intro_batch
-from kanamemory.intro_batch_ui import QUIZ_PAUSED
+from kanamemory.course_line.batch_display import QUIZ_PAUSED
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_questions import PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION
 from kanamemory.learning_ui import LEARNING_PREFS

@@ -336,7 +336,7 @@ def test_d4_the_counts_are_asked_with_the_enabled_kinds_only_when_there_is_no_he
 def test_the_batch_quizs_closed_kind_draws_the_same_paused_page(app, monkeypatch, voice):
     """The paused page as the batch quiz draws it for a closed kind (its own text): the same two variants,
     with the next-content rows and 回到今日."""
-    from kanamemory.intro_batch_ui import QUIZ_PAUSED
+    from kanamemory.course_line.batch_display import QUIZ_PAUSED
     disabled_course(app, voice=voice)
     placeholders(app, monkeypatch)
     course_line.show_paused(app, QUIZ_PAUSED)

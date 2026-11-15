@@ -7,7 +7,7 @@ import pytest
 
 from kanamemory import content_gaps
 from kanamemory.course_planning import iter_question_plans
-from kanamemory.intro_batch_ui import intro_quiz_question
+from kanamemory.intro_batch_quiz import intro_quiz_question
 from kanamemory.learning_practice_policy import practice_candidates, select_practice_plan
 from kanamemory.learning_questions import OOV_TOKEN_PREFIX, question_requires, template_requires
 from kanamemory.study_queries import StudyQueries

@@ -2,7 +2,7 @@
 import pytest
 
 from kanamemory import learning_questions as lq
-from kanamemory.intro_batch_ui import intro_quiz_question
+from kanamemory.intro_batch_quiz import intro_quiz_question
 from kanamemory.learning_practice_policy import practice_candidates
 from support.question_dependency_support import WORD_ID, word
 
