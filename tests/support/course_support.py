@@ -253,8 +253,7 @@ def batch_takes_head(app, monkeypatch, *, log=None):
         call = Asked("route_intro_batch", (current, enabled), {}, page=getattr(app, "page", None),
                      head=course_head(app), result=True)
         log.append(call)
-        # Today the route itself shows the batch page and answers True.
-        app.show_intro_batch()
+        # The route only answers; the line shows the batch page after a True (course_runtime.perform_course).
         return True
     monkeypatch.setattr(app, "route_intro_batch", route)
     return log
@@ -338,8 +337,10 @@ def record_wait_arming(app, monkeypatch, *, log=None):
 
 def show_paused(app, message):
     """Draw the paused page (需要日语语音 when the heard-word kind is kept on without a voice, else 题型已关闭
-    with ``message``)."""
-    return app._show_learning_paused(message)
+    with ``message``), as the batch quiz draws it for a closed kind."""
+    from kanamemory.course_line.model import PAUSED_QUIZ, Paused
+    from kanamemory.course_runtime import perform_course
+    return perform_course(app, Paused(PAUSED_QUIZ, message))
 
 
 def replacement_controls(app, question_ids=(), item=None):
@@ -417,6 +418,22 @@ def calls(log, *wanted):
 def own_calls(log):
     """The calls of a log that the course line made itself (not the learner store's calls to itself)."""
     return [call for call in log if getattr(call, "inside", None) is None]
+
+
+def record_decisions(monkeypatch, *, log=None, answer=None):
+    """Record each course step the decision settles on, once it has settled (logged as "decide" with its
+    keyword arguments and the step as result). ``answer``: None decides for real; a callable(app, **kwargs)
+    decides instead (it may raise)."""
+    from kanamemory import course_runtime
+    log = [] if log is None else log
+    real = course_runtime.decide_course
+
+    def decide(app, **kwargs):
+        step = (real if answer is None else answer)(app, **kwargs)
+        log.append(Asked("decide", (), dict(kwargs), result=step, page=getattr(app, "page", None)))
+        return step
+    monkeypatch.setattr(course_runtime, "decide_course", decide)
+    return log
 
 
 def round_plan(app):

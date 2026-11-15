@@ -192,6 +192,7 @@ class IntroBatchUIMixin:
         resumed (from its saved cursor) when the dispatched instruction head
         is one of its items; another head keeps its own route, so a paused
         batch (closed kind, suspension, prerequisite) never blocks other work.
+        True: the batch owns this head; the caller shows it (course_runtime.perform_course).
         """
         kind = (current or {}).get("type")
         state = self.learning_store.intro_batch()
@@ -199,7 +200,6 @@ class IntroBatchUIMixin:
             content = (current or {}).get("content") or {}
             if (kind == "instruction" and content.get("instruction_scope") is None
                     and any(entry["content_id"] == content.get("id") for entry in state["entries"])):
-                self.show_intro_batch()
                 return True
             return False
         if kind != "instruction":
@@ -227,7 +227,6 @@ class IntroBatchUIMixin:
             self.learning_store.start_intro_batch(candidates, family=content["family"])
         except ValueError:
             return False
-        self.show_intro_batch()
         return True
 
     def show_intro_batch(self, widget=None, **kwargs):
@@ -387,7 +386,9 @@ class IntroBatchUIMixin:
         if question["kind"] not in self.learning_preferences()["enabled"]:
             # Never skip or answer a closed kind: the same frozen head resumes.
             self._intro_quiz_question = None
-            self._show_learning_paused(QUIZ_PAUSED)
+            from .course_runtime import perform_course
+            from .course_line.model import PAUSED_QUIZ, Paused
+            perform_course(self, Paused(PAUSED_QUIZ, QUIZ_PAUSED))
             return
         self._intro_quiz_question = question
         self._intro_quiz_result = u.col()

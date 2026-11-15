@@ -955,6 +955,7 @@ app/src/kanamemory/course_line/ui/__init__.py
 app/src/kanamemory/course_line/ui/line_pages.py
 app/src/kanamemory/home_runtime.py
 app/src/kanamemory/continue_runtime.py
+app/src/kanamemory/course_runtime.py
 tests/support/library_availability_support.py
 tests/test_content_availability.py
 tests/test_library_availability_store.py
@@ -971,6 +972,7 @@ tests/test_next_step_pages.py
 tests/test_continue_characterisation.py
 tests/test_course_decision_characterisation.py
 tests/test_course_line_pages.py
+tests/test_course_decide.py
 tests/test_continue_decide.py
 tests/test_question_presentation_copula_cue.py
 docs/design_current/11_content_focus_dependency_and_expansion.txt

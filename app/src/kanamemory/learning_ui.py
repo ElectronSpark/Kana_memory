@@ -338,19 +338,6 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         audio_ready = bool(getattr(getattr(self, "platform", None), "tts_ready", False))
         return {"enabled": audio_ready_kinds(self._saved_learning_kinds(), audio_ready)}
 
-    def _show_learning_paused(self, kinds_message):
-        """Name the missing voice when the learner kept the heard-word kind on;
-        telling them to switch on a kind that is already on leaves them stuck."""
-        tail = (*self.learning_next_content_controls(), u.button("回到今日", self.leave_learning))
-        if AUDIO_WORD_KIND in self._saved_learning_kinds() and AUDIO_WORD_KIND not in self.learning_preferences()["enabled"]:
-            self.screen("learning_wait", "需要日语语音", u.label("听词选词需要设备上的日语语音，安装后即可继续。"),
-                u.label("未完成题目与复习时间已保留；也可在题型设置中关闭听词选词。", color=u.MUTED),
-                u.button("语音与手写", self.show_settings, primary=True),
-                u.button("题型设置", self.show_learning_settings), *tail)
-            return
-        self.screen("learning_wait", "题型已关闭", u.label(kinds_message),
-            u.button("题型设置", self.show_learning_settings, primary=True), *tail)
-
     def _saved_learning_kinds(self):
         """The learner's choice, whether or not this device can speak right now."""
         enabled = stored_enabled_kinds(self.store.get_setting(LEARNING_PREFS, {}))
@@ -1047,139 +1034,12 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
 
     @page_view(replace=True)
     def continue_learning(self, widget=None, **kwargs):
-        from .practice_round import begin, seal, mark_finished, sealed
-        begin(self.store, restart_finished=widget is not None)
-        # Sealed before this action: the queueing below adds nothing.
-        sealed_before = sealed(self.store)
-        enabled = self.learning_preferences()["enabled"]
-        if AUDIO_WORD_KIND in enabled:
-            self.learning_store.admit_word_listening(enabled_kinds=enabled)
-        self.learning_store.ensure_prerequisites()
-        # A sealed round queues nothing (_queue_learning_questions returns at once), so the
-        # read of the lessons that lack a question is skipped on every later page of the round.
-        if not sealed_before:
-            self._queue_missing_learning_questions()
-        from .new_dispatch import enabled as fair_enabled
-        selected = kwargs.get("_selected_current")
-        if selected and selected.get('question'):
-            fresh = self.learning_store.get_question(selected['question']['id'])
-            if not fresh or fresh.get('status') == 'superseded':
-                selected = None
-        selected_id = (selected or {}).get("content", {}).get("id")
-        if (selected_id and selected.get('question') and not selected['question'].get('result')
-                and self.learning_store.content_question_blocked(selected['content'], selected['question'])):
-            selected = None; selected_id = None
-        if selected_id and self.learning_store.prerequisite_status(selected_id, selected["content"].get("instruction_scope"))["blocked"]:
-            selected = None
-        if selected and selected.get("type") == "instruction":
-            checkpoint = selected.get("content", {}).get("checkpoint", {})
-            frozen_guide = checkpoint.get("guide_question", {})
-            if frozen_guide.get("practice") and frozen_guide.get("kind") not in enabled:
-                selected = None
-        # _projection: continue_study_path's read context for this same action
-        # (reused only while nothing was written); standalone calls read live.
-        projection = kwargs.get("_projection")
-        shared = {} if projection is None else {"projection": projection}
-        skipped = frozenset(getattr(self, "_guide_skipped_ids", None) or ())
-        if skipped and selected and selected.get("type") == "instruction" and selected_id in skipped:
-            selected = None
-        current = selected or self.learning_store.current(enabled, fair_new=fair_enabled(self),
-                                                          **({"skip_teaching_ids": skipped} if skipped else {}), **shared)
-        # A withdrawn task form is never shown while a current task can take its place: one the queue pass
-        # has not reached (its time budget, a round sealed earlier) is exchanged here. One that cannot be
-        # exchanged is shown as it was stored.
-        from .learning_questions import withdrawn_task
-        for _ in range(8):
-            if not (current and current.get("type") == "question" and withdrawn_task(current.get("question"))
-                    and self._replace_withdrawn_questions(current["question"]["id"])):
-                break
-            projection, shared = None, {}  # the exchange wrote: the shared read context is no longer current
-            current = self.learning_store.current(enabled, fair_new=fair_enabled(self),
-                                                  **({"skip_teaching_ids": skipped} if skipped else {}))
-        seal(self.store)
-        self._learning_current = current
-        if current and current['type'] == 'content_blocked' and current.get('reason') == 'library_disabled':
-            count = current.get('counts', {}).get('library_unavailable', 0)
-            libraries = ([u.button('查看内容库', self.show_content_libraries)]
-                         if callable(getattr(self, 'show_content_libraries', None)) else [])
-            self.screen('learning_wait', '所属内容库已停用',
-                u.label(f'剩下的 {count} 项课程所属的内容库已停用、缺失或已被取代，暂不出题。'),
-                u.label('学习记录、草稿和复习时间均已保留；重新启用该库后即可继续。', color=u.MUTED),
-                *libraries, *self.learning_next_content_controls(), u.button('回到今日', self.leave_learning))
-            return
-        if current and current['type'] == 'content_blocked':
-            self.screen('learning_wait', '材料待核', u.label('相关说明已更新，部分旧题仍需核对。'),
-                u.label('原题、草稿和复习时间均已保留。', color=u.MUTED),
-                *self._learning_replacement_controls(current['question_ids']),
-                *self.learning_next_content_controls(), u.button('回到今日', self.leave_learning))
-            return
-        # 四之二: an open batch resumes from its saved cursor; an untouched
-        # original word/grammar head opens a new batch instead of the picker.
-        if self.route_intro_batch(current, enabled):
-            return
-        # N12: course work a sealed round could not queue is not "题型已关闭";
-        # end the round like an empty course lane (the next round queues it).
-        left_out = getattr(self, "_sealed_round_left_out", None)
-        if (sealed_before and current and current.get("type") == "disabled" and callable(left_out)
-                and left_out(current, projection)):
-            current = self._learning_current = None
-        elif not current and self.learning_store.counts(enabled, **shared)["disabled"]:
-            self._show_learning_paused("未完成题目已保留，重新开启对应题型后可继续。")
-            return
-        if not current or current.get("type") in {"empty", "done"}:
-            mark_finished(self.store)
-            self.screen("learning_done", "课程学习", u.label("本次学习已保存。", size=20),
-                u.button("开始新一轮", self.continue_learning, primary=True),
-                *self.learning_next_content_controls(), u.button("回到今日", self.leave_learning))
-            return
-        if current["type"] == "disabled":
-            self._show_learning_paused("未完成题目与复习时间已保留，开启对应题型后可继续。")
-            return
-        if current['type'] == 'diagnostic':
-            return self.continue_diagnostic(current['episode_id'])
-        if current["type"] == "waiting":
-            due = current.get("due_at_utc")
-            when = self._learning_due_label(due) if due else "当前题型没有可答题目。"
-            from .extra_practice_runtime import extra_button_rows
-            self.screen("learning_wait", "稍后继续", u.label(when, size=20),
-                u.label("到期后自动继续，也可以先离开。", color=u.MUTED),
-                u.button("检查并继续", self.check_learning_wait, primary=True), *self.learning_next_content_controls(),
-                *extra_button_rows(self),
-                u.button("题型设置", self.show_learning_settings), u.button("回到今日", self.leave_learning))
-            self.arm_learning_wait(due)
-            return
-        if current["type"] == "prerequisite":
-            item = current["content"]
-            children = [u.label(item["title"], size=21, bold=True),
-                u.label("先接着巩固前置内容，完成后自动回到本项。", size=16)]
-            if current.get("due_at_utc"):
-                children.append(u.label(self._learning_due_label(current["due_at_utc"]), size=14))
-                children.append(u.label("到期后自动继续，也可以先离开。", color=u.MUTED))
-            else:
-                children.append(u.label("前置内容的练习暂不可用，请检查题型或暂停设置。", color=u.MUTED))
-                children.append(u.button("学习设置", self.show_learning_settings))
-            # Design 12 Q3 (breadth first): a prerequisite already taught is met, not waiting.
-            from .learning_dependencies import TAUGHT
-            taught = [entry["title"] for entry in (current.get("dependency_status") or {}).get("dependencies", ())
-                      if entry.get("status") == TAUGHT]
-            if taught:
-                children.append(u.label("已学过、可以接着往后学的前置：" + "、".join(taught), size=14, color=u.MUTED))
-            def skip_prerequisites(widget):
-                self.learning_store.acknowledge_prerequisites(item["id"], instruction_scope=item.get("instruction_scope"))
-                self.continue_added_learning()
-            children.extend([u.button("检查并继续", self.check_learning_wait, primary=True),
-                u.button("我已了解前置，继续本课", skip_prerequisites),
-                *self.learning_next_content_controls(), u.button("回到今日", self.leave_learning)])
-            self.screen("learning_wait", "先巩固前置知识", *children)
-            self.arm_learning_wait(current.get("due_at_utc"))
-            return
-        if current["type"] == "instruction":
-            self.show_learning_instruction(current["content"])
-            return
-        if current["type"] == "question":
-            self.show_learning_question(current)
-            return
-        raise ValueError("Unsupported learning dispatch state")
+        # The decision returns the next course step and draws nothing; perform makes its one call. Both run
+        # here, inside this entry, so the navigation window and the continue action's read context hold.
+        from . import course_runtime
+        return course_runtime.perform_course(self, course_runtime.decide_course(
+            self, restart_finished=widget is not None, selected_current=kwargs.get("_selected_current"),
+            projection=kwargs.get("_projection")))
 
     def learning_next_content_controls(self):
         # Standalone course controllers can still be embedded without the
