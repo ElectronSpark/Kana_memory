@@ -11,6 +11,7 @@ from support.new_dispatch_candidate_support import queued
 from support.new_dispatch_candidate_support import reopen
 from support.new_dispatch_candidate_support import rate_current
 from support.first_teaching_backlog_support import serve
+from support import kana_support
 from kanamemory.new_dispatch import SETTING
 from kanamemory.first_teaching_dispatch import _teaching_service
 from kanamemory.first_teaching_kana import direction_service
@@ -27,13 +28,13 @@ def test_unified_ui_commits_direction_and_preserves_draft_after_restart(path_app
     app.store.set_setting(SETTING,{'version':1,'last_lane':'course','last_kana_band':0})
     before=history(app)
     app.continue_study_path()
-    assert app.page=='question' and app.question==target
+    assert app.page=='question' and kana_support.question(app)==target
     assert history(app)==before
     pending=app.store.load_session_progress(lazy_questions=True)
     state={'page':'question','romaji_answer':'a','question_audio_ok':True}
     app.store.save_session_progress(sid,pending['question_index'],pending['session_right'],pending['assisted_indices'],state)
     reopen(app);app.continue_study_path()
-    assert app.page=='question' and app.question==target
+    assert app.page=='question' and kana_support.question(app)==target
     assert app.store.load_session_progress(lazy_questions=True)['state']==state
     rate_current(app)
     # The two earlier kana_choice reviews and this answer share one reading carrier (2c44345).

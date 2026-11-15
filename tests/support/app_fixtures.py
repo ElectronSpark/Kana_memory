@@ -55,7 +55,7 @@ def setup_app(monkeypatch):
         _practice_preferences={"kind": CHOICE, "script": "平假名", "word_table": PARTIAL,
                                "research": False, "schedule": "多轮强化"},
         model_state="not_downloaded", model_message="", _model_request=0, _model_checking=False,
-        _model_downloading=False, research_enabled=False, script="hiragana", use_full_keyboard=False,
+        _model_downloading=False, research_enabled=False, use_full_keyboard=False,
         platform=SimpleNamespace(tts_ready=False, model_status=AsyncMock(return_value="ready"), stop=Mock()),
         heading=lambda text: View(text=text), note=lambda text: View(text=text),
         entry_card=lambda *children, **kw: View(*children, **kw),
@@ -66,7 +66,8 @@ def setup_app(monkeypatch):
         study_path_service=lambda: SimpleNamespace(overview=lambda: {}),
         _path_next_controls=Mock(return_value=[]),
     ),
-        assisted_attempts=set(), answered_attempts=set())
+        assisted_attempts=set(), answered_attempts=set(),
+        script="hiragana")
     app.store.daily_new_limit = 10
     # App-run plans are an explicit startup opt-in (practice_round.enable);
     # a bare Mock would answer that flag with a truthy Mock.
@@ -110,7 +111,9 @@ def question_app(setup_app, monkeypatch):
     app = setup_app
     monkeypatch.setattr(app_module.toga, "ScrollContainer", ScrollView)
     app.main_window = SimpleNamespace(size=SimpleNamespace(width=440))
-    app.session_id, app.question_index, app.session_right = "session", 0, 0
+    kana_support.set_session_id(app, "session")
+    kana_support.set_question_index(app, 0)
+    kana_support.set_session_right(app, 0)
     # Some focused feedback tests begin at an already displayed question.
     kana_support.set_question_started(app, app_module.time.monotonic())
     kana_support.set_answer_submitted_at(app, None)
@@ -160,7 +163,7 @@ def kana_route_handoff(app):
 
 def render_question(app, kind):
     from kanamemory.domain import Question
-    app.questions = [Question("kana-test" if not kind.startswith("word_") else "word-test", kind,
+    kana_support.set_questions(app, [Question("kana-test" if not kind.startswith("word_") else "word-test", kind,
         "hiragana", "", "shi" if kind == "kana_romaji" else "し",
-        options=["し", "き", "い"], metadata={"kana_symbol":"し", "romaji":"shi", "meaning_hint":"poem", "content_version":"test"})]
+        options=["し", "き", "い"], metadata={"kana_symbol":"し", "romaji":"shi", "meaning_hint":"poem", "content_version":"test"})])
     app.show_question()

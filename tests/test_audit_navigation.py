@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 from support.fake_ui import View, descendants
 from support.app_fixtures import setup_app
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.navigation import page_view
 
@@ -14,7 +15,7 @@ def test_back_to_earlier_setup_restores_its_slot_and_clears_old_confirmation(set
     app._render_key, app._page_scroll, app._paint_handle = None, None, None
     app._navigating = False
     app._ink_revision = app._audio_serial = 0
-    app.question = None
+    kana_support.set_question(app, None)
     app.title_label = View(text="选择练习")
     app.content_slot = View(app.body)
     app._sync_back_handler = Mock()

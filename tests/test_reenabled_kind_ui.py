@@ -63,20 +63,20 @@ def test_reenable_preserves_survivor_draft_or_feedback_and_restores_only_saved_s
         configure(app, store, TYPED)
         sid, repeat = seed_learned_repeat(store)
         app.resume_practice()  # Applying the disabled kind skips its old rows.
-        assert app.question.content_id == "survivor"
+        assert kana_support.question(app).content_id == "survivor"
         state = {"page": "feedback" if feedback else "question",
             "feedback_pending": feedback, "answer_revealed": False,
             "question_audio_ok": True, "answered_text": "a" if feedback else "",
             "romaji_answer": "a" if feedback else "unfinished"}
-        store.save_session_progress(sid, app.question_index, 1, state=state)
+        store.save_session_progress(sid, kana_support.question_index(app), 1, state=state)
         unchanged = evidence(store)
-        survivor_index = app.question_index
+        survivor_index = kana_support.question_index(app)
         set_regular(app, TYPED, AUDIO)
         for _ in range(3):
             app.page = "home"
             app.resume_practice()
-            assert app.question.content_id == "survivor"
-            assert app.question_index == survivor_index
+            assert kana_support.question(app).content_id == "survivor"
+            assert kana_support.question_index(app) == survivor_index
             assert app.page == ("feedback" if feedback else "question")
             assert app.romaji_answer == state["romaji_answer"]
             assert kana_support.answered_text(app) == ("a" if feedback else None)
@@ -107,7 +107,7 @@ def test_reenabled_step_waits_until_original_due_then_uses_same_review_record(
         app.resume_practice()
         assert_one_saved_repeat(store, repeat)
         store.record_review("survivor", TYPED, "hiragana", 4,
-            session_id=sid, question_index=app.question_index, outcome="correct", now=START)
+            session_id=sid, question_index=kana_support.question_index(app), outcome="correct", now=START)
         unchanged = evidence(store)
         app.resume_practice()
         assert app.page == "session_wait"
@@ -120,10 +120,10 @@ def test_reenabled_step_waits_until_original_due_then_uses_same_review_record(
             assert evidence(store) == unchanged
         clock[0] = datetime.fromisoformat(repeat.metadata["not_before_utc"])
         app.continue_spaced_practice()
-        assert app.page == "ink_question" and app.question == repeat
+        assert app.page == "ink_question" and kana_support.question(app) == repeat
         assert evidence(store) == unchanged
         result = store.record_review("learned-audio", AUDIO, "hiragana", 4,
-            session_id=sid, question_index=app.question_index, outcome="correct", now=clock[0])
+            session_id=sid, question_index=kana_support.question_index(app), outcome="correct", now=clock[0])
         assert result["card"]["review_count"] == 2
         assert result["card"]["introduced_at_utc"] == START.isoformat()
         assert store.load_session_progress() is None
@@ -143,13 +143,13 @@ def test_repeated_off_on_cycles_never_duplicate_the_saved_repeat(question_app, t
             app.page = "home"
             app.resume_practice()
             assert all(item.kind != AUDIO for item in pending_questions(store))
-            assert app.question.content_id == "survivor"
-            store.save_session_progress(sid, app.question_index, 1,
+            assert kana_support.question(app).content_id == "survivor"
+            store.save_session_progress(sid, kana_support.question_index(app), 1,
                 state={"page": "question", "romaji_answer": "draft"})
             set_regular(app, TYPED, AUDIO)
             app.page = "home"
             app.resume_practice()
-            assert app.question.content_id == "survivor" and app.romaji_answer == "draft"
+            assert kana_support.question(app).content_id == "survivor" and app.romaji_answer == "draft"
             assert_one_saved_repeat(store, repeat)
             assert evidence(store) == unchanged
         app.alert.assert_not_called()
@@ -167,7 +167,7 @@ def test_reenable_while_waiting_uses_earliest_original_due_without_changing_othe
         app.resume_practice()
         clock[0] = START + timedelta(seconds=20)
         typed_review = store.record_review("survivor", TYPED, "hiragana", 1,
-            session_id=sid, question_index=app.question_index, outcome="correct", now=clock[0])
+            session_id=sid, question_index=kana_support.question_index(app), outcome="correct", now=clock[0])
         app.resume_practice()
         assert app.page == "session_wait"
         assert app._review_wait_until == datetime.fromisoformat(typed_review["due_at_utc"])
@@ -192,7 +192,7 @@ def test_temporary_reenable_policy_restores_once_after_reopening_store(question_
         configure(app, store, TYPED)
         sid, repeat = seed_learned_repeat(store)
         app.resume_practice()
-        store.save_session_progress(sid, app.question_index, 1,
+        store.save_session_progress(sid, kana_support.question_index(app), 1,
             state={"page": "question", "romaji_answer": "before restart"})
         # Equivalent to explicitly enabling the type in a temporary due form.
         KanaMemory._set_queue_kind_policy(app, sid, (TYPED, AUDIO))
@@ -201,7 +201,7 @@ def test_temporary_reenable_policy_restores_once_after_reopening_store(question_
         with StudyStore(data, time_zone="UTC") as reopened:
             configure(app, reopened, TYPED)
             app.resume_practice()
-            assert app.question.content_id == "survivor"
+            assert kana_support.question(app).content_id == "survivor"
             assert app.romaji_answer == "before restart"
             assert_one_saved_repeat(reopened, repeat)
             assert evidence(reopened) == unchanged

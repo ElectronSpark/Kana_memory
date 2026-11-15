@@ -153,3 +153,73 @@ def kept_evidence(**fields):
     """What a practice page kept for Back holds of the attempt of its moment: the entries of its saved bindings
     that give these values (named like the readers above) back to the practice when the learner returns to it."""
     return {"_kana_attempt": KanaAttempt(**{_KEPT[name]: value for name, value in fields.items()})}
+
+
+# --- the position of the session -----------------------------------------------------------------------------------
+
+def session_id(app):
+    """The id of the session whose queue the practice holds, None when it holds none."""
+    return app.session_id
+
+
+def set_session_id(app, value):
+    app.session_id = value
+
+
+def questions(app):
+    """The queue: the session's questions in their order; the practice's own list."""
+    return app.questions
+
+
+def set_questions(app, value):
+    app.questions = value
+
+
+def question_index(app):
+    """The place in the queue of the question on the page (the queue's length once it is finished)."""
+    return app.question_index
+
+
+def set_question_index(app, value):
+    app.question_index = value
+
+
+def session_right(app):
+    """How many answers of the session were right so far."""
+    return app.session_right
+
+
+def set_session_right(app, value):
+    app.session_right = value
+
+
+def question(app):
+    """The question on the page, None when the practice holds none."""
+    return app.question
+
+
+def set_question(app, value):
+    app.question = value
+
+
+def script(app):
+    """The script of the question on the page: hiragana or katakana."""
+    return app.script
+
+
+def set_script(app, value):
+    app.script = value
+
+
+POSITION = ("session_id", "questions", "question_index", "session_right", "question", "script")
+
+_SETTERS.update({
+    "session_id": set_session_id, "questions": set_questions, "question_index": set_question_index,
+    "session_right": set_session_right, "question": set_question, "script": set_script,
+})
+
+
+def kept_position(**fields):
+    """What a practice page kept for Back holds of the session's position: the entries of its saved bindings that
+    give these values (named like the readers above) back to the practice when the learner returns to it."""
+    return dict(fields)

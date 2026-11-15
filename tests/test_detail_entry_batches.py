@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 from kanamemory import app as app_module
 from kanamemory.app import KanaMemory
 from kanamemory.navigation import BackStack, PageState
+from support import kana_support
 
 
 class View:
@@ -112,10 +113,11 @@ def test_real_back_reattaches_the_same_section_and_expansion_continues_after_tok
     app.__dict__.update(
         page="source", _view_key=("show_source", "source-1"),
         _page_token=8, _ink_revision=1, _audio_serial=0,
-        _paint_handle=None, question=None, back_stack=stack,
+        _paint_handle=None, back_stack=stack,
         content_slot=slot, title_label=SimpleNamespace(text="来源详情"),
         platform=Mock(), _sync_back_handler=Mock(), _checkpoint=Mock(),
     )
+    kana_support.with_state(app, question=None)
 
     assert KanaMemory.go_back(app) is True
     assert app._page_token == 9

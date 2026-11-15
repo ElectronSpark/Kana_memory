@@ -11,6 +11,7 @@ from kanamemory.ink_candidates import ink_candidate_kind, practice_ink_candidate
 from support.handwriting_model_ui_support import model_app
 from support.handwriting_model_ui_support import buttons
 from support.handwriting_model_ui_support import text_of
+from support import kana_support
 
 
 @pytest.mark.parametrize("script,expected", [
@@ -40,7 +41,7 @@ def test_limit_applies_after_filtering_and_normalized_deduplication():
 def test_practice_candidates_pass_only_actual_normalized_guess_to_confirmation(model_app, script):
     app = model_app
     app.page, app.free_ink, app.model_state = "ink_question", False, "ready"
-    app.question = Question("target", "romaji_handwriting", script, "", "あ" if script == "hiragana" else "ア")
+    kana_support.set_question(app, Question("target", "romaji_handwriting", script, "", "あ" if script == "hiragana" else "ア"))
     app.choose_practice_answer = Mock()
     app.platform.recognize.return_value = ["二", "＝", "ﾆ", "ニ", "こ"]
     asyncio.run(app.recognize_ink())
@@ -48,15 +49,15 @@ def test_practice_candidates_pass_only_actual_normalized_guess_to_confirmation(m
     expected = "こ" if script == "hiragana" else "ニ"
     assert [candidate.text for candidate in choices] == [expected]
     choices[0].on_press(None)
-    app.choose_practice_answer.assert_called_once_with(expected, app.question)
-    assert expected != app.question.answer
+    app.choose_practice_answer.assert_called_once_with(expected, kana_support.question(app))
+    assert expected != kana_support.question(app).answer
     app.store.record_review.assert_not_called()
 
 
 def test_no_matching_candidates_requests_rewrite_and_never_grades(model_app):
     app = model_app
     app.page, app.free_ink, app.model_state = "ink_question", False, "ready"
-    app.question = Question("target", "kana_handwriting", "hiragana", "", "に")
+    kana_support.set_question(app, Question("target", "kana_handwriting", "hiragana", "", "に"))
     app.platform.recognize.return_value = ["ニ", "二", "=", "＝"]
     app.choose_practice_answer = Mock()
     asyncio.run(app.recognize_ink())

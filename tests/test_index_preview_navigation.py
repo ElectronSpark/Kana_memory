@@ -26,14 +26,14 @@ SOURCE = {"id": "jmdict:1", "title": "JMdict entry 1", "license": "CC-BY-SA-4.0"
 def harness(*, page="words", key=("show_words", None)):
     app = kana_support.with_state(SimpleNamespace(
         page=page, _view_key=key, _render_key=None, _page_token=5,
-        _preview_pending=None, session_id=None, question_index=0,
-        question_notice=SimpleNamespace(text=""), back_stack=BackStack(),
+        _preview_pending=None, question_notice=SimpleNamespace(text=""), back_stack=BackStack(),
         platform=Mock(), repo=Mock(), store=Mock(), alert=Mock(),
         show_kana_detail=Mock(), show_word_detail=Mock(), show_source=Mock(),
         source_map={SOURCE["id"]: SOURCE}, tasks=[], _checkpoint=Mock(), refresh_home_actions=Mock(),
         _show_practice_preview=Mock(),
     ),
-        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False)
+        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False,
+        session_id=None, question_index=0)
     app.back_stack.pages.append(PageState(("show_home", None), "home", "Home", object()))
     app.platform.preview_index = AsyncMock(return_value=False)
     app.repo.get_kana.return_value = KANA
@@ -143,9 +143,10 @@ def test_old_dialog_confirmation_cannot_navigate_after_page_changed(changed):
 def test_abandoned_nonpractice_preview_task_never_shows_or_marks_assistance():
     async def run():
         app = harness(page="words", key=("show_words", None))
-        app.session_id = "session-1"
+        kana_support.set_session_id(app, "session-1")
         app.back_stack.pages.append(PageState(("show_question", None), "question", "Question", object(),
-                                              {"session_id": app.session_id, "question_index": 0}))
+                                              kana_support.kept_position(
+                                                  session_id=kana_support.session_id(app), question_index=0)))
         app.open_content_kana("ka")
         app._page_token += 1
         await asyncio.gather(*app.tasks)
@@ -189,9 +190,9 @@ def test_current_and_pending_detail_self_spans_are_plain_text(monkeypatch):
 @pytest.mark.parametrize("page", ["question", "word_question", "ink_question"])
 def test_inline_learning_summary_marks_assistance_before_it_is_shown(kind, page):
     app = harness(page=page, key=("show_question", None))
-    app.session_id = "session-1"
-    app.question = SimpleNamespace(kind={"question": "kana_choice",
-        "word_question": "word_meaning_kana", "ink_question": "kana_handwriting"}[page])
+    kana_support.set_session_id(app, "session-1")
+    kana_support.set_question(app, SimpleNamespace(kind={"question": "kana_choice",
+        "word_question": "word_meaning_kana", "ink_question": "kana_handwriting"}[page]))
 
     def show_inline(*args, **kwargs):
         assert kana_support.assisted_attempts(app) == {("session-1", 0)}
@@ -211,7 +212,7 @@ def test_inline_learning_summary_marks_assistance_before_it_is_shown(kind, page)
 
 def test_practice_external_reference_uses_inline_explicit_action():
     app = harness(page="feedback", key=("check_answer", None))
-    app.session_id = "session-1"
+    kana_support.set_session_id(app, "session-1")
     kana_support.answered_attempts(app).add(app._attempt_key())
     url = "https://example.org/entry/1"
     app.open_url(url, title="例句出处", summary="原始例句与署名")

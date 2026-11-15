@@ -18,6 +18,7 @@ from kanamemory.reading_audio import MODERN, MIDDLE_CHINESE
 from support.reading_audio_support import modern
 from support.reading_audio_support import historical
 from support.reading_audio_ui_support import nodes
+from support import kana_support
 
 
 class View:
@@ -164,10 +165,11 @@ def test_back_preserves_expanded_reading_widgets_and_remaining_audio_binding(bui
     app.__dict__.update(
         page="source", _view_key=("show_source", "source-4"),
         _page_token=8, _ink_revision=1, _audio_serial=0,
-        _paint_handle=None, question=None, back_stack=stack,
+        _paint_handle=None, back_stack=stack,
         content_slot=slot, title_label=SimpleNamespace(text="来源详情"),
         platform=Mock(), _sync_back_handler=Mock(), _checkpoint=Mock(),
     )
+    kana_support.with_state(app, question=None)
     assert KanaMemory.go_back(app) is True
     assert app._page_token == 9 and slot.children == [section]
     assert tuple(cards.children) == original_cards and len(built) == 10

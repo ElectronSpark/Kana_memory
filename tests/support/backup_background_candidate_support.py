@@ -11,6 +11,7 @@ from kanamemory import backup_worker
 from record_test_support import decode_current
 import pytest
 from support.app_fixtures import setup_app
+from support import kana_support
 
 
 def backup(tmp_path):
@@ -36,8 +37,11 @@ def app(setup_app, tmp_path):
     app.platform.export_backup = AsyncMock(return_value=True)
     app.platform.import_backup = AsyncMock(return_value=backup(tmp_path))
     app.page, app._checkpoint = 'settings', Mock(return_value=None)
-    app.session_id, app.questions, app.question = sid, [q], q
-    app.question_index, app.session_right = 0, 0
+    kana_support.set_session_id(app, sid)
+    kana_support.set_questions(app, [q])
+    kana_support.set_question(app, q)
+    kana_support.set_question_index(app, 0)
+    kana_support.set_session_right(app, 0)
     app._clean_preferences = lambda value: value
     app.show_home = Mock()
     yield app

@@ -19,6 +19,7 @@ from kanamemory.navigation import PageState
 
 
 from support.review_wait_ui_support import UTC, Scheduled, ControlledLoop, clock, waiting_app, start_wait
+from support import kana_support
 
 
 def database_contents(app):
@@ -62,7 +63,7 @@ def test_initial_wait_uses_ready_callback_then_counts_down_without_rebuilding(wa
     app._review_wait_handle.run()
     assert "38 秒" in app._review_wait_status.text
     assert (app.body, app._review_wait_status, app._review_wait_button) == initial_widgets
-    assert app._page_token == token and app.question_index == 0
+    assert app._page_token == token and kana_support.question_index(app) == 0
     assert database_contents(app) == before
     assert app.store.stats()["total_reviews"] == 0
 
@@ -75,7 +76,7 @@ def test_repeated_early_checks_show_feedback_and_preserve_queue_and_review_recor
     app.store.record_review("previous", "kana_choice", "hiragana", 3,
                             now=clock.now - timedelta(days=1))
     reviews = app.store.review_history("previous")
-    session_id = app.session_id
+    session_id = kana_support.session_id(app)
     for _ in range(3):
         control(app, "检查并继续复习").on_press(None)
         saved = app.store.load_session_progress()
@@ -103,8 +104,8 @@ def test_due_tick_enters_same_question_once_and_old_button_keeps_new_draft(waiti
     app._review_wait_handle.run()
     assert "已到期，可以继续复习" in app._review_wait_status.text
     assert old_button.text == "继续复习"
-    assert app.page == "question" and app.question.content_id == "kana-wait"
-    assert app.question_index == 0 and len(app.questions) == 1
+    assert app.page == "question" and kana_support.question(app).content_id == "kana-wait"
+    assert kana_support.question_index(app) == 0 and len(kana_support.questions(app)) == 1
     assert app._review_wait_handle is None
     saved_after = app.store.load_session_progress()
     assert saved_after["session_id"] == saved_before["session_id"]
@@ -134,7 +135,7 @@ def test_due_review_timer_defers_navigation_during_exit_confirmation(waiting_app
     assert app._review_wait_handle.delay == 1
     app._leave_confirmation_active = False
     app._review_wait_handle.run()
-    assert app.page == "question" and app.question.content_id == "kana-wait"
+    assert app.page == "question" and kana_support.question(app).content_id == "kana-wait"
     assert app.store.stats()["total_reviews"] == 0
 
 
@@ -170,7 +171,9 @@ def test_exit_and_reopen_preserve_absolute_due_time_and_remaining_queue(waiting_
     # Reopen the persisted SQLite data through a fresh store, as after restart.
     with StudyStore(original_store.data_dir, time_zone="UTC") as reopened:
         app.store = reopened
-        app.questions, app.session_id, app.question = [], None, None
+        kana_support.set_questions(app, [])
+        kana_support.set_session_id(app, None)
+        kana_support.set_question(app, None)
         KanaMemory.resume_practice(app)
         restored = app.store.load_session_progress()
         assert restored["session_id"] == initial["session_id"]
@@ -179,7 +182,7 @@ def test_exit_and_reopen_preserve_absolute_due_time_and_remaining_queue(waiting_
         assert app.page == "session_wait" and "25 秒" in app._review_wait_status.text
         clock.now = due
         app._review_wait_handle.run()
-        assert app.page == "question" and len(app.questions) == 1
+        assert app.page == "question" and len(kana_support.questions(app)) == 1
         assert reopened.stats()["total_reviews"] == 0
     app.store = original_store
 
@@ -222,7 +225,7 @@ def test_back_to_wait_restores_deadline_and_widgets_then_auto_resumes(waiting_ap
     app = waiting_app
     due = clock.now + timedelta(seconds=20)
     question = start_wait(app, due)
-    session = app.session_id
+    session = kana_support.session_id(app)
     question = assert_fresh_native_snapshot(app.store, session, [question])[0]
     original = (app._review_wait_until, app._review_wait_status,
                 app._review_wait_button, app._review_wait_checked)
@@ -256,8 +259,8 @@ def test_back_to_wait_restores_deadline_and_widgets_then_auto_resumes(waiting_ap
         assert database_contents(app) == before
         clock.now = due
     app._review_wait_handle.run()
-    assert app.page == "question" and app.question == question
-    assert app.session_id == session and app.question_index == 0
+    assert app.page == "question" and kana_support.question(app) == question
+    assert kana_support.session_id(app) == session and kana_support.question_index(app) == 0
     assert app.store.get_session_questions(session) == [question]
     assert app.store.stats()["total_reviews"] == 0
 

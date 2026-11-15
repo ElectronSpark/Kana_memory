@@ -29,7 +29,7 @@ def test_word_error_category_is_compact_and_persisted(spelling_app, expected, an
     # nonstandard spelling after upgrade; the snapshot itself stays unchanged.
     question = replace(question, accepted_answers=(answer,) if category == "spelling" else ())
     start(app, question)
-    original = deepcopy(app.store.get_session_questions(app.session_id))
+    original = deepcopy(app.store.get_session_questions(kana_support.session_id(app)))
     app.check_answer(answer)
     assert not kana_support.answer_correct(app) and caption in text_of(app.body)
     assert "保存并继续" in buttons(app)
@@ -39,7 +39,7 @@ def test_word_error_category_is_compact_and_persisted(spelling_app, expected, an
     entry = app.store._db.execute("SELECT correct,evidence_json FROM word_spelling_attempt").fetchone()
     proof = json.loads(entry[1])
     assert entry[0] == 0 and proof["error_category"] == category
-    assert app.store.get_session_questions(app.session_id) == original
+    assert app.store.get_session_questions(kana_support.session_id(app)) == original
     app.alert.assert_not_called()
 
 
@@ -51,7 +51,7 @@ def test_permitted_word_variant_has_one_answer_and_keeps_unfinished_tail(spellin
     tail = word_question("がっこう")
     tail.metadata["word_romaji_drill"] = True
     start(app, question, extra=[tail])
-    original = deepcopy(app.store.get_session_questions(app.session_id))
+    original = deepcopy(app.store.get_session_questions(kana_support.session_id(app)))
     app.check_answer("せかいぢゅう")
     assert kana_support.answer_correct(app)
     assert "允许的写法" in text_of(app.body)
@@ -63,8 +63,8 @@ def test_permitted_word_variant_has_one_answer_and_keeps_unfinished_tail(spellin
     assert proof["correct"] and proof["accepted_alternative"]
     assert not proof["units"] and not proof["schedule_adjustments"]
     # The frozen snapshot owns the queue; loading it normalizes the word keyboard.
-    assert app.question == original[1] and app.question.answer == tail.answer
-    assert app.store.get_session_questions(app.session_id) == original
+    assert kana_support.question(app) == original[1] and kana_support.question(app).answer == tail.answer
+    assert app.store.get_session_questions(kana_support.session_id(app)) == original
     app.alert.assert_not_called()
 
 

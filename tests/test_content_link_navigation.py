@@ -16,16 +16,16 @@ from support import kana_support
 
 def state(page="question", session="session-1"):
     value = kana_support.with_state(SimpleNamespace(
-        page=page, session_id=session, question_index=0, _view_key=("show_question", None),
+        page=page, _view_key=("show_question", None),
         back_stack=BackStack(), question_notice=SimpleNamespace(text=""),
-        question=SimpleNamespace(content_id="kana-304b", kind="kana_choice"),
         platform=Mock(), store=Mock(is_content_available=lambda content_id: True), show_kana_detail=Mock(), alert=Mock(),
         _page_token=5, _ink_revision=2, _audio_serial=0, _paint_handle=None,
         content_slot=Mock(), title_label=SimpleNamespace(text=""),
         _render_key=None, _preview_pending=None, repo=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(),
         _show_practice_preview=Mock(),
     ),
-        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False)
+        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False,
+        session_id=session, question_index=0, question=SimpleNamespace(content_id="kana-304b", kind="kana_choice"))
     for name in ("_attempt_key", "_sync_back_handler", "_content_page_key", "_mark_lookup_assisted", "_preview_link"):
         setattr(value, name, MethodType(getattr(KanaMemory, name), value))
     value.platform.preview_index = AsyncMock(return_value=True)
@@ -81,8 +81,9 @@ def test_lookup_via_word_page_marks_suspended_question_and_survives_stale_snapsh
     value = state(page="words")
     notice = SimpleNamespace(text="")
     old = PageState(("show_question", None), "question", "练习", object(),
-                    {"session_id": "session-1", "question_index": 0, "question": value.question,
-                     "answer_revealed": False, "question_notice": notice})
+                    {**kana_support.kept_position(session_id="session-1", question_index=0,
+                                                  question=kana_support.question(value)),
+                     **kana_support.kept_evidence(answer_revealed=False), "question_notice": notice})
     value.back_stack.pages.append(old)
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
     assert kana_support.assisted_attempts(value) == {("session-1", 0)}
@@ -99,7 +100,8 @@ def test_post_answer_lookup_does_not_change_independently_completed_answer():
     value = state(page="feedback")
     kana_support.answered_attempts(value).add(value._attempt_key())
     value.back_stack.pages.append(PageState(("show_question", None), "question", "练习", object(),
-                                           {"session_id": value.session_id, "question_index": 0}))
+                                           kana_support.kept_position(
+                                               session_id=kana_support.session_id(value), question_index=0)))
     complete_preview(value, lambda: KanaMemory.open_content_kana(value, "kana-304b"))
     assert not kana_support.answer_revealed(value) and not kana_support.assisted_attempts(value)
     value.platform.preview_index.assert_not_called()
@@ -158,7 +160,8 @@ def test_nonpractice_lookup_and_current_detail_have_no_review_side_effects():
 def test_assistance_does_not_follow_into_another_attempt():
     value = state(page="words")
     kana_support.assisted_attempts(value).add(("session-1", 0))
-    value.question_index = 1
+    kana_support.set_question_index(value, 1)
     assert value._attempt_key() not in kana_support.assisted_attempts(value)
-    value.session_id, value.question_index = "session-2", 0
+    kana_support.set_session_id(value, "session-2")
+    kana_support.set_question_index(value, 0)
     assert value._attempt_key() not in kana_support.assisted_attempts(value)

@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from types import SimpleNamespace
 from kanamemory import app as app_module
 import pytest
+from support import kana_support
 
 
 class View:
@@ -48,18 +49,17 @@ def model_app(monkeypatch):
     monkeypatch.setattr(component_ui, "row", lambda *children, **kw: View(*children, **kw))
     monkeypatch.setattr(app_module.toga, "Canvas", lambda **kw: View(**kw))
     monkeypatch.setattr(app_module.toga, "ScrollContainer", lambda content, **kw: View(content, **kw))
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page="free_ink", _page_token=8, _ink_revision=2, _ink_busy=False,
         _model_request=0, _model_downloading=False, _model_checking=False, _paint_handle=None,
         model_state="not_downloaded", model_message="", service_message="日语声音已就绪",
         strokes=[[(12.0, 18.0, 1), (20.0, 30.0, 2)]], _active_stroke=None,
-        ink_width=360, ink_height=210, free_ink=True, script="hiragana",
-        _ink_view_width=360, _ink_view_height=210,
+        ink_width=360, ink_height=210, free_ink=True, _ink_view_width=360, _ink_view_height=210,
         canvas=View(), ink_model_panel=View(), model_panel=View(),
         ink_status_label=View(), ink_result_box=View(), recognize_button=View(enabled=False),
         settings_message=View(text="日语声音已就绪"), question_notice=View(),
         _navigating=False, _view_key=("show_free_ink", None), _render_key=None,
-        _audio_serial=0, question=None, _page_scroll=None, back_stack=BackStack(),
+        _audio_serial=0, _page_scroll=None, back_stack=BackStack(),
         content_slot=View(View()), title_label=View(text="自由试写识别"),
         platform=SimpleNamespace(model_status=AsyncMock(return_value="ready"),
             download_model=AsyncMock(), recognize=AsyncMock(return_value=["あ"]),
@@ -71,7 +71,8 @@ def model_app(monkeypatch):
         _redraw_ink=Mock(), _schedule_ink_draw=Mock(), _sync_back_handler=Mock(),
         check_answer=Mock(), content_label=lambda text, **kw: View(text=text, **kw),
         alert=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(),
-    )
+    ),
+        script="hiragana", question=None)
     for name in ("model_label", "_services_summary", "model_controls", "refresh_model_ui", "check_model",
                  "download_model", "recognize_ink", "confirm_ink", "ink_press",
                  "ink_drag", "ink_release", "ink_resize", "_ink_transform", "_ink_point", "undo_ink", "clear_ink",

@@ -118,11 +118,11 @@ def test_reverse_word_lane_recovers_exact_parts_and_plan_after_other_word(paused
     app.store.save_session_progress(sid, 0, state=state)
     app.store.set_setting("word_drill_preferences", {"direction": "罗马音 → 假名"})
     app.resume_practice()
-    assert app.question.kind == "word_meaning_kana"
+    assert kana_support.question(app).kind == "word_meaning_kana"
     app.store.set_setting("word_drill_preferences", {"direction": "双向混合"})
     app.resume_practice()
     app.store.record_review(other.content_id, other.kind, other.script, None,
-        session_id=sid, question_index=app.question_index, answered_text="かき",
+        session_id=sid, question_index=kana_support.question_index(app), answered_text="かき",
         outcome="correct", now=NOW)
     before = evidence(app.store)
     app.show_question()
@@ -147,14 +147,14 @@ def test_rating_other_question_restores_parked_word_with_screen_checkpoint(pause
     sid = begin(app, state, tail=[other])
     set_kinds(app, ["kana_romaji"])
     app.resume_practice()
-    assert app.page == "question" and app.question.content_id == other.content_id
+    assert app.page == "question" and kana_support.question(app).content_id == other.content_id
     app.romaji_answer = "k"
     app._checkpoint()
     set_kinds(app, [*KINDS, "kana_romaji"])
     app.resume_practice()
     assert app.romaji_answer == "k"
     app.store.record_review(other.content_id, other.kind, other.script, 4,
-        session_id=sid, question_index=app.question_index, outcome="correct", now=NOW)
+        session_id=sid, question_index=kana_support.question_index(app), outcome="correct", now=NOW)
     before = evidence(app.store)
     # The ordinary rating path directly dispatches the next head. The alternate
     # path reopens while dispatch still has to activate the parked state.

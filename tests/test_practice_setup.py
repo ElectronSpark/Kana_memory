@@ -243,8 +243,8 @@ def test_back_restores_configuration_and_refreshes_new_service_readiness(setup_a
     KanaMemory.show_practice_setup.__wrapped__(app)
     assert app.kind_picker is not old_controls[0]
     app.__dict__.update(page="settings", _view_key=("show_settings", None),
-        _ink_revision=0, _audio_serial=0, _paint_handle=None, question=None,
-        content_slot=View(View(text="设置")), title_label=View(text="设置"), _sync_back_handler=Mock())
+        _ink_revision=0, _audio_serial=0, _paint_handle=None, content_slot=View(View(text="设置")), title_label=View(text="设置"), _sync_back_handler=Mock())
+    kana_support.with_state(app, question=None)
     app.platform.tts_ready, app.model_state = True, "ready"
     assert KanaMemory.go_back(app) is True
     assert app.content_slot.children == [body]
@@ -282,7 +282,7 @@ def test_start_passes_only_effective_configuration_and_starts_one_session(setup_
     assert args["kana_categories"] == (None if kind == WORD else DEFAULT_CATEGORIES)
     app.store.start_session.assert_called_once_with(questions, seed=args["seed"])
     app.show_question.assert_called_once()
-    assert app.script == "katakana" and not app._starting_practice
+    assert kana_support.script(app) == "katakana" and not app._starting_practice
     app.alert.assert_not_called()
 
 
@@ -309,7 +309,7 @@ def test_async_model_result_cannot_start_an_abandoned_or_changed_configuration(s
     app = setup_app
     app.platform.tts_ready, app.model_state = True, "ready"
     set_mode(app, HANDWRITING, script="片假名")
-    original = (app.script, app.research_enabled, app.use_full_keyboard)
+    original = (kana_support.script(app), app.research_enabled, app.use_full_keyboard)
     build = Mock()
     monkeypatch.setattr(app_module, "build_questions", build)
 
@@ -340,7 +340,7 @@ def test_async_model_result_cannot_start_an_abandoned_or_changed_configuration(s
     build.assert_not_called()
     app.store.start_session.assert_not_called()
     app.show_question.assert_not_called()
-    assert (app.script, app.research_enabled, app.use_full_keyboard) == original
+    assert (kana_support.script(app), app.research_enabled, app.use_full_keyboard) == original
     assert not app._starting_practice
 
 

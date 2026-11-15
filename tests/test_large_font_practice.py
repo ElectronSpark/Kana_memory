@@ -13,6 +13,7 @@ from kanamemory import app as ui
 from kanamemory import text_layout
 from kanamemory.app import KanaMemory
 from kanamemory.domain import Question
+from support import kana_support
 
 
 class View:
@@ -45,13 +46,9 @@ def focused_app(monkeypatch):
     monkeypatch.setattr(ui.toga, "TextInput", lambda **kw: View(kind="input", **kw))
     monkeypatch.setattr(component_ui, "selection", lambda **kw: View(kind="selection", **kw))
     monkeypatch.setattr(text_layout, "font_scale", lambda: 1.0)
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         main_window=SimpleNamespace(size=SimpleNamespace(width=360, height=820)),
-        question=Question("kana-304b", "romaji_kana_full", "hiragana", "", "きゃ",
-                          options=["き", "ゃ", "な", "は", "あ", "い"],
-                          metadata={"romaji": "kya", "meaning_hint": "测试词义"}),
-        question_notice=View(text=""), research_enabled=False, script="hiragana",
-        repo=SimpleNamespace(get_word=lambda word_id: None),
+        question_notice=View(text=""), research_enabled=False, repo=SimpleNamespace(get_word=lambda word_id: None),
         note=lambda text: View(text=text), mixed_label=lambda *parts, **kw: View(text="".join(map(str, parts))),
         append_word_key=Mock(), delete_word_key=Mock(), check_answer=Mock(),
         play_question_audio=Mock(), reveal_answer=Mock(), model_controls=lambda **kw: View(text="模型"),
@@ -61,7 +58,11 @@ def focused_app(monkeypatch):
         # Android pages register a native MotionEvent listener as well as the
         # Canvas compatibility callbacks exercised by these gesture tests.
         platform=SimpleNamespace(bind_ink_touch=Mock()),
-    )
+    ),
+        question=Question("kana-304b", "romaji_kana_full", "hiragana", "", "きゃ",
+                          options=["き", "ゃ", "な", "は", "あ", "い"],
+                          metadata={"romaji": "kya", "meaning_hint": "测试词义"}),
+        script="hiragana")
     for method in ("ink_press", "ink_drag", "ink_release", "ink_touch_batch", "_ink_point", "_ink_transform"):
         setattr(app, method, MethodType(getattr(KanaMemory, method), app))
 
@@ -79,7 +80,7 @@ def test_word_questions_scroll_as_a_whole_when_space_is_constrained(focused_app,
     app = focused_app
     monkeypatch.setattr(text_layout, "font_scale", lambda: scale)
     app.main_window.size.height = height
-    app.question = replace(app.question, kind=kind)
+    kana_support.set_question(app, replace(kana_support.question(app), kind=kind))
     KanaMemory.show_word_question(app, "测试")
     # Word prompts reserve variable space for pitch alternatives even at 100%.
     scroll = scroll or kind in {"word_meaning_kana", "word_kana"}
@@ -100,12 +101,12 @@ def test_full_kana_table_preserves_compounds_and_scrolls_without_shrinking_text(
     app = focused_app
     monkeypatch.setattr(text_layout, "font_scale", lambda: scale)
     app.main_window.size.width = width
-    app.question = replace(app.question, options=["きゃ", "ヴァ", "ティェ", "しょ", "きゃ", "あ", "い"])
+    kana_support.set_question(app, replace(kana_support.question(app), options=["きゃ", "ヴァ", "ティェ", "しょ", "きゃ", "あ", "い"]))
     KanaMemory.show_word_question(app, "测试")
-    keys = [node for node in descendants(app.body) if node.kind == "button" and node.text in app.question.options]
+    keys = [node for node in descendants(app.body) if node.kind == "button" and node.text in kana_support.question(app).options]
     # Full tables group by vowel/consonant; candidate lists preserve saved order.
-    assert len(keys) == len(set(app.question.options))
-    assert {node.text for node in keys} == set(app.question.options)
+    assert len(keys) == len(set(kana_support.question(app).options))
+    assert {node.text for node in keys} == set(kana_support.question(app).options)
     # Three 18pt kana occupy 72sp before system font scaling, plus padding.
     minimum = 72 * scale + 12
     assert all(node.options["width"] >= minimum for node in keys)
@@ -130,7 +131,7 @@ def test_ink_controls_and_candidates_do_not_compete_for_remaining_height(focused
     app = focused_app
     monkeypatch.setattr(text_layout, "font_scale", lambda: scale)
     app.main_window.size.height, app.model_state = height, model
-    app.question = replace(app.question, kind="romaji_handwriting")
+    kana_support.set_question(app, replace(kana_support.question(app), kind="romaji_handwriting"))
     KanaMemory.show_ink_page(app, free, "测试")
     assert app.scroll_page is scroll
     nodes = list(descendants(app.body))

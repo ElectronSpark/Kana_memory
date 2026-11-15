@@ -32,10 +32,10 @@ def test_resume_discards_disabled_current_handwriting_state_only(question_app, t
             "strokes": [[[10, 20, 100], [20, 40, 120]]], "romaji_answer": "stale"})
         before = evidence(store)
         app.resume_practice()
-        assert unrouted(app.question) == survivor and app.page == "question"
+        assert unrouted(kana_support.question(app)) == survivor and app.page == "question"
         assert app.romaji_answer == app.romaji_input.value == ""
         assert not kana_support.answer_revealed(app) and kana_support.answered_text(app) is None
-        assert app.question_index == 1 and app.session_right == 0
+        assert kana_support.question_index(app) == 1 and kana_support.session_right(app) == 0
         assert app._attempt_key() not in kana_support.assisted_attempts(app)
         assert store.load_session_progress()["state"]["page"] == "question"
         assert evidence(store) == before
@@ -61,7 +61,7 @@ def test_resume_preserves_allowed_current_draft_after_disabled_tail_moves(questi
         store.save_session_progress(sid, 0, state=saved)
         before = evidence(store)
         app.resume_practice()
-        assert unrouted(app.question) == survivor and app.question_index == 1
+        assert unrouted(kana_support.question(app)) == survivor and kana_support.question_index(app) == 1
         assert app.romaji_answer == saved["romaji_answer"]
         assert app.page == ("feedback" if feedback else "question")
         assert kana_support.answered_text(app) == ("a" if feedback else None)
@@ -120,13 +120,13 @@ def test_temporary_queue_policy_survives_restart_but_regular_change_overrides_it
         store = StudyStore(data)
         configure(app, store, "kana_choice")
         app.resume_practice()
-        assert unrouted(app.question) == original and app.romaji_answer == "partial"
+        assert unrouted(kana_support.question(app)) == original and app.romaji_answer == "partial"
         # A later ordinary setting change invalidates the old temporary plan.
         app._practice_preferences = preferences("romaji_kana", "kana_choice")
         store.set_setting("practice_preferences", app._practice_preferences)
         app.page = "home"
         app.resume_practice()
-        assert app.question.kind == "kana_choice" and app.question_index == 1
+        assert kana_support.question(app).kind == "kana_choice" and kana_support.question_index(app) == 1
         assert store.stats()["total_reviews"] == 0
     finally:
         store.close()
@@ -173,7 +173,8 @@ def test_completed_batch_cannot_reenable_any_disabled_question_type(setup_app):
     old = question("old", "kana_choice")
     old.metadata["practice_config"].update(kinds=list(app_module.ALL_MIXED_KINDS), requested_count=7,
         requested_script="katakana", kana_categories=["yoon"])
-    app.questions, app.page = [old], "session_done"
+    kana_support.set_questions(app, [old])
+    app.page = "session_done"
     app.show_practice_setup = lambda **kwargs: KanaMemory.show_practice_setup.__wrapped__(app, **kwargs)
     KanaMemory.show_new_batch(app)
     assert app._practice_kinds() == ("kana_romaji", "romaji_handwriting")

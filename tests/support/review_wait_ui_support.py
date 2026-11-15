@@ -6,6 +6,7 @@ from support.joint_practice_ui_support import bind
 from datetime import datetime
 import pytest
 from support.joint_practice_ui_support import queue_question
+from support import kana_support
 from datetime import timezone
 from kanamemory.app_clock import using_clock
 
@@ -81,10 +82,11 @@ def waiting_app(queued_app, clock):
 def start_wait(app, due):
     question = queue_question("kana-wait")
     question.metadata["not_before_utc"] = due.isoformat()
-    app.questions = [question]
-    app.session_id = app.store.start_session(app.questions)
-    app.question_index, app.session_right = 0, 0
-    app.store.save_session_progress(app.session_id, 0)
+    kana_support.set_questions(app, [question])
+    kana_support.set_session_id(app, app.store.start_session(kana_support.questions(app)))
+    kana_support.set_question_index(app, 0)
+    kana_support.set_session_right(app, 0)
+    app.store.save_session_progress(kana_support.session_id(app), 0)
     app.show_question()
     assert app.page == "session_wait"
     return question

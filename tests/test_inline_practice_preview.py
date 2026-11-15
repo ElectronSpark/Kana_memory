@@ -50,11 +50,9 @@ def inline_app(monkeypatch):
         _ink_revision=0, _audio_serial=0, _active_stroke=None, _page_scroll=None,
         title_label=View(), subtitle_label=View(), content_slot=View(),
         platform=Mock(), loop=SimpleNamespace(call_soon=lambda callback: callback()),
-        back_stack=BackStack(), session_id="session-1", question_index=0,
-        question=SimpleNamespace(content_id="kana-304b"),
-        store=SimpleNamespace(is_content_available=lambda content_id: True,
+        back_stack=BackStack(), store=SimpleNamespace(is_content_available=lambda content_id: True,
                               load_session_progress=lambda **kw: None),
-        questions=[object()], session_right=0, question_notice=View(),
+        question_notice=View(),
         _checkpoint=Mock(),
         entry_card=lambda *children, **kw: View(*children, **kw),
         content_label=Mock(side_effect=AssertionError("Summary must not create content links")),
@@ -62,7 +60,9 @@ def inline_app(monkeypatch):
         alert=Mock(), detail_visits=[],
     ),
         answer_revealed=False, answered_text="ka", answer_correct=True, assisted_attempts=set(),
-        answered_attempts={("session-1", 0)})
+        answered_attempts={("session-1", 0)},
+        session_id="session-1", question_index=0, question=SimpleNamespace(content_id="kana-304b"),
+        questions=[object()], session_right=0)
     app.platform.preview_index = AsyncMock()
     for name in ("screen", "_capture_page", "_sync_back_handler", "go_back", "_attempt_key",
                  "_content_page_key", "_mark_lookup_assisted", "_preview_link", "_show_practice_preview"):
@@ -125,9 +125,9 @@ def test_old_inline_action_cannot_navigate_another_page_or_attempt(inline_app, c
     if change == "leave_page":
         app.screen("settings", "设置")
     elif change == "next_question":
-        app.question_index += 1
+        kana_support.set_question_index(app, kana_support.question_index(app) + 1)
     elif change == "new_session":
-        app.session_id = "session-2"
+        kana_support.set_session_id(app, "session-2")
     else:
         app.screen("feedback", "新反馈")
     old_action.on_press(None)

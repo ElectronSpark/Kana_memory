@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 from support.app_fixtures import setup_app, app_module
 from support.fake_ui import descendants, text_of
+from support import kana_support
 from kanamemory.domain import Question
 
 
@@ -79,13 +80,14 @@ def test_failed_new_batch_does_not_replace_in_memory_old_questions(setup_app, mo
     app = setup_app
     pending = saved_batch()
     original = pending["questions"]
-    app.questions, app.session_id = original, "old"
+    kana_support.set_questions(app, original)
+    kana_support.set_session_id(app, "old")
     app.store.load_session_progress.return_value = pending
     app.store.start_session.side_effect = RuntimeError("disk full")
     monkeypatch.setattr(app_module, "build_questions", Mock(return_value=[object()]))
     asyncio.run(app.start_practice())
     asyncio.run(action(app, "结束原批次并开始")())
-    assert app.questions is original and app.session_id == "old"
+    assert kana_support.questions(app) is original and kana_support.session_id(app) == "old"
     app.show_question.assert_not_called()
 
 

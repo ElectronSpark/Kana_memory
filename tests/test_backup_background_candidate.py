@@ -20,6 +20,7 @@ from support.fake_ui import View
 
 
 from support.backup_background_candidate_support import backup, tables, app
+from support import kana_support
 
 
 def test_worker_constructs_uses_and_closes_own_connection(tmp_path, monkeypatch):
@@ -91,11 +92,11 @@ def test_restore_cancellation_is_atomic_or_reports_real_commit(tmp_path, monkeyp
 
 def test_export_preserves_exact_view_draft_and_options_after_reopen(app):
     before, view, original = tables(app.store), app.main_window.content, app.store
-    options, question, sid = app.questions, app.question, app.session_id
+    options, question, sid = kana_support.questions(app), kana_support.question(app), kana_support.session_id(app)
     asyncio.run(app_module.KanaMemory.export_learning_backup(app))
     assert app.store is not original and tables(app.store) == before
-    assert app.main_window.content is view and app.questions is options and app.question is question
-    assert app.session_id == sid and app.store.load_session_progress()['state']['romaji_answer'] == 'a'
+    assert app.main_window.content is view and kana_support.questions(app) is options and kana_support.question(app) is question
+    assert kana_support.session_id(app) == sid and app.store.load_session_progress()['state']['romaji_answer'] == 'a'
     assert app._backup_busy is False and app._backup_request is False
     app.platform.export_backup.assert_awaited_once()
 
@@ -151,7 +152,7 @@ def test_restore_keeps_confirmation_and_reloads_only_after_commit(app, confirmed
     assert app.store is not original and not app._backup_busy
     if confirmed:
         assert app.store.get_setting('replacement') is True
-        assert app.session_id is None and app.questions == []
+        assert kana_support.session_id(app) is None and kana_support.questions(app) == []
         app.show_home.assert_called_once()
         assert app.store.previous_backup()
     else:

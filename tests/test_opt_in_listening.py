@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from support.app_fixtures import app_module, setup_app
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.domain import Question
 
@@ -122,12 +123,13 @@ def test_completed_legacy_batch_cannot_reenable_listening_against_current_choice
         "practice_config": {"kinds": list(ALL_KINDS), "requested_script": "both",
                             "requested_count": 5, "kana_categories": ["basic"],
                             "schedule_mode": "spaced"}})]
-    app.questions, app.page = questions, "session_done"
+    kana_support.set_questions(app, questions)
+    app.page = "session_done"
     before = deepcopy(questions)
     KanaMemory.show_new_batch(app)
     assert (LISTENING in app._practice_kinds()) is opted_in
     assert VISUAL in app._practice_kinds()
-    assert app.questions == before
+    assert kana_support.questions(app) == before
     assert app._practice_new_only()
 
 
@@ -148,10 +150,10 @@ def test_new_batch_does_not_reenable_any_old_kind_or_inherit_old_family(
     app = setup_app
     open_form(app, {"question_plan_version": 2, "kind": current_kind,
                     "mixed_kinds": current_kinds})
-    app.questions = [Question("ka", LISTENING, "hiragana", "", "か", metadata={
+    kana_support.set_questions(app, [Question("ka", LISTENING, "hiragana", "", "か", metadata={
         "practice_config": {"kinds": [LISTENING, "word_meaning_kana"],
                             "requested_script": "hiragana", "requested_count": 5,
-                            "schedule_mode": "spaced"}})]
+                            "schedule_mode": "spaced"}})])
     app.page = "session_done"
     KanaMemory.show_new_batch(app)
     assert app.kind_picker.value == current_kind
@@ -170,16 +172,16 @@ def test_completed_old_single_listening_batch_does_not_undo_explicit_opt_out(set
     app.mixed_kind_switches[LISTENING].value = False
     app.kind_picker.value = current_kind
     app.refresh_practice_setup(app.mixed_kind_switches[LISTENING])
-    app.questions = [Question("ka", LISTENING, "hiragana", "", "か", metadata={
+    kana_support.set_questions(app, [Question("ka", LISTENING, "hiragana", "", "か", metadata={
         "practice_config": {"kinds": [LISTENING], "kana_categories": ["basic"],
                             "requested_script": "hiragana", "requested_count": 5,
-                            "schedule_mode": "spaced"}})]
-    original = deepcopy(app.questions)
+                            "schedule_mode": "spaced"}})])
+    original = deepcopy(kana_support.questions(app))
     app.page = "session_done"
     KanaMemory.show_new_batch(app)
     assert app.kind_picker.value != "听音手写假名"
     assert LISTENING not in app._practice_kinds()
     assert not app.mixed_kind_switches[LISTENING].value
-    assert app.questions == original
+    assert kana_support.questions(app) == original
     assert app._practice_new_only()
 

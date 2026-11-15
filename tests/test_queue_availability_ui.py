@@ -14,6 +14,7 @@ from support.review_wait_ui_support import ControlledLoop
 from support.review_wait_ui_support import clock
 from support.review_wait_ui_support import waiting_app
 from support.study_home_support import home_page
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.practice_availability import summarize_queue_availability
 from kanamemory.domain import StudyStore
@@ -175,15 +176,16 @@ def test_question_header_and_wait_screen_report_the_same_ready_waiting_split(wai
     first.metadata.update(kana_symbol="あ", romaji="a", content_version="test")
     second = question("b", "kana_romaji")
     second.metadata.update(kana_symbol="い", romaji="i", content_version="test")
-    app.questions = [first, second]
-    app.session_id = start(app.store, app.questions, clock.now)
-    app.question_index, app.session_right = 0, 0
-    rate(app.store, app.session_id, 1, clock.now)
+    kana_support.set_questions(app, [first, second])
+    kana_support.set_session_id(app, start(app.store, kana_support.questions(app), clock.now))
+    kana_support.set_question_index(app, 0)
+    kana_support.set_session_right(app, 0)
+    rate(app.store, kana_support.session_id(app), 1, clock.now)
     app.show_question()
     assert app.page == "question"
     # The failed first answer queued a later repetition: position 2 of 3.
     assert app.title_label.text == "本轮剩 1 题 · 第 2 / 3 题"
-    rate(app.store, app.session_id, 4, clock.now)
+    rate(app.store, kana_support.session_id(app), 4, clock.now)
     app.show_question()
     assert app.page == "session_wait"
     assert "已保存 1 道后续复习题，到期后自动继续" in text_of(app.body)

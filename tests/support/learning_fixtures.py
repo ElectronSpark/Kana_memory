@@ -13,6 +13,7 @@ import pytest
 from support.fake_ui import View, descendants
 from support.course_support import batch_quiz_question
 from support import course_support
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
 from kanamemory.learning_content import get_learning_item
@@ -98,7 +99,7 @@ def use_real_detail_back(app):
     app._page_scroll = None
     app._paint_handle = None
     app._ink_revision = app._audio_serial = 0
-    app.question = None
+    kana_support.set_question(app, None)
     app.content_slot, app.title_label, app.subtitle_label = View(), View(), View()
     app.platform.set_back_enabled = Mock()
     app.loop.call_soon = lambda callback, *args: callback(*args)

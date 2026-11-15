@@ -54,7 +54,7 @@ def reopen(app):
 
 
 def rate_current(app):
-    q = app.question
+    q = kana_support.question(app)
     app.page = "feedback"
     kana_support.set_answer_correct(app, True)
     kana_support.set_answer_revealed(app, False)

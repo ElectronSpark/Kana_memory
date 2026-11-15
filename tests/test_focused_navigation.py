@@ -37,7 +37,7 @@ def test_feedback_system_back_confirms_exit_without_restoring_unanswered_questio
     assert all(state.name != "question" for state in app.back_stack.pages)
     assert app.go_back() is True
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
-    assert app.question is question and kana_support.answer_correct(app)
+    assert kana_support.question(app) is question and kana_support.answer_correct(app)
     resolve_confirmation(app, False)
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
     assert kana_support.answered_text(app) == "ka" and not kana_support.answer_revealed(app)
@@ -55,10 +55,10 @@ def test_cancel_then_confirm_preserves_real_saved_draft_and_does_not_grade(focus
         app.romaji_input.value = draft
     with StudyStore(tmp_path / "learner", time_zone="UTC") as store:
         app.store = store
-        app.session_id = store.start_session([question])
+        kana_support.set_session_id(app, store.start_session([question]))
         # The frozen snapshot owns the queue, as it does for a real fresh session.
-        app.question = store.get_session_questions(app.session_id)[0]
-        app.questions = [app.question]
+        kana_support.set_question(app, store.get_session_questions(kana_support.session_id(app))[0])
+        kana_support.set_questions(app, [kana_support.question(app)])
         app._checkpoint = MethodType(KanaMemory._checkpoint, app)
         app._checkpoint()
         before = store.load_session_progress()
@@ -91,7 +91,7 @@ def test_confirmed_feedback_exit_clears_history_without_changing_answer_or_revie
     assert app.page == "home" and app._view_key == ("show_home", None)
     assert not app.back_stack.pages and not app._practice_context
     assert kana_support.answered_text(app) == answer and not kana_support.answer_correct(app)
-    assert app.question_index == 0 and app.session_right == 0
+    assert kana_support.question_index(app) == 0 and kana_support.session_right(app) == 0
     assert app._attempt_key() in kana_support.answered_attempts(app)
     app.store.record_review.assert_not_called()
     assert not app._leave_confirmation_active and not app._returning_home
@@ -213,16 +213,17 @@ def test_completed_session_returns_home_directly_without_altering_saved_reviews(
     question, _ = render(app)
     with StudyStore(tmp_path / "learner", time_zone="UTC") as store:
         app.store = store
-        app.session_id = store.start_session([question])
-        store.save_session_progress(app.session_id, 0)
+        kana_support.set_session_id(app, store.start_session([question]))
+        store.save_session_progress(kana_support.session_id(app), 0)
         store.record_review(question.content_id, question.kind, question.script, 4,
-                            session_id=app.session_id, question_index=0,
+                            session_id=kana_support.session_id(app), question_index=0,
                             outcome="correct", answered_text=question.answer)
-        app.question_index, app.session_right = 1, 1
+        kana_support.set_question_index(app, 1)
+        kana_support.set_session_right(app, 1)
         app._checkpoint = MethodType(KanaMemory._checkpoint, app)
         app.screen(page, "本批完成", View(text="完成 1 题"))
         assert store.load_session_progress() is None
-        assert store.get_session_summary(app.session_id)["answered"] == 1
+        assert store.get_session_summary(kana_support.session_id(app))["answered"] == 1
         before = tuple(store._db.iterdump())
         assert app.navigation not in app.root.children
         assert app.header_back_slot.children == [app.header_back_button]
@@ -250,9 +251,10 @@ def test_saved_waiting_pages_return_directly_and_retain_pending_queue(focused_ap
     question, _ = render(app)
     with StudyStore(tmp_path / "waiting-learner", time_zone="UTC") as store:
         app.store = store
-        app.session_id = store.start_session([question])
-        store.save_session_progress(app.session_id, 0, state={"romaji_answer": "saved-draft"})
-        app.question_index, app.session_right = 0, 0
+        kana_support.set_session_id(app, store.start_session([question]))
+        store.save_session_progress(kana_support.session_id(app), 0, state={"romaji_answer": "saved-draft"})
+        kana_support.set_question_index(app, 0)
+        kana_support.set_session_right(app, 0)
         app.screen(page, "稍后继续", View(text="进度已经保存"))
         before = tuple(store._db.iterdump())
         app.back_stack.pages.append(PageState(("show_words", None), "words", "词库", View()))
@@ -289,7 +291,7 @@ def test_detail_back_restores_current_feedback_and_keeps_navigation_hidden(focus
         app.header_back_button.on_press(None)
     assert app.page == "feedback" and app.content_slot.children[0] is feedback
     assert app.practice_preview_slot is preview
-    assert app.question is question and kana_support.answer_correct(app) and kana_support.answered_text(app) == "ka"
+    assert kana_support.question(app) is question and kana_support.answer_correct(app) and kana_support.answered_text(app) == "ka"
     assert app.navigation not in app.root.children
     assert app.header_back_slot.children == [app.header_back_button]
     assert not app.pending_confirmation

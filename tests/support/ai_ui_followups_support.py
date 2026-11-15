@@ -9,6 +9,7 @@ from support.learning_fixtures import learning_app
 import pytest
 from support.app_fixtures import question_app
 from support.app_fixtures import setup_app
+from support import kana_support
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def ai_navigation_app(ai_app):
     app._navigating = False
     app._paint_handle = app._page_scroll = None
     app._ink_revision = app._audio_serial = 0
-    app.question = None
+    kana_support.set_question(app, None)
     app.content_slot, app.title_label, app.subtitle_label = View(View()), View(), View()
     app.platform.set_back_enabled = Mock()
     app.loop.call_soon = lambda callback: callback()

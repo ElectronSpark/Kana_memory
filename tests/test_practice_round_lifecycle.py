@@ -239,9 +239,11 @@ def test_native_feedback_is_durable_before_navigation_and_lanes_restart_independ
                     metadata={'word_romaji_drill': True})
     word_sid = store.start_session([word], now=now)
     store.save_session_progress(word_sid, 0, state={'word_answer': 'み'})
-    app.session_id, app.questions = sid, store.get_session_questions(sid)
-    app.question_index, app.session_right = 0, 0
-    app.question = app.questions[0]
+    kana_support.set_session_id(app, sid)
+    kana_support.set_questions(app, store.get_session_questions(sid))
+    kana_support.set_question_index(app, 0)
+    kana_support.set_session_right(app, 0)
+    kana_support.set_question(app, kana_support.questions(app)[0])
     app.page = 'question'
     kana_support.set_question_audio_ok(app, True)
     kana_support.set_answer_revealed(app, False)

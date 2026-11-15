@@ -11,6 +11,7 @@ from support.live_kind_preferences_ui_support import configure
 from support.fake_ui import descendants
 import pytest
 from support.app_fixtures import kana_route_handoff
+from support import kana_support
 
 
 CONTENT = _TEST_ROOT / "app/src/kanamemory/resources/content.sqlite3"
@@ -43,8 +44,8 @@ def spelling_app(question_app, tmp_path):
 
 
 def start(app, question=None, *, extra=()):
-    app.questions = [question or word_question(), *extra]
-    app.session_id = app.store.start_session(app.questions)
-    app.store.save_session_progress(app.session_id, 0)
+    kana_support.set_questions(app, [question or word_question(), *extra])
+    kana_support.set_session_id(app, app.store.start_session(kana_support.questions(app)))
+    app.store.save_session_progress(kana_support.session_id(app), 0)
     app.show_question()
     assert app.page == "word_question"

@@ -8,6 +8,7 @@ from support.study_path_runtime_support import source_question
 from support.feedback_context_support import fake_app
 from support.feedback_context_support import Widget
 from support.session_snapshots import unrouted
+from support import kana_support
 from kanamemory import domain, feedback_context
 from kanamemory.app import KanaMemory
 
@@ -28,9 +29,9 @@ def test_resume_keeps_history_lazy_and_preserves_live_typing_draft(path_app, mon
         return original(item, **kwargs)
     monkeypatch.setattr(domain, '_question_from_snapshot', observe)
     app.resume_practice()
-    assert isinstance(app.questions, domain._QuestionSequence)
-    assert app.page == 'question' and unrouted(app.question) == current
-    assert app.question_index == 1000 and app.romaji_input.value == 'draft'
+    assert isinstance(kana_support.questions(app), domain._QuestionSequence)
+    assert app.page == 'question' and unrouted(kana_support.question(app)) == current
+    assert kana_support.question_index(app) == 1000 and app.romaji_input.value == 'draft'
     assert len(copies) < 20
     after = app.store.load_session_progress(lazy_questions=True)
     assert after['state'] == before['state'] and after['session_id'] == sid
@@ -44,8 +45,8 @@ def test_feedback_capture_retains_lazy_queue_size_without_exporting_old_answers(
         question = domain.Question('kana-a', 'kana_romaji', 'hiragana', 'あ', 'a', [], metadata={})
         sid = store.start_session([question] * 1000)
         queue = store.get_session_questions(sid, lazy=True)
-        app = fake_app(page='question', root=Widget(text='当前题目'), store=store,
-                       question=queue[-1], questions=queue, session_id=sid, question_index=999)
+        app = kana_support.with_state(fake_app(page='question', root=Widget(text='当前题目'), store=store),
+            question=queue[-1], questions=queue, session_id=sid, question_index=999)
         result = feedback_context.capture_feedback_context(app)
         assert result['practice']['queue_length'] == 1000
         assert result['practice']['queue_scope'] == 'current_question_only; other queued answers are not exported'

@@ -23,11 +23,12 @@ KANA = {"id": "kana-304b", "hiragana": "か", "katakana": "カ", "romaji": "ka",
 def state():
     app = kana_support.with_state(SimpleNamespace(
         page="kana", _view_key=("show_kana", None), _render_key=None,
-        session_id=None, question_index=0, back_stack=BackStack(),
+        back_stack=BackStack(),
         question_notice=SimpleNamespace(text=""), platform=Mock(), repo=Mock(),
         store=Mock(), show_kana_detail=Mock(), _preview_link=Mock(), _checkpoint=Mock(),
     ),
-        answer_revealed=False, answered_attempts=set(), assisted_attempts=set())
+        answer_revealed=False, answered_attempts=set(), assisted_attempts=set(),
+        session_id=None, question_index=0)
     app.repo.get_kana.return_value = KANA
     for method in ("_attempt_key", "_content_page_key", "_mark_lookup_assisted", "open_table_kana", "open_content_kana"):
         setattr(app, method, MethodType(getattr(KanaMemory, method), app))
@@ -55,7 +56,8 @@ def test_table_does_not_reopen_the_current_or_being_built_detail(self_location):
 
 def test_unknown_table_id_cannot_reveal_or_navigate_a_pending_question():
     app = state()
-    app.page, app.session_id = "question", "session-1"
+    app.page = "question"
+    kana_support.set_session_id(app, "session-1")
     app.repo.get_kana.return_value = None
     app.open_table_kana("missing")
     assert not kana_support.assisted_attempts(app) and not kana_support.answer_revealed(app)
@@ -65,10 +67,11 @@ def test_unknown_table_id_cannot_reveal_or_navigate_a_pending_question():
 
 def test_direct_table_lookup_marks_suspended_attempt_before_capturing_detail():
     app = state()
-    app.session_id = "session-1"
+    kana_support.set_session_id(app, "session-1")
     app.back_stack.pages.append(PageState(
         ("show_question", None), "question", "练习", object(),
-        {"session_id": "session-1", "question_index": 0, "answer_revealed": False},
+        {**kana_support.kept_position(session_id="session-1", question_index=0),
+         **kana_support.kept_evidence(answer_revealed=False)},
     ))
     def navigate(kana_id):
         assert kana_support.answer_revealed(app) and kana_support.assisted_attempts(app) == {("session-1", 0)}
@@ -81,11 +84,11 @@ def test_direct_table_lookup_marks_suspended_attempt_before_capturing_detail():
 
 def test_completed_attempt_is_not_reclassified_by_later_table_lookup():
     app = state()
-    app.session_id = "session-1"
+    kana_support.set_session_id(app, "session-1")
     kana_support.answered_attempts(app).add(("session-1", 0))
     app.back_stack.pages.append(PageState(
         ("show_question", None), "question", "练习", object(),
-        {"session_id": "session-1", "question_index": 0},
+        kana_support.kept_position(session_id="session-1", question_index=0),
     ))
     app.open_table_kana(KANA["id"])
     assert not kana_support.assisted_attempts(app) and not kana_support.answer_revealed(app)

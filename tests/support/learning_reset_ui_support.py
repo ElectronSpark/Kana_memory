@@ -24,12 +24,16 @@ def reset_app(setup_app, tmp_path):
     app = setup_app
     with ContentRepository(CONTENT) as repo, StudyStore(tmp_path / "learner", time_zone="UTC") as store:
         app.repo, app.store = repo, store
-        app.session_id, app.questions = populate(store)
-        app.question, app.question_index, app.session_right = app.questions[2], 2, 2
+        populated = populate(store)
+        kana_support.set_session_id(app, populated[0])
+        kana_support.set_questions(app, populated[1])
+        kana_support.set_question(app, kana_support.questions(app)[2])
+        kana_support.set_question_index(app, 2)
+        kana_support.set_session_right(app, 2)
         app.page, app._page_token = "settings", app._page_token + 1
         app._ink_revision, app._audio_serial = 2, 3
-        kana_support.set_assisted_attempts(app, {(app.session_id, 2)})
-        kana_support.set_answered_attempts(app, {(app.session_id, 0), (app.session_id, 1)})
+        kana_support.set_assisted_attempts(app, {(kana_support.session_id(app), 2)})
+        kana_support.set_answered_attempts(app, {(kana_support.session_id(app), 0), (kana_support.session_id(app), 1)})
         app.strokes, app._active_stroke = [[[1, 2, 3]]], [(1, 2, 3)]
         app._preview_pending, app._practice_context = object(), True
         app._practice_start_token, app._practice_start_task = object(), None
@@ -37,7 +41,8 @@ def reset_app(setup_app, tmp_path):
         app._sync_back_handler = Mock()
         app._capture_page = Mock(return_value=PageState(("show_settings", None), "settings", "设置", View()))
         app.back_stack.pages = [PageState(("show_question", None), "question", "练习", View(),
-                                         {"session_id": app.session_id, "question": app.question})]
+                                         kana_support.kept_position(session_id=kana_support.session_id(app),
+                                                                    question=kana_support.question(app)))]
         app.main_window = SimpleNamespace(dialog=AsyncMock(return_value=True))
         app.service_message = "日语声音已就绪"
         app.model_state, app.platform.tts_ready = "ready", True
@@ -60,7 +65,7 @@ def saved_tables(app):
 
 
 def retained_state(app):
-    return (app.session_id, app.questions, app.question, app.question_index, app.session_right,
+    return (kana_support.session_id(app), kana_support.questions(app), kana_support.question(app), kana_support.question_index(app), kana_support.session_right(app),
             set(kana_support.assisted_attempts(app)), set(kana_support.answered_attempts(app)), list(app.back_stack.pages),
             app.strokes, app._active_stroke, app._preview_pending, app._practice_context,
             app._ink_revision, app._audio_serial, app._practice_start_token)

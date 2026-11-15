@@ -16,6 +16,7 @@ from support.app_fixtures import setup_app
 from support.backup_retained_callbacks_support import controls
 from support.backup_retained_callbacks_support import wire
 from support.app_fixtures import app_module
+from support import kana_support
 from record_test_support import as_legacy, decode_current
 
 
@@ -49,7 +50,7 @@ def stages(monkeypatch, *, failure=None):
 
 
 def retained(app):
-    return (app.main_window.content, app.session_id, app.questions, app.question,
+    return (app.main_window.content, kana_support.session_id(app), kana_support.questions(app), kana_support.question(app),
             app.store.load_session_progress())
 
 
@@ -96,7 +97,7 @@ def test_restore_old_file_converts_once_and_binds_confirmation_to_new_bytes(conv
     app.platform.import_backup.assert_awaited_once()
     app.platform.export_backup.assert_not_awaited()
     if confirmed:
-        assert app.session_id is None and app.questions == []
+        assert kana_support.session_id(app) is None and kana_support.questions(app) == []
         app.show_home.assert_called_once()
     else:
         assert retained(app) == before
@@ -266,15 +267,15 @@ def test_real_conversion_stage_preserves_live_draft_and_exports_same_records(app
     before = decode_current(app.store.export_backup())['tables']
     old = json.dumps(as_legacy(decode_current(app.store.export_backup())), ensure_ascii=False).encode('utf8')
     app.platform.import_backup.return_value = old
-    view, questions, question, sid = app.main_window.content, app.questions, app.question, app.session_id
+    view, questions, question, sid = app.main_window.content, kana_support.questions(app), kana_support.question(app), kana_support.session_id(app)
     asyncio.run(backup_ui.convert_legacy(app))
     app.platform.export_backup.assert_awaited_once()
     current = app.platform.export_backup.call_args.args[0]
     assert not progress_backup.is_legacy_backup(current)
     assert semantic_tables(decode_current(current)['tables']) == semantic_tables(before)
     assert decode_current(app.store.export_backup())['tables'] == before
-    assert app.main_window.content is view and app.questions is questions and app.question is question
-    assert app.session_id == sid and app.store.load_session_progress()['state'] == {'romaji_answer': 'a'}
+    assert app.main_window.content is view and kana_support.questions(app) is questions and kana_support.question(app) is question
+    assert kana_support.session_id(app) == sid and app.store.load_session_progress()['state'] == {'romaji_answer': 'a'}
     assert not app._backup_busy and not app._backup_request
     app.main_window.dialog.assert_not_awaited()
 

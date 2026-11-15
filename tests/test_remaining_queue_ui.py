@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from support.app_fixtures import question_app, setup_app
+from support import kana_support
 from kanamemory import domain
 from kanamemory.app import KanaMemory
 from kanamemory.practice_availability import summarize_queue_availability
@@ -68,8 +69,10 @@ def test_old_thousand_row_history_shows_only_three_unfinished_questions(question
         assert reopened.load_session_progress() == pending
         assert memory(reopened) == records
         assert home(app, reopened)[0] == 3
-        app.session_id, app.questions = session, pending["questions"]
-        app.question_index, app.session_right = 1000, pending["session_right"]
+        kana_support.set_session_id(app, session)
+        kana_support.set_questions(app, pending["questions"])
+        kana_support.set_question_index(app, 1000)
+        kana_support.set_session_right(app, pending["session_right"])
         app.show_question()
         assert app.title == "本轮剩 3 题 · 第 1001 / 1003 题"
         assert reopened.load_session_progress()["question_index"] == 1000

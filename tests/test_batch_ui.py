@@ -9,6 +9,7 @@ import pytest
 from support.app_fixtures import CHOICE, WORD, FULL, app_module, set_mode, setup_app, question_app
 from support.fake_ui import View, descendants, text_of
 from support.study_home_support import home_page
+from support import kana_support
 from kanamemory.app import KanaMemory
 from kanamemory.domain import Question
 
@@ -70,8 +71,8 @@ def test_home_new_batch_uses_saved_preferences_even_with_retained_old_questions(
     set_mode(app, "看假名拼罗马音", script="片假名", scopes=("拗音",), count=20)
     before = deepcopy(app._practice_preferences)
     app.page = "home"
-    app.questions = [Question("unused", "word_kana", "hiragana", "", "あ",
-        metadata={"practice_config": {"requested_count": 999, "include_research": True}})]
+    kana_support.set_questions(app, [Question("unused", "word_kana", "hiragana", "", "あ",
+        metadata={"practice_config": {"requested_count": 999, "include_research": True}})])
     app._clean_preferences = KanaMemory._clean_preferences
     app.show_practice_setup = Mock()
     KanaMemory.show_new_batch(app)
@@ -89,7 +90,8 @@ def test_completed_appended_queue_continues_latest_batch_scope_not_old_timed_rep
         "kana_categories": ["yoon"], "requested_count": 15, "word_table": "partial"}})
     retry = deepcopy(old)
     retry.metadata["not_before_utc"] = "2026-10-15T12:00:00+00:00"
-    app.questions, app.page = [old, latest, retry], "session_done"
+    kana_support.set_questions(app, [old, latest, retry])
+    app.page = "session_done"
     app._clean_preferences = KanaMemory._clean_preferences
     app.show_practice_setup = Mock()
     KanaMemory.show_new_batch(app)
@@ -104,12 +106,12 @@ def test_completed_kana_batch_inherits_scope_count_but_keeps_current_kind(setup_
     set_mode(app, WORD, script="平假名", research=True, table=FULL, count=5)
     before = deepcopy(app._practice_preferences)
     app.page = "session_done"
-    app.questions = [Question("kana-test", kind, "katakana", "", "kya",
+    kana_support.set_questions(app, [Question("kana-test", kind, "katakana", "", "kya",
         metadata={"practice_config": {
             "kana_categories": ["yoon", "foreign_combination", "foreign_voiced"],
             "requested_count": 201, "word_collection": None, "include_research": False,
             "word_table": "partial",
-        }})]
+        }})])
     app._clean_preferences = KanaMemory._clean_preferences
     app.show_practice_setup = Mock()
     KanaMemory.show_new_batch(app)
@@ -129,12 +131,12 @@ def test_completed_word_batch_keeps_collection_research_choice_and_keyboard(setu
     app = setup_app
     before = deepcopy(app._practice_preferences)
     app.page = "session_done"
-    app.questions = [Question("word-test", kind, "hiragana", "", "こーひー",
+    kana_support.set_questions(app, [Question("word-test", kind, "hiragana", "", "こーひー",
         metadata={"practice_config": {
             "kana_categories": None, "requested_count": 3003,
             "word_collection": "english_loanwords", "include_research": True,
             "word_table": "full",
-        }})]
+        }})])
     app._clean_preferences = KanaMemory._clean_preferences
     app.show_practice_setup = Mock()
     KanaMemory.show_new_batch(app)
@@ -152,7 +154,7 @@ def test_legacy_completed_batch_keeps_current_kind_and_scope_with_completed_scri
     set_mode(app, "看假名拼罗马音", script="片假名", scopes=("浊音",), count=15)
     before = deepcopy(app._practice_preferences)
     app.page = "session_done"
-    app.questions = [Question("legacy", "word_kana", "hiragana", "", "あ")]
+    kana_support.set_questions(app, [Question("legacy", "word_kana", "hiragana", "", "あ")])
     app._clean_preferences = KanaMemory._clean_preferences
     app.show_practice_setup = Mock()
     KanaMemory.show_new_batch(app)
@@ -193,7 +195,9 @@ def test_home_groups_learning_actions_without_duplicate_navigation(setup_app):
 ])
 def test_completed_page_secondary_buttons_do_not_start_another_batch(question_app, caption, handler):
     app = question_app
-    app.questions, app.question_index, app.session_right = [object()], 1, 1
+    kana_support.set_questions(app, [object()])
+    kana_support.set_question_index(app, 1)
+    kana_support.set_session_right(app, 1)
     app.show_new_batch, app.show_progress, app.show_home = Mock(), Mock(), Mock()
     app.show_question()
     assert app.page == "session_done"
@@ -207,7 +211,9 @@ def test_completed_page_secondary_buttons_do_not_start_another_batch(question_ap
 
 def test_completed_page_offers_study_path_next_step_instead_of_new_batch(question_app):
     app = question_app
-    app.questions, app.question_index, app.session_right = [object()], 1, 1
+    kana_support.set_questions(app, [object()])
+    kana_support.set_question_index(app, 1)
+    kana_support.set_session_right(app, 1)
     app.show_new_batch, app.show_progress, app.show_home = Mock(), Mock(), Mock()
     overview = {"sections": []}
     app.study_path_service = lambda: SimpleNamespace(overview=lambda: overview)

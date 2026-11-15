@@ -15,6 +15,7 @@ from kanamemory.navigation import BackStack, PageState
 
 
 from support.kana_table_batches_support import View, walk, builder
+from support import kana_support
 
 
 def kana_items(groups):
@@ -94,9 +95,9 @@ def restore_from_detail(app, content, page_name, bindings):
     stack = BackStack()
     stack.pages.append(previous)
     app.__dict__.update(page="kana_detail", _view_key=("show_kana_detail", "detail"),
-        _page_token=5, _ink_revision=0, _audio_serial=0, _paint_handle=None, question=None,
-        back_stack=stack, content_slot=View(View(text="详情")), title_label=SimpleNamespace(text="详情"),
+        _page_token=5, _ink_revision=0, _audio_serial=0, _paint_handle=None, back_stack=stack, content_slot=View(View(text="详情")), title_label=SimpleNamespace(text="详情"),
         platform=Mock(), _sync_back_handler=Mock())
+    kana_support.with_state(app, question=None)
     assert KanaMemory.go_back(app) is True
     assert app.content_slot.children == [content]
 

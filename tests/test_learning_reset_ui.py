@@ -100,8 +100,8 @@ def test_success_retires_session_views_and_audio_but_retains_preferences_and_res
     backup_path.write_bytes(backup)
     previous_token, ink_revision, audio_serial = app._page_token, app._ink_revision, app._audio_serial
     asyncio.run(app.delete_learning_data())
-    assert app.session_id is None and app.questions == [] and app.question is None
-    assert app.question_index == app.session_right == 0
+    assert kana_support.session_id(app) is None and kana_support.questions(app) == [] and kana_support.question(app) is None
+    assert kana_support.question_index(app) == kana_support.session_right(app) == 0
     assert kana_support.assisted_attempts(app) == kana_support.answered_attempts(app) == set()
     assert app.strokes == [] and app._active_stroke is None
     assert app._preview_pending is None and app._practice_context is False
@@ -157,7 +157,7 @@ def test_cancelled_confirmation_preserves_progress_and_releases_busy_guard(reset
 
 def test_worker_returning_after_reset_cannot_restore_deleted_batch(reset_app, monkeypatch):
     app = reset_app
-    old_session = app.session_id
+    old_session = kana_support.session_id(app)
     KanaMemory.show_practice_setup.__wrapped__(app)
     old_question = Question("kana-3042", "kana_choice", "hiragana", "あ", "a", ["a", "i"])
 
@@ -186,7 +186,7 @@ def test_worker_returning_after_reset_cannot_restore_deleted_batch(reset_app, mo
             await task
             assert app.store._db.execute("SELECT COUNT(*) FROM study_session").fetchone()[0] == 0
             assert app.store.load_session_progress() is None
-            assert app.session_id is None and app.questions == [] and app.question is None
+            assert kana_support.session_id(app) is None and kana_support.questions(app) == [] and kana_support.question(app) is None
             app.show_question.assert_not_called()
             assert not app._starting_practice and app.practice_start_button.enabled
         finally:

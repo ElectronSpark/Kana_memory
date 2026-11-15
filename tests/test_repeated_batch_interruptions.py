@@ -14,6 +14,7 @@ from support.domain_support import SmallContent
 from support.session_snapshots import unrouted
 from support.fake_ui import descendants, text_of
 from support.app_fixtures import setup_app, set_mode
+from support import kana_support
 
 
 START = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
@@ -139,19 +140,20 @@ def test_three_new_batches_append_without_losing_current_question(setup_app, tmp
 
         def display_first_question():
             app.page = "question"
-            store.save_session_progress(app.session_id, app.question_index)
+            store.save_session_progress(kana_support.session_id(app), kana_support.question_index(app))
 
         app.show_question = display_first_question
         def resume(**kwargs):
             pending = store.load_session_progress()
-            app.session_id, app.questions = pending["session_id"], pending["questions"]
-            app.question_index = pending["question_index"]
-            app.session_right = pending["session_right"]
+            kana_support.set_session_id(app, pending["session_id"])
+            kana_support.set_questions(app, pending["questions"])
+            kana_support.set_question_index(app, pending["question_index"])
+            kana_support.set_session_right(app, pending["session_right"])
             app.page = pending["state"].get("page", "question")
         app.resume_practice = Mock(side_effect=resume)
         asyncio.run(app.start_practice())
         for cycle in range(3):
-            old_session = app.session_id
+            old_session = kana_support.session_id(app)
             position = store.load_session_progress()["question_index"]
             rate(store, old_session, position, 4, START + timedelta(seconds=cycle))
             before = store.review_history()
@@ -168,7 +170,7 @@ def test_three_new_batches_append_without_losing_current_question(setup_app, tmp
             assert app.practice_start_button.text == "追加到当前练习"
             assert "原队列未完成" in app.practice_count_summary.text
             asyncio.run(app.start_practice())
-            assert app.session_id == old_session
+            assert kana_support.session_id(app) == old_session
             latest = store.load_session_progress()
             assert latest["questions"][:len(pending["questions"])] == pending["questions"]
             assert {key: value for key, value in latest.items() if key != "questions"} == {
@@ -183,5 +185,5 @@ def test_three_new_batches_append_without_losing_current_question(setup_app, tmp
             asyncio.run(app.start_practice())
             assert store.load_session_progress() == latest
         assert store._db.execute("SELECT COUNT(*) FROM study_session").fetchone()[0] == 1
-        assert len(store.get_session_questions(app.session_id)) == 14
+        assert len(store.get_session_questions(kana_support.session_id(app))) == 14
         app.alert.assert_not_called()

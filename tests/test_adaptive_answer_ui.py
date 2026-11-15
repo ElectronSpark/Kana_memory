@@ -31,31 +31,31 @@ def button(app, text):
 @pytest.mark.parametrize("script", ["hiragana", "katakana"])
 def test_full_table_has_visual_cue_single_script_and_composes_groups(question_app, script):
     app = question_app
-    app.questions = [q("romaji_kana_full", script, compound=True)]
-    app.script = "katakana" if script == "hiragana" else "hiragana"
+    kana_support.set_questions(app, [q("romaji_kana_full", script, compound=True)])
+    kana_support.set_script(app, "katakana" if script == "hiragana" else "hiragana")
     app.show_question()
-    assert app.script == script and app.page == "word_question" and kana_support.question_audio_ok(app)
+    assert kana_support.script(app) == script and app.page == "word_question" and kana_support.question_audio_ok(app)
     text = text_of(app.body)
     # The romaji stimulus and the table keys are the cue; the instruction sentence
     # "从完整假名表选出..." was dropped as redundant (0.28.9, c7ac715).
-    assert "kya" in text and all(option in text for option in app.question.options)
+    assert "kya" in text and all(option in text for option in kana_support.question(app).options)
     assert "词义" not in text and "播放" not in text and "基础词" not in text
     assert ("平假名" if script == "hiragana" else "片假名") in text
-    for char in app.question.answer:
+    for char in kana_support.question(app).answer:
         button(app, char).on_press(None)
-    assert app.word_answer == app.question.answer
-    stale_key = button(app, app.question.answer[0])
+    assert app.word_answer == kana_support.question(app).answer
+    stale_key = button(app, kana_support.question(app).answer[0])
     button(app, "提交答案").on_press(None)
     assert app.page == "feedback" and kana_support.answer_correct(app) and "很轻松" in text_of(app.body)
     stale_key.on_press(None)
-    assert app.word_answer == app.question.answer
+    assert app.word_answer == kana_support.question(app).answer
     app.play_question_audio.assert_not_called()
     app.store.record_review.assert_not_called()
 
 
 def test_full_table_reveal_allows_only_again_and_feedback_links_to_kana(preview_app):
     app = preview_app
-    app.questions = [q("romaji_kana_full", "katakana")]
+    kana_support.set_questions(app, [q("romaji_kana_full", "katakana")])
     app.show_question()
     app.reveal_answer()
     assert app.page == "feedback" and not kana_support.answer_correct(app)
@@ -81,14 +81,14 @@ def test_visual_handwriting_recognition_and_confirmation_work_without_audio(ques
     app.platform.recognize = AsyncMock(return_value=["か" if script == "hiragana" else "カ"])
     for method in ("show_ink_page", "recognize_ink", "confirm_ink"):
         setattr(app, method, MethodType(getattr(KanaMemory, method), app))
-    app.questions = [q("romaji_handwriting", script)]
+    kana_support.set_questions(app, [q("romaji_handwriting", script)])
     app.show_question()
     assert app.page == "ink_question" and kana_support.question_audio_ok(app)
     assert "ka" in text_of(app.body) and "播放声音" not in text_of(app.body)
     assert ("请写平假名" if script == "hiragana" else "请写片假名") in text_of(app.body)
     app.strokes = [[(10, 20, 0), (40, 60, 100)]]
     asyncio.run(app.recognize_ink())
-    candidate = next(v for v in descendants(app.ink_result_box) if v.text == app.question.answer and v.on_press)
+    candidate = next(v for v in descendants(app.ink_result_box) if v.text == kana_support.question(app).answer and v.on_press)
     candidate.on_press(None)
     assert app.page == "feedback" and kana_support.answer_correct(app)
     assert "记住了" in text_of(app.body)
@@ -112,7 +112,7 @@ def test_new_production_modes_checkpoint_backup_resume_keep_input_without_tts(le
         app.check_answer = Mock()
         app._redraw_ink = Mock()
         def show_question():
-            app.question = app.questions[app.question_index]
+            kana_support.set_question(app, kana_support.questions(app)[kana_support.question_index(app)])
             app.page = "word_question" if kind == "romaji_kana_full" else "ink_question"
             kana_support.set_question_audio_ok(app, True)
             kana_support.set_answer_revealed(app, app._attempt_key() in kana_support.assisted_attempts(app))
@@ -120,7 +120,7 @@ def test_new_production_modes_checkpoint_backup_resume_keep_input_without_tts(le
             app.question_notice = SimpleNamespace(text="")
         app.show_question = show_question
         app.resume_practice()
-        assert app.session_id == original.session_id and kana_support.question_audio_ok(app)
+        assert kana_support.session_id(app) == kana_support.session_id(original) and kana_support.question_audio_ok(app)
         if kind == "romaji_kana_full":
             assert app.word_answer == app.word_answer_label.text == "あ"
         else:

@@ -9,6 +9,7 @@ from support.fake_ui import descendants
 from kanamemory.navigation import page_view
 import pytest
 from support.fake_ui import text_of
+from support import kana_support
 
 
 RECORDS = [
@@ -68,13 +69,13 @@ def preview_app(question_app):
 def render(app, kind="kana_choice", *, compound=False):
     right, wrong = RECORDS[2:4] if compound else RECORDS[:2]
     values = [r["romaji" if kind in {"kana_choice", "kana_romaji"} else "hiragana"] for r in (right, wrong)]
-    app.questions = [Question(right["id"], kind, "hiragana", "", values[0], options=values,
-        metadata={"kana_symbol": right["hiragana"], "romaji": right["romaji"], "content_version": "test"})]
+    kana_support.set_questions(app, [Question(right["id"], kind, "hiragana", "", values[0], options=values,
+        metadata={"kana_symbol": right["hiragana"], "romaji": right["romaji"], "content_version": "test"})])
     if kind in {"word_kana", "word_meaning_kana"}:
-        app.questions = [Question(WORD["id"], kind, "hiragana", "", WORD["reading"], options=["か", "な"],
-            metadata={"romaji": "kana", "meaning_hint": "假名", "content_version": "test"})]
+        kana_support.set_questions(app, [Question(WORD["id"], kind, "hiragana", "", WORD["reading"], options=["か", "な"],
+            metadata={"romaji": "kana", "meaning_hint": "假名", "content_version": "test"})])
     app.show_question()
-    return app.question, values
+    return kana_support.question(app), values
 
 
 def control(app, caption):

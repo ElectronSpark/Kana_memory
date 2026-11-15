@@ -70,9 +70,9 @@ def word_question(kind="word_meaning_kana"):
 
 
 def draw(app, question):
-    app.questions = [question]
+    kana_support.set_questions(app, [question])
     app.show_question()
-    return app.question
+    return kana_support.question(app)
 
 
 def answer_on_page(app, question, answer, *, page=None):
@@ -96,7 +96,7 @@ def queue_progress(app, monkeypatch, prepared_extra, *, assisted=(), state=None)
         setattr(app, name, Mock())
     monkeypatch.setattr(app_module, "summarize_queue_availability",
                         lambda *a, **k: SimpleNamespace(waiting_count=1, ready_count=1))
-    pending = {"session_id": app.session_id, "questions": app.questions, "question_index": 0, "session_right": 0,
+    pending = {"session_id": kana_support.session_id(app), "questions": kana_support.questions(app), "question_index": 0, "session_right": 0,
                "state": state or {}, "assisted_indices": list(assisted)}
     app.store.load_session_progress.return_value = pending
     app.store.reconcile_session_kinds.return_value = None
@@ -148,7 +148,7 @@ def test_a_page_that_stops_the_queue_clears_only_revealed_text_and_verdict(previ
     if blocked == "content_blocked":
         question = Question(question.content_id, question.kind, question.script, "", question.answer,
                             options=question.options, metadata={**question.metadata, RETIRE: "retired-ka"})
-    app.questions = [question]
+    kana_support.set_questions(app, [question])
     extra = {"waiting_until_utc": "2030-01-01T09:00:00+00:00"} if blocked == "waiting" else {blocked: True}
     queue_progress(app, monkeypatch, extra)
     all_evidence(app)
@@ -161,7 +161,7 @@ def test_a_page_that_stops_the_queue_clears_only_revealed_text_and_verdict(previ
 
 def test_drawing_from_a_prepared_queue_rebuilds_the_assisted_marks_from_its_saved_indices(preview_app, monkeypatch):
     app = preview_app
-    app.questions = [kana_question(), kana_question("kana_choice", "na")]
+    kana_support.set_questions(app, [kana_question(), kana_question("kana_choice", "na")])
     queue_progress(app, monkeypatch, {}, assisted=[1], state={"answer_revealed": True})
     kana_support.set_assisted_attempts(app, {("session", 5), ("old", 0)})
     kana_support.answered_attempts(app).add(("session", 0))
@@ -330,7 +330,7 @@ def test_a_kana_rating_records_the_evidence_with_the_time_of_the_answer(rating_a
     assert review_arguments(app) == (rating, {
         "answered_text": answer, "outcome": outcome, "audio_ok": True, "assisted": False, "duration_ms": 1500,
         "now": SUBMITTED, "finalized_at": RATED})
-    assert app.question_index == 1 and app.session_right == int(outcome == "correct")
+    assert kana_support.question_index(app) == 1 and kana_support.session_right(app) == int(outcome == "correct")
     app.dispatched.assert_called_once_with(app)
 
 
@@ -410,10 +410,10 @@ def test_a_failed_rating_keeps_the_position_and_can_be_pressed_again(rating_app,
     app.store.record_review.side_effect = [failure, {"scheduled": True}]
     KanaMemory.save_rating(app, 3)
     app.alert.assert_called_once_with(message)
-    assert app.page == "feedback" and app.question_index == 0 and app.session_right == 0
+    assert app.page == "feedback" and kana_support.question_index(app) == 0 and kana_support.session_right(app) == 0
     app.dispatched.assert_not_called()
     KanaMemory.save_rating(app, 3)
-    assert app.store.record_review.call_count == 2 and app.question_index == 1
+    assert app.store.record_review.call_count == 2 and kana_support.question_index(app) == 1
     app.dispatched.assert_called_once_with(app)
 
 
@@ -423,7 +423,7 @@ def test_a_rating_the_store_does_not_schedule_keeps_the_position(rating_app):
     app.store.record_review.return_value = {"scheduled": False, "reason": "已过期"}
     KanaMemory.save_rating(app, 3)
     app.alert.assert_called_once_with("这次作答未安排复习：已过期")
-    assert app.question_index == 0
+    assert kana_support.question_index(app) == 0
     app.dispatched.assert_not_called()
 
 
@@ -441,8 +441,9 @@ def test_a_rating_off_the_result_page_does_nothing(rating_app):
 def playback_page(change=None, failure=None):
     """A heard word question on its page; the playback runs ``change`` on the page while the sound plays."""
     question = Question("word", "word_kana", "hiragana", "", "かな", audio_text="かな")
-    page = kana_support.with_state(SimpleNamespace(question=question, _page_token=3, _audio_serial=0,
-        repo=Mock(), _checkpoint=Mock(), alert=Mock()), question_audio_ok=False)
+    page = kana_support.with_state(SimpleNamespace(_page_token=3, _audio_serial=0,
+        repo=Mock(), _checkpoint=Mock(), alert=Mock()), question_audio_ok=False,
+        question=question)
 
     async def play(text):
         if change:
@@ -463,7 +464,7 @@ def test_a_sound_played_to_its_end_on_the_same_page_counts_and_is_saved():
 
 @pytest.mark.parametrize("change", [
     pytest.param(lambda p: setattr(p, "_page_token", 4), id="page-left"),
-    pytest.param(lambda p: setattr(p, "question", Question("x", "word_kana", "hiragana", "", "x")), id="question"),
+    pytest.param(lambda p: kana_support.set_question(p, Question("x", "word_kana", "hiragana", "", "x")), id="question"),
     pytest.param(lambda p: setattr(p, "_audio_serial", p._audio_serial + 1), id="later-playback"),
 ])
 def test_a_sound_that_ends_after_the_page_moved_on_does_not_count(change):
@@ -475,7 +476,7 @@ def test_a_sound_that_ends_after_the_page_moved_on_does_not_count(change):
 
 @pytest.mark.parametrize("change,alerted", [
     pytest.param(None, True, id="same-page"),
-    pytest.param(lambda p: setattr(p, "question", Question("x", "word_kana", "hiragana", "", "x")), True,
+    pytest.param(lambda p: kana_support.set_question(p, Question("x", "word_kana", "hiragana", "", "x")), True,
                  id="question-changed"),
     pytest.param(lambda p: setattr(p, "_page_token", 4), False, id="page-left"),
     pytest.param(lambda p: setattr(p, "_audio_serial", p._audio_serial + 1), False, id="later-playback"),
@@ -491,16 +492,17 @@ def test_a_failed_sound_alerts_only_while_its_page_and_playback_are_current(chan
 # --- a lookup during an attempt -----------------------------------------------------------------------------------
 
 def lookup_page(page="question", kind="kana_choice", session="session-1"):
-    value = kana_support.with_state(SimpleNamespace(page=page, session_id=session, question_index=0,
-        back_stack=BackStack(), question_notice=SimpleNamespace(text=""),
-        question=SimpleNamespace(kind=kind), _checkpoint=Mock()),
-        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False)
+    value = kana_support.with_state(SimpleNamespace(page=page, back_stack=BackStack(), question_notice=SimpleNamespace(text=""),
+        _checkpoint=Mock()),
+        assisted_attempts=set(), answered_attempts=set(), answer_revealed=False,
+        session_id=session, question_index=0, question=SimpleNamespace(kind=kind))
     value._attempt_key = MethodType(KanaMemory._attempt_key, value)
     return value
 
 
 def kept_question(session="session-1", index=0, name="question"):
-    return PageState(("show_question", None), name, "练习", object(), {"session_id": session, "question_index": index})
+    return PageState(("show_question", None), name, "练习", object(),
+                     kana_support.kept_position(session_id=session, question_index=index))
 
 
 @pytest.mark.parametrize("kind,notice", [("kana_choice", KANA_LOOKUP), ("word_meaning_kana", WORD_LOOKUP)])
@@ -547,19 +549,19 @@ def test_a_lookup_outside_an_unanswered_attempt_changes_nothing(case):
 def back_page(page, kind="kana_choice"):
     question = SimpleNamespace(content_id="ka", kind=kind)
     value = kana_support.with_state(SimpleNamespace(
-        page=page, session_id="session-1", question_index=0, _view_key=("show_question", None),
-        back_stack=BackStack(), question_notice=SimpleNamespace(text=""), question=question,
-        platform=Mock(), store=Mock(is_content_available=lambda content_id: True), alert=Mock(),
+        page=page, _view_key=("show_question", None),
+        back_stack=BackStack(), question_notice=SimpleNamespace(text=""), platform=Mock(), store=Mock(is_content_available=lambda content_id: True), alert=Mock(),
         _page_token=5, _ink_revision=2, _audio_serial=0, _paint_handle=None, content_slot=Mock(),
         title_label=SimpleNamespace(text=""), _checkpoint=Mock(), _sync_back_handler=Mock(), loop=Mock()),
-        assisted_attempts=set(), answered_attempts=set())
+        assisted_attempts=set(), answered_attempts=set(),
+        session_id="session-1", question_index=0, question=question)
     value._attempt_key = MethodType(KanaMemory._attempt_key, value)
     return value, question
 
 
 def kept_with_evidence(question, notice, name="question", **evidence):
-    bindings = {"session_id": "session-1", "question_index": 0, "question": question, "question_notice": notice,
-                **kana_support.kept_evidence(**evidence)}
+    bindings = {**kana_support.kept_position(session_id="session-1", question_index=0, question=question),
+                "question_notice": notice, **kana_support.kept_evidence(**evidence)}
     return PageState(("show_question", None), name, "练习", object(), bindings)
 
 
@@ -650,7 +652,7 @@ def test_a_restore_rebuilds_the_assisted_marks_and_empties_the_answered_ones(res
     kana_support.set_assisted_attempts(app, {("earlier", 0)})
     kana_support.set_answered_attempts(app, {("earlier", 0)})
     app.resume_practice()
-    assert app.page == "question" and app.question_index == 1
+    assert app.page == "question" and kana_support.question_index(app) == 1
     assert kana_support.marks(app) == ({(session, 1)}, set())
     assert kana_support.answer_revealed(app) is True
     assert app.question_notice.text == KANA_REVEALED
@@ -730,9 +732,10 @@ def test_a_restored_result_without_a_saved_time_takes_the_time_of_the_replayed_s
 # --- the checkpoint -----------------------------------------------------------------------------------------------
 
 def checkpoint_page(page, question=None, **evidence):
-    value = kana_support.with_state(SimpleNamespace(page=page, session_id="s", question_index=0, session_right=0,
-        questions=[question or kana_question()], question=question or kana_question(), store=Mock(),
-        use_full_keyboard=False), **evidence)
+    value = kana_support.with_state(SimpleNamespace(page=page, store=Mock(),
+        use_full_keyboard=False), **evidence,
+        session_id="s", question_index=0, session_right=0, questions=[question or kana_question()],
+        question=question or kana_question())
     return value
 
 
@@ -789,10 +792,10 @@ def test_a_wait_page_saves_none_of_the_evidence(page):
 # --- queue changes ------------------------------------------------------------------------------------------------
 
 def reconcile_page(revised):
-    value = kana_support.with_state(SimpleNamespace(session_id="s", questions=[], question_index=0, session_right=0,
-        question=None, back_stack=BackStack(), platform=Mock(), alert=Mock(), store=Mock(),
+    value = kana_support.with_state(SimpleNamespace(back_stack=BackStack(), platform=Mock(), alert=Mock(), store=Mock(),
         _practice_preferences=KanaMemory._clean_preferences({}), _ink_revision=0, _audio_serial=0),
-        assisted_attempts={("s", 4)}, answered_attempts={("s", 4)})
+        assisted_attempts={("s", 4)}, answered_attempts={("s", 4)},
+        session_id="s", questions=[], question_index=0, session_right=0, question=None)
     value.store.practice_lane = "word_romaji"
     value.store.reconcile_session_kinds.return_value = revised
     return value
@@ -841,7 +844,7 @@ def test_a_new_word_drill_empties_both_marks_in_place(monkeypatch):
     asyncio.run(KanaMemory.start_word_drill(app))
     app.alert.assert_not_called()
     app.show_question.assert_called_once_with()
-    assert app.session_id == "drill"
+    assert kana_support.session_id(app) == "drill"
     assert kana_support.assisted_attempts(app) is assisted and kana_support.answered_attempts(app) is answered
     assert assisted == answered == set()
 
@@ -859,11 +862,12 @@ def test_a_restored_learning_backup_empties_both_marks_in_place(monkeypatch):
     app = kana_support.with_state(SimpleNamespace(store=Mock(), back_stack=BackStack(), show_home=Mock(), alert=Mock(),
         platform=SimpleNamespace(import_backup=AsyncMock(return_value=b"{}")),
         main_window=SimpleNamespace(dialog=AsyncMock(return_value=True)),
-        _clean_preferences=KanaMemory._clean_preferences, session_id="s", question_index=3, session_right=1),
-        assisted_attempts=assisted, answered_attempts=answered)
+        _clean_preferences=KanaMemory._clean_preferences),
+        assisted_attempts=assisted, answered_attempts=answered,
+        session_id="s", question_index=3, session_right=1)
     asyncio.run(backup_ui.restore(app))
     app.show_home.assert_called_once_with()
-    assert app.session_id is None
+    assert kana_support.session_id(app) is None
     assert kana_support.assisted_attempts(app) is assisted and kana_support.answered_attempts(app) is answered
     assert assisted == answered == set()
 
@@ -874,14 +878,14 @@ def test_an_early_batch_taken_into_memory_empties_both_marks():
     app.store.get_session_questions.return_value = ["q"]
     extra_practice_runtime._hold_batch(app, "batch")
     assert kana_support.marks(app) == (set(), set())
-    assert (app.session_id, app.questions, app.question_index, app.session_right) == ("batch", ["q"], 0, 0)
+    assert (kana_support.session_id(app), kana_support.questions(app), kana_support.question_index(app), kana_support.session_right(app)) == ("batch", ["q"], 0, 0)
 
 
 def test_an_early_batch_taken_into_memory_needs_no_marks():
     app = SimpleNamespace(store=Mock())
     app.store.get_session_questions.return_value = []
     extra_practice_runtime._hold_batch(app, "batch")
-    assert app.session_id == "batch"
+    assert kana_support.session_id(app) == "batch"
 
 
 # --- reports ------------------------------------------------------------------------------------------------------
@@ -908,9 +912,10 @@ def test_an_exposure_of_no_saved_attempt_changes_neither(monkeypatch):
 
 def exposure_app(monkeypatch, keys):
     monkeypatch.setattr(feedback_exposure, "mark_legacy_heads", lambda store, origins: list(keys))
-    app = kana_support.with_state(SimpleNamespace(session_id="s", question_index=0, store=Mock(),
+    app = kana_support.with_state(SimpleNamespace(store=Mock(),
         feedback_analysis=lambda: SimpleNamespace(resources={}), diagnostics=Mock(),
-        _mark_visible_tutor_help=Mock()), assisted_attempts={("s", 5)}, answer_revealed=False)
+        _mark_visible_tutor_help=Mock()), assisted_attempts={("s", 5)}, answer_revealed=False,
+        session_id="s", question_index=0)
     return app
 
 
@@ -919,9 +924,8 @@ def report_of(app, page="question"):
 
 
 def report_app(**evidence):
-    return kana_support.with_state(SimpleNamespace(session_id="s", question_index=2, session_right=0,
-        script="hiragana", use_full_keyboard=False, questions=[], store=SimpleNamespace(practice_lane="main"),
-        question=kana_question()), **evidence)
+    return kana_support.with_state(SimpleNamespace(use_full_keyboard=False, store=SimpleNamespace(practice_lane="main")), **evidence,
+        session_id="s", question_index=2, session_right=0, script="hiragana", questions=[], question=kana_question())
 
 
 def test_a_problem_report_carries_the_attempt_evidence_and_its_two_marks():

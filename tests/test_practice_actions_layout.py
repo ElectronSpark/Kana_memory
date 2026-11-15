@@ -77,7 +77,7 @@ def test_answer_hint_precedes_answering_area_and_is_a_secondary_control(actions_
     elif kind in {"word_meaning_kana", "word_kana", "romaji_kana_full"}:
         answer_area = app.word_answer_label
         assert nodes.index(hint) < nodes.index(control(app, "提交答案"))
-        assert nodes.index(hint) < nodes.index(control(app, app.question.options[0]))
+        assert nodes.index(hint) < nodes.index(control(app, kana_support.question(app).options[0]))
     elif kind in {"romaji_handwriting", "kana_handwriting"}:
         answer_area = app.canvas
         assert control(app, "识别笔迹") is app.recognize_button
@@ -85,7 +85,7 @@ def test_answer_hint_precedes_answering_area_and_is_a_secondary_control(actions_
         app.recognize_ink.assert_called_once_with(None)
         assert not kana_support.answer_revealed(app)
     else:
-        answer_area = control(app, app.question.options[0])
+        answer_area = control(app, kana_support.question(app).options[0])
     assert nodes.index(hint) < nodes.index(answer_area)
 
 
@@ -110,7 +110,8 @@ def test_android_hint_has_usable_width_with_real_pack_layout(monkeypatch, scale,
     monkeypatch.setattr(component_ui, "col", lambda *children, **style: box("column", *children, **style))
     monkeypatch.setattr(component_ui, "row", lambda *children, **style: box("row", *children, **style))
     monkeypatch.setattr(component_ui, "button", android_button)
-    layout = app_module.answer_hint(SimpleNamespace(question=object()))
+    layout = app_module.answer_hint(kana_support.with_state(SimpleNamespace(),
+        question=object()))
     layout.style._layout_node(width, 0, True, False)
     hint, measurements = hints[0]
     assert hint.layout.content_width == width // 2
@@ -155,10 +156,10 @@ def test_submit_remains_distinct_and_grades_the_entered_answer(actions_app, kind
     app = actions_app
     render(app, kind)
     if kind == "kana_romaji":
-        app.romaji_input.value = app.question.answer
+        app.romaji_input.value = kana_support.question(app).answer
         app.romaji_input.on_change(app.romaji_input)
     else:
-        for symbol in app.question.answer:
+        for symbol in kana_support.question(app).answer:
             app.append_word_key(symbol)
     control(app, "提交答案").on_press(None)
     assert app.page == "feedback" and kana_support.answer_correct(app)

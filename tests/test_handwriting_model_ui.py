@@ -15,6 +15,7 @@ from kanamemory.navigation import BackStack, PageState
 
 
 from support.handwriting_model_ui_support import View, descendants, text_of, buttons, model_app
+from support import kana_support
 
 
 @pytest.mark.parametrize("compact", [False, True])
@@ -215,8 +216,8 @@ def test_download_cancellation_unlocks_retry_and_preserves_learner_state(model_a
 def test_entering_ink_page_exposes_download_without_having_to_write_first(model_app, free):
     app = model_app
     if not free:
-        app.question = Question("kana-3042", "kana_handwriting", "hiragana", "听音手写", "あ",
-                                audio_text="あ", metadata={"romaji": "a"})
+        kana_support.set_question(app, Question("kana-3042", "kana_handwriting", "hiragana", "听音手写", "あ",
+                                audio_text="あ", metadata={"romaji": "a"}))
     app.show_ink_page(free=free, title="手写")
     assert "下载日语手写模型" in text_of(app.body)
     assert "重新检查模型" in text_of(app.body)
