@@ -48,6 +48,10 @@ class PartlySet:
             raise AttributeError(name)
         return value
 
+    def has(self, name: str) -> bool:
+        """Whether the field was ever set (a field set to None, an empty text or an empty list was)."""
+        return getattr(self, name) is not UNSET
+
     def only(self, names):
         """A new object of the same kind that holds only the named fields of this one, as far as they were
         set: what a page that shows just these fields keeps of the state."""

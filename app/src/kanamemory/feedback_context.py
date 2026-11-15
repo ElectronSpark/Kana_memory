@@ -19,6 +19,7 @@ from pathlib import PurePath
 from .arrangement.services.preferences import KEYS as ARRANGEMENT_KEYS
 from .kana_line.attempt import KanaAttempt
 from .kana_line.draft import KanaDraft
+from .kana_line.ink import InkPad
 from .kana_line.session import KanaSession
 
 FORMAT = "kanamemory-feedback-context"
@@ -35,6 +36,7 @@ MAX_WARNINGS = 200
 _MISSING = object()
 _TYPED_FIELDS = frozenset({"word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_plan",
                            "word_romaji_unit_mode"})
+_PAD_FIELDS = frozenset({"strokes", "ink_width", "ink_height"})
 _SECRET_KEYS = frozenset({"apikey", "password", "secret", "authorization", "credential",
     "credentials", "accesstoken", "refreshtoken", "bearertoken", "clientsecret", "privatekey"})
 _SECRET_TEXT = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9_.-]{12,})\b")
@@ -508,7 +510,11 @@ def _capture_practice(c, app, page):
     if page == "learning_guide":
         result.update(_question_capture(c, getattr(c.attr(app, "_course_teaching", "practice/guide"), "guide", None), "practice"))
     if page in {"free_ink", "ink_question"}:
-        result["ink"] = {name: c.copy(c.attr(app, name, "practice/ink/" + name), "practice/ink/" + name)
+        pad = c.attr(app, "_ink_pad", "practice/ink/pad")
+        pad = pad.set_fields() if isinstance(pad, InkPad) else {}
+        # The strokes and the pad's size are fields of the pad object; the rest are still attributes.
+        result["ink"] = {name: c.copy(pad.get(name) if name in _PAD_FIELDS else
+                                      c.attr(app, name, "practice/ink/" + name), "practice/ink/" + name)
             for name in ("strokes", "_active_stroke", "ink_width", "ink_height", "_ink_view_width", "_ink_view_height", "_ink_revision")}
     # Input controls in widget_tree are authoritative for unsaved keystrokes;
     # state above distinguishes the last persisted draft from the live view.

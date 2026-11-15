@@ -2,10 +2,11 @@
 
 What the learner has typed so far for the question on the page is one KanaDraft on the app, kept as the
 attribute ``_kana_typed`` (``_kana_draft`` is the app's debouncer of the keystroke checkpoint). The practice
-line reaches it through this module; Back's restore (page_restore) and a problem report (feedback_context)
-name the attribute itself. It is replaced, never edited, when a field of it is assigned (assign, set_draft and
-the set_* functions); the list of romaji parts inside is the line's own list. A question page kept for Back
-holds the fields of the draft that page shows (keep), and Back gives those back (page_restore).
+line reaches it through this module; a problem report (feedback_context) names the attribute itself. It is
+replaced, never edited, when a field of it is assigned (assign, set_draft and the set_* functions); the list
+of romaji parts inside is the line's own list. A question page kept for Back holds the fields of the draft
+that page shows (keep) under the attribute's name, and Back's restore (page_restore), which names no
+attribute, gives the fields of such a kept object back under the name it was kept by.
 
 A field that was never set since the app started is UNSET: the readers below raise AttributeError for it, as
 the attribute access they replace did, and draft(app).get(name, default) gives a default, as getattr with a
@@ -23,7 +24,8 @@ BINDING = "_kana_typed"
 
 
 def draft(app) -> KanaDraft:
-    """The draft the app holds (one with nothing set before anything was typed)."""
+    """The draft the app holds: one with nothing set before anything was typed, and whenever the attribute
+    holds something that is no draft."""
     value = getattr(app, BINDING, None)
     return value if isinstance(value, KanaDraft) else KanaDraft()
 

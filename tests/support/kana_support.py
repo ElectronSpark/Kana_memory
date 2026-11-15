@@ -13,9 +13,11 @@ import sys
 
 from kanamemory import kana_attempt_runtime as _line
 from kanamemory import kana_draft_runtime as _typed
+from kanamemory import kana_ink_runtime as _pad
 from kanamemory import kana_session_runtime as _position
 from kanamemory.kana_line.attempt import AttemptMarks, KanaAttempt
 from kanamemory.kana_line.draft import KanaDraft
+from kanamemory.kana_line.ink import InkPad
 from kanamemory.kana_line.session import KanaSession
 
 
@@ -395,29 +397,29 @@ def forget_draft(app, *names):
 
 def strokes(app):
     """The strokes written so far, each a list of (x, y, time) points; the pad's own list."""
-    return app.strokes
+    return _pad.strokes(app)
 
 
 def set_strokes(app, value):
-    app.strokes = value
+    _pad.set_strokes(app, value)
 
 
 def ink_width(app):
     """The width of the pad the strokes were written on, in the pad's own units."""
-    return app.ink_width
+    return _pad.ink_width(app)
 
 
 def set_ink_width(app, value):
-    app.ink_width = value
+    _pad.set_ink_width(app, value)
 
 
 def ink_height(app):
     """The height of the pad the strokes were written on, in the pad's own units."""
-    return app.ink_height
+    return _pad.ink_height(app)
 
 
 def set_ink_height(app, value):
-    app.ink_height = value
+    _pad.set_ink_height(app, value)
 
 
 INK = ("strokes", "ink_width", "ink_height")
@@ -428,22 +430,24 @@ _SETTERS.update({"strokes": set_strokes, "ink_width": set_ink_width, "ink_height
 def ink(app):
     """What the app holds of the ink pad, as one dict named like the readers above (only the values that were
     ever set)."""
-    return {name: getattr(app, name) for name in INK if hasattr(app, name)}
+    held = _pad.pad(app).set_fields()
+    return {name: held[name] for name in INK if name in held}
 
 
 def forget_ink(app, *names):
     """Make the app hold the named values of the ink pad as if they had never been set since it started."""
-    for name in names:
-        if hasattr(app, name):
-            delattr(app, name)
+    held = _pad.pad(app).set_fields()
+    _pad.set_pad(app, InkPad(**{name: value for name, value in held.items() if name not in names}))
 
 
 def kept_ink(**fields):
     """What a handwriting page kept for Back holds of the ink pad: the entries of its saved bindings that give
     these values (named like the readers above) back when the learner returns to it."""
-    return dict(fields)
+    return {"_ink_pad": InkPad(**fields)}
 
 
 def kept_ink_values(page):
     """What a page kept for Back holds of the ink pad, named like the readers above (only the values it holds)."""
-    return {name: page.bindings[name] for name in INK if name in page.bindings}
+    kept = page.bindings.get("_ink_pad")
+    held = kept.set_fields() if isinstance(kept, InkPad) else {}
+    return {name: held[name] for name in INK if name in held}

@@ -89,6 +89,7 @@ from .kana_line.model import QUESTION_PAGES
 from .next_step.display import KANA_ASSEMBLY_PAGE
 from . import kana_attempt_runtime as kana_attempt
 from . import kana_draft_runtime as kana_draft
+from . import kana_ink_runtime as kana_ink
 from . import kana_rating_runtime as kana_rating
 from . import kana_runtime
 from .kana_line import display as kana_display
@@ -108,7 +109,7 @@ from .practice_kind_policy import save_kind_switches, set_queue_kind_policy
 CARD_STATES = {"全部状态": "all", "已到期": "due", "未开始": "new", "学习中": "learning",
                "复习中": "review", "重新学习": "relearning", "已暂停": "suspended", "今日暂缓": "buried"}
 INK_PAGES = {"free_ink", "ink_question"}
-INK_BINDINGS = "free_ink strokes ink_width ink_height _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
+INK_BINDINGS = "free_ink _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
 PRACTICE_BINDINGS = "_kana_session use_full_keyboard _kana_attempt question_notice practice_preview_slot".split()
 PAGE_BINDINGS = {
     "learning_familiarity": ["_course_teaching"],
@@ -281,7 +282,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self._leave_confirmation_active = False
         self._returning_home = False
         self._page_scroll = None
-        self.strokes, self._active_stroke = [], None
+        kana_ink.set_strokes(self, [])
+        self._active_stroke = None
         self.main_window = toga.MainWindow(title="假名记忆", size=(440, 820), on_resize=self.resize_origin_images)
         self.install_feedback()
         self.title_label = ui.label("假名记忆", size=24, color=WHITE, bold=True, wrap=False, margin_bottom=2)
@@ -458,6 +460,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         bindings = {name: getattr(self, name) for name in names if hasattr(self, name)}
         # The typed draft is one object: the page keeps the fields of it that it shows.
         kana_draft.keep(self, bindings, self.page, practice_page=self.page in PRACTICE_PAGES)
+        kana_ink.keep(self, bindings, ink_page=self.page in INK_PAGES)
         bindings["_practice_context"] = getattr(self, "_practice_context", False)
         if self.page in {"learning_wait", "kana_intro_wait"}:
             bindings["_learning_wait_due"] = getattr(self, "_learning_wait_due", None)
@@ -1570,7 +1573,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind == "kana_romaji":
             state["romaji_answer"] = kana_draft.draft(self).get("romaji_answer", "")
         if self.page not in {"session_wait", "dependency_wait"} and kana_session.question(self).kind in {"kana_handwriting", "romaji_handwriting"}:
-            state.update(strokes=getattr(self, "strokes", []), ink_width=getattr(self, "ink_width", 360), ink_height=getattr(self, "ink_height", 210))
+            state.update(strokes=kana_ink.pad(self).get("strokes", []), ink_width=kana_ink.pad(self).get("ink_width", 360), ink_height=kana_ink.pad(self).get("ink_height", 210))
         assisted = [index for sid,index in kana_attempt.assisted(self) if sid == kana_session.session_id(self)]
         try:
             import json
@@ -1780,14 +1783,15 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 kana_draft.set_romaji_answer(self, state.get("romaji_answer", ""))
                 self.romaji_input.value = kana_draft.romaji_answer(self)
             elif kana_session.question(self).kind in {"kana_handwriting", "romaji_handwriting"}:
-                self.strokes = state.get("strokes", [])
-                points = [point for stroke in self.strokes for point in stroke]
+                kana_ink.set_strokes(self, state.get("strokes", []))
+                points = [point for stroke in kana_ink.strokes(self) for point in stroke]
                 if points:
                     # A reboot/import changes the monotonic clock epoch. Keep
                     # stroke timing differences but allow new ink to follow it.
                     offset = int(time.monotonic() * 1000) - 1 - max(point[2] for point in points)
-                    self.strokes = [[(x, y, timestamp + offset) for x,y,timestamp in stroke] for stroke in self.strokes]
-                self.ink_width, self.ink_height = state.get("ink_width", 360), state.get("ink_height", 210)
+                    kana_ink.set_strokes(self, [[(x, y, timestamp + offset) for x,y,timestamp in stroke] for stroke in kana_ink.strokes(self)])
+                kana_ink.set_ink_width(self, state.get("ink_width", 360))
+                kana_ink.set_ink_height(self, state.get("ink_height", 210))
                 self._redraw_ink()
             if kana_attempt.revealed(self):
                 self.question_notice.text = ("已查看答案或学习提示，本题不计入无提示回忆。"
@@ -1850,7 +1854,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         kana_session.set_session_right(self, 0)
         kana_attempt.assisted(self).clear()
         kana_attempt.answered(self).clear()
-        self.strokes, self._active_stroke = [], None
+        kana_ink.set_strokes(self, [])
+        self._active_stroke = None
         self._preview_pending = None
         self._practice_context = False
         self.back_stack.pages.clear()
@@ -3789,8 +3794,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                        or self.model_state != "ready")
         self.free_ink = free
         self._ink_revision += 1
-        self.strokes, self._active_stroke = [], None
-        self.ink_width, self.ink_height = 360, 210
+        kana_ink.set_strokes(self, [])
+        self._active_stroke = None
+        kana_ink.set_ink_width(self, 360)
+        kana_ink.set_ink_height(self, 210)
         self._ink_view_width, self._ink_view_height = 360, 210
         self.ink_result_box = ui.col()
         self.ink_model_panel = ui.col(self.model_controls(compact=True))
@@ -3849,7 +3856,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.recognize_button.style.background_color = GREEN if ready else "#E0E4E1"
 
     def ink_resize(self, widget, width, height, **kwargs):
-        if not hasattr(self, "strokes") or widget is not self.canvas or width <= 0 or height <= 0:
+        if not kana_ink.pad(self).has("strokes") or widget is not self.canvas or width <= 0 or height <= 0:
             return
         # Recognition and stored strokes use stable coordinates; resizing only
         # changes the display transform, never the ink or recognition candidates.
@@ -3857,10 +3864,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self._schedule_ink_draw()
 
     def _ink_transform(self):
-        width = getattr(self, "_ink_view_width", self.ink_width)
-        height = getattr(self, "_ink_view_height", self.ink_height)
-        scale = min(width / self.ink_width, height / self.ink_height)
-        return scale, (width - self.ink_width * scale) / 2, (height - self.ink_height * scale) / 2
+        width = getattr(self, "_ink_view_width", kana_ink.ink_width(self))
+        height = getattr(self, "_ink_view_height", kana_ink.ink_height(self))
+        scale = min(width / kana_ink.ink_width(self), height / kana_ink.ink_height(self))
+        return scale, (width - kana_ink.ink_width(self) * scale) / 2, (height - kana_ink.ink_height(self) * scale) / 2
 
     def _ink_point(self, x, y):
         scale, left, top = self._ink_transform()
@@ -3875,21 +3882,21 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             if not points:
                 return
             x, y = self._ink_point(points[0][0], points[0][1])
-            if not (0 <= x <= self.ink_width and 0 <= y <= self.ink_height):
+            if not (0 <= x <= kana_ink.ink_width(self) and 0 <= y <= kana_ink.ink_height(self)):
                 return
             # MotionEvent uses uptime; stored drafts use our monotonic epoch.
             # Rebase once per gesture, preserving actual within-stroke timing.
-            previous = next((s[-1][2] for s in reversed(self.strokes) if s), 0)
+            previous = next((s[-1][2] for s in reversed(kana_ink.strokes(self)) if s), 0)
             self._ink_event_offset = max(int(time.monotonic() * 1000), previous + 1) - points[0][2]
             self.ink_result_box.clear()
             self._active_stroke = []
-            self.strokes.append(self._active_stroke)
+            kana_ink.strokes(self).append(self._active_stroke)
         changed = False
         for x, y, timestamp in points:
             if self._active_stroke is None:
                 break
             x, y = self._ink_point(x, y)
-            if not (0 <= x <= self.ink_width and 0 <= y <= self.ink_height):
+            if not (0 <= x <= kana_ink.ink_width(self) and 0 <= y <= kana_ink.ink_height(self)):
                 self._active_stroke = None
                 break
             self._active_stroke.append((float(x), float(y), timestamp + self._ink_event_offset))
@@ -3904,18 +3911,18 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if self._ink_busy or widget is not self.canvas:
             return
         x, y = self._ink_point(x, y)
-        if not (0 <= x <= self.ink_width and 0 <= y <= self.ink_height):
+        if not (0 <= x <= kana_ink.ink_width(self) and 0 <= y <= kana_ink.ink_height(self)):
             return
         self.ink_result_box.clear()
         self._active_stroke = [(float(x), float(y), int(time.monotonic() * 1000))]
-        self.strokes.append(self._active_stroke)
+        kana_ink.strokes(self).append(self._active_stroke)
         self._schedule_ink_draw()
 
     def ink_drag(self, widget, x, y, **kwargs):
         if self._active_stroke is None or self._ink_busy or widget is not self.canvas:
             return
         x, y = self._ink_point(x, y)
-        if not (0 <= x <= self.ink_width and 0 <= y <= self.ink_height):
+        if not (0 <= x <= kana_ink.ink_width(self) and 0 <= y <= kana_ink.ink_height(self)):
             self._active_stroke = None
             return
         self._active_stroke.append((float(x), float(y), int(time.monotonic() * 1000)))
@@ -3942,12 +3949,13 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         renderer = getattr(self, "_ink_renderer", None)
         if renderer is None or renderer.canvas is not self.canvas:
             renderer = self._ink_renderer = InkRenderer(self.canvas, GREEN)
-        renderer.render(self.strokes, self.ink_width, self.ink_height, self._ink_transform())
+        renderer.render(kana_ink.strokes(self), kana_ink.ink_width(self), kana_ink.ink_height(self), self._ink_transform())
 
     def clear_ink(self, widget=None, **kwargs):
         if self._ink_busy:
             return
-        self.strokes, self._active_stroke = [], None
+        kana_ink.set_strokes(self, [])
+        self._active_stroke = None
         self.ink_result_box.clear()
         self.ink_status_label.text = "已清空，请重新书写。"
         self._redraw_ink()
@@ -3956,8 +3964,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
     def undo_ink(self, widget=None, **kwargs):
         if self._ink_busy:
             return
-        if self.strokes:
-            self.strokes.pop()
+        if kana_ink.strokes(self):
+            kana_ink.strokes(self).pop()
         self._active_stroke = None
         self.ink_result_box.clear()
         self._redraw_ink()
@@ -3970,18 +3978,18 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.ink_status_label.text = "请先完成上方的日语手写模型准备。"
             self.refresh_model_ui()
             return
-        if not self.strokes:
+        if not kana_ink.strokes(self):
             self.ink_status_label.text = "请先在方框中写字。"
             return
         token = self._page_token
         revision = self._ink_revision
-        strokes = [list(s) for s in self.strokes]
+        strokes = [list(s) for s in kana_ink.strokes(self)]
         self._active_stroke = None
         self._ink_busy = True
         KanaMemory._refresh_ink_action(self)
         self.ink_status_label.text = "正在识别笔迹…"
         try:
-            candidates = await self.platform.recognize(strokes, self.ink_width, self.ink_height)
+            candidates = await self.platform.recognize(strokes, kana_ink.ink_width(self), kana_ink.ink_height(self))
             if token != self._page_token or revision != self._ink_revision:
                 return
             self.ink_result_box.clear()
