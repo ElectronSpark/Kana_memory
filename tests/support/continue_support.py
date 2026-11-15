@@ -146,8 +146,9 @@ def wait_seconds():
 # --- seams -----------------------------------------------------------------------------------------------
 
 def replace_dispatch(monkeypatch, replacement):
-    """The decision after the queues are prepared becomes ``replacement(app, *args, **kwargs)`` (both the
-    inline path and the resumed course wait call it)."""
+    """The decision after the queues are prepared becomes ``replacement(app, K, *args, **kwargs)`` (K: the
+    App class; both the inline path and the resumed course wait call it). It must return a next step
+    (kanamemory.next_step.model) or raise: whatever it returns is performed."""
     monkeypatch.setattr(_continue(), "decide", replacement)
 
 
@@ -163,7 +164,8 @@ def make_dispatch_raise(monkeypatch, error):
 
 
 def replace_share_dispatch(monkeypatch, replacement):
-    """The breadth-first share decision becomes ``replacement(app, *args, **kwargs)``."""
+    """The breadth-first share decision becomes ``replacement(app, K, *args, **kwargs)`` (K: the App class);
+    it answers (protected (lane, head) or None, lane or None), or raises."""
     monkeypatch.setattr(_continue(), "share_dispatch", replacement)
 
 

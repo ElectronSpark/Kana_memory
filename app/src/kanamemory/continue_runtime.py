@@ -19,7 +19,10 @@ mixin's entry method, and every line entry and page method is looked up on
 the app object at the moment of the call. Module globals that tests reach
 through tests/support/continue_support.py: summarize_queue_availability,
 run_in_background, decide and share_dispatch. Imports made at call time stay
-at call time, so their own patch targets keep working.
+at call time, so their own patch targets keep working. The functions that
+stayed in study_path_runtime (the error page, the waiting page, the cancel of
+a wait, the skipped teaching ids, the worker's course head) are looked up
+there at the moment of the call, as when this code lived beside them.
 """
 from __future__ import annotations
 
@@ -31,10 +34,9 @@ from .next_step.model import (STAY_CHECKPOINT, STAY_KINDS, STAY_LANE, CourseItem
                               WaitKanaPlan)
 from .practice_availability import summarize_queue_availability
 from .practice_preferences import clean_preferences, enabled_preference_kinds
+from . import study_path_runtime as _path
 from .practice_worker import BackgroundTicket, run_in_background
-from .study_path_runtime import (_UNREAD, CourseCurrentResume, PreparedKana, StudyPathRuntimeMixin,
-                                 cancel_continue_wait, course_current_in_worker, show_continue_error,
-                                 skipped_teaching_ids)
+from .study_path_runtime import _UNREAD, CourseCurrentResume, PreparedKana, StudyPathRuntimeMixin
 
 KANA_ASSEMBLY_ATTEMPTS = 2
 
@@ -210,7 +212,7 @@ async def finish_kana_wait(app, ticket, options, attempt):
         return
     if error is None and not ticket.data_current(app.store):
         plan = None
-    cancel_continue_wait(app)
+    _path.cancel_continue_wait(app)
     try:
         app.continue_study_path(_checkpoint_saved=True, _kana_plan=plan,
                                 _kana_attempt=attempt + 1 if error is None else KANA_ASSEMBLY_ATTEMPTS)
@@ -234,7 +236,7 @@ def course_wait_request(app, pending, now, prepared_kana):
     from .material_qualification import bound_resources
     from .practice_round import RoundSnapshot
     if (not getattr(app, "_background_assembly", False) or not isinstance(app.repo, ContentRepository)
-            or skipped_teaching_ids(app)
+            or _path.skipped_teaching_ids(app)
             or not isinstance(app.store, StudyStore) or app.store.in_transaction
             or getattr(app.store, "practice_lane", "main") != "main"
             or bound_resources(app.store)[1] is not None):
@@ -254,7 +256,7 @@ async def finish_course_wait(app, resume):
     from dataclasses import replace
     value, error = _UNREAD, None
     try:
-        value = await run_in_background(app.repo, app.store, course_current_in_worker, {
+        value = await run_in_background(app.repo, app.store, _path.course_current_in_worker, {
             "snapshot": resume.snapshot, "enabled_kinds": list(resume.enabled_kinds),
             "now": resume.now.isoformat(), "fair_new": True})
     except Exception as exc:
@@ -263,7 +265,7 @@ async def finish_course_wait(app, resume):
         record_error("kana_queue_assembly", "read", exc)
     if not resume.ticket.page_current(getattr(app, "page", None), app._page_token):
         return
-    cancel_continue_wait(app)
+    _path.cancel_continue_wait(app)
     try:
         if (error is None and resume.ticket.data_current(app.store) and resume.snapshot.current(app.store)
                 and tuple(app.learning_preferences()["enabled"]) == resume.enabled_kinds):
@@ -376,7 +378,7 @@ def decide(app, K, pending, now, read, service, prepared_kana, *, scope=_UNREAD)
     sealed_before = sealed(app.store)
     availability = summarize_queue_availability(app.store, pending,
         allowed_kinds=K._queue_kinds(app, pending) if pending else None, now=now)
-    skipped = skipped_teaching_ids(app)
+    skipped = _path.skipped_teaching_ids(app)
     current = app.learning_store.current(app.learning_preferences()["enabled"], now=now, fair_new=True,
                                          projection=read, **({"skip_teaching_ids": skipped} if skipped else {}),
                                          **scoped)
@@ -553,7 +555,7 @@ def perform(app, step, *, read=None) -> bool:
         app.show_study_reference(step.entry_id)
         return True
     if isinstance(step, Failed):
-        show_continue_error(app, step.error, title=step.title)
+        _path.show_continue_error(app, step.error, title=step.title)
         return True
     if isinstance(step, WaitKanaPlan):
         return _start_kana_wait(app, step)

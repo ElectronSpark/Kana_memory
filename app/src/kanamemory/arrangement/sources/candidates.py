@@ -1,7 +1,7 @@
 """DispatchCandidates: the heads one "继续学习" dispatch could serve (design 12 B3, WP-B3).
 
 Implements ports.CandidateSource for ONE dispatch. It is built from what
-study_path_runtime._continue_dispatch has already computed: each lane's
+the continue action's decision (continue_runtime.decide) has already computed: each lane's
 head and its frozen round priority. A review candidate is a lane head whose
 frozen priority tier is exactly 3 (an ordinary due review). The new-content
 candidate is found only when asked: first_teaching_dispatch.share_candidate
