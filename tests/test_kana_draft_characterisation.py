@@ -264,6 +264,12 @@ def away_from(name, **held):
     ("question", {"word_romaji_parts": ["then"], "word_romaji_plan": "plan then", "word_romaji_unit_mode": False}),
     ("feedback", {"word_conversion_convention": "reading"}),
     ("feedback", {}),
+    ("question", {"romaji_answer": ""}),
+    ("word_question", {"word_answer": None}),
+    ("question", {"word_romaji_parts": [], "word_romaji_plan": None}),
+    ("session_done", {"word_used_conversion": False}),
+    ("session_wait", {"word_conversion_source": ""}),
+    ("dependency_wait", {}),
 ])
 def test_back_gives_back_exactly_the_values_the_kept_page_holds(name, held):
     value = away_from(name, **held)
@@ -354,6 +360,8 @@ def test_a_problem_report_carries_the_typed_values_the_practice_holds():
         "word_answer": "か", "romaji_answer": "k", "word_romaji_parts": ["ka"], "word_romaji_plan": plan,
         "word_romaji_unit_mode": True}
     assert result["word_romaji_parts"] is not parts
+    assert list(result) == ["word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_plan",
+                            "word_romaji_unit_mode"]
     assert "word_conversion_source" not in result and "word_used_conversion" not in result
 
 
@@ -364,3 +372,40 @@ def test_a_problem_report_names_no_typed_value_the_practice_never_held():
 
 def test_a_problem_report_off_the_question_pages_carries_no_draft():
     assert "draft" not in report_of(report_app(romaji_answer="k"), "session_done")
+
+
+# --- values that were never typed -------------------------------------------------------------------------------------
+
+def test_the_checkpoint_of_a_word_saves_an_empty_word_and_the_converter_defaults_for_what_was_never_typed(draft_app):
+    app = draft_app
+    draw(app, word())
+    kana_support.forget_draft(app, "word_answer", *CONVERTER)
+    assert saved_state(app) == {"word_answer": "", **CONVERTER}
+    assert kana_support.draft(app) == {}
+
+
+def test_the_checkpoint_of_a_romaji_question_saves_an_empty_answer_for_one_that_was_never_typed(draft_app):
+    app = draft_app
+    draw(app, kana())
+    kana_support.forget_draft(app, "romaji_answer")
+    assert saved_state(app) == {"romaji_answer": ""}
+
+
+def test_a_word_whose_mode_was_never_set_is_not_answered_part_by_part(draft_app):
+    app = draft_app
+    draw(app, reverse_word())
+    first = choose_next_unit(app)
+    kana_support.forget_draft(app, "word_romaji_unit_mode")
+    assert saved_state(app) == {}
+    kana_support.set_answer_revealed(app, False)
+    assert KanaMemory._word_romaji_submission(app, first) == {}
+
+
+def test_a_word_answer_without_a_converter_flag_is_judged_as_typed_without_the_converter(draft_app):
+    app = draft_app
+    draw(app, word())
+    kana_support.set_answer_revealed(app, False)
+    kana_support.forget_draft(app, "word_used_conversion")
+    assert "used_conversion" not in KanaMemory._word_spelling_plan(app, WORD["reading"])[1]
+    kana_support.set_word_used_conversion(app, True)
+    assert KanaMemory._word_spelling_plan(app, WORD["reading"])[1]["used_conversion"] is True

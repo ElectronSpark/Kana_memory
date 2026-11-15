@@ -377,3 +377,11 @@ def kept_draft_values(page):
     """What a practice page kept for Back holds of the typed draft, named like the readers above (only the
     values it holds)."""
     return {name: page.bindings[name] for name in DRAFT if name in page.bindings}
+
+
+def forget_draft(app, *names):
+    """Make the practice hold the named typed values (named like the readers above) as if they had never been
+    typed or set since the app started."""
+    for name in names:
+        if hasattr(app, name):
+            delattr(app, name)
