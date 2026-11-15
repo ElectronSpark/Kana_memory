@@ -1015,6 +1015,7 @@ tests/test_kana_session_characterisation.py
 tests/test_kana_rating_characterisation.py
 tests/test_kana_next_characterisation.py
 tests/test_kana_draft_characterisation.py
+tests/test_ink_pad_characterisation.py
 tests/test_course_answer_pages.py
 tests/test_course_answering.py
 tests/test_course_line_pages.py
