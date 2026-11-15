@@ -223,3 +223,23 @@ def kept_position(**fields):
     """What a practice page kept for Back holds of the session's position: the entries of its saved bindings that
     give these values (named like the readers above) back to the practice when the learner returns to it."""
     return dict(fields)
+
+
+# --- the whole position at once, and what a kept practice page holds of it -----------------------------------------
+
+_POSITION_READERS = {
+    "session_id": session_id, "questions": questions, "question_index": question_index,
+    "session_right": session_right, "question": question, "script": script,
+}
+
+
+def position(app):
+    """Where the practice stands, as one dict named like the readers above: the session, its queue, the place in
+    the queue, the right answers so far, the question on the page and its script."""
+    return {name: _POSITION_READERS[name](app) for name in POSITION}
+
+
+def kept_values(page):
+    """What a practice page kept for Back holds of the session's position, named like the readers above (only the
+    values it holds)."""
+    return {name: page.bindings[name] for name in POSITION if name in page.bindings}
