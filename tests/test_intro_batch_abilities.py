@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from support.learning_fixtures import learning_app, click
+from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of, descendants
 from support.learning_practice_policy_support import raw
@@ -54,7 +55,7 @@ def through_batch(app, item=None, kinds=KINDS):
     app.continue_learning()
     assert app.page == "learning_card"
     click(app, "下一项")
-    click(app, app._intro_quiz_question["answer"])
+    click(app, batch_quiz_question(app)["answer"])
     click(app, "继续")
     assert app.learning_store.intro_batch() is None
 

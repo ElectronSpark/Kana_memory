@@ -822,6 +822,7 @@ tests/test_ink_touch_batch.py
 tests/test_ink_touch_platform.py
 tests/test_inline_practice_preview.py
 tests/test_intro_batch_abilities.py
+tests/test_intro_batch_characterisation.py
 tests/test_intro_batch_quiz_ui.py
 tests/test_intro_batch_rules.py
 tests/test_intro_batch_store.py

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from support.fake_ui import View, descendants
+from support.course_support import batch_quiz_question
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
 from kanamemory.learning_content import get_learning_item
@@ -136,8 +137,8 @@ def finish_guided_learning(app, limit=8):
         elif app.page == "learning_card":
             click(app, "下一项")
         elif app.page == "learning_batch_quiz":
-            if app._intro_quiz_question is not None:
-                click(app, app._intro_quiz_question["answer"])
+            if batch_quiz_question(app) is not None:
+                click(app, batch_quiz_question(app)["answer"])
             click(app, "继续")
         else:
             return app.page

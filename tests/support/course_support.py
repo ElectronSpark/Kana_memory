@@ -439,3 +439,84 @@ def record_decisions(monkeypatch, *, log=None, answer=None):
 def round_plan(app):
     """The in-memory round plan: (sealed, finished, promoted, course_order_token)."""
     return _continue.round_plan(app)
+
+
+# --- the batch introduction (成批引入: the cards 新项说明 and the quiz 批小测) -----------------------------------
+
+# The learner-store calls the batch introduction makes: opening a batch, recording that a card was seen,
+# the learner's choice on a card, freezing the quiz, answering it, closing the batch, opening a later
+# ability of a batch item, and reading the open batch.
+BATCH_STORE_CALLS = ("start_intro_batch", "mark_instruction_exposed", "choose_intro_card", "start_intro_quiz",
+                     "answer_intro_quiz", "complete_intro_batch", "open_batch_ability", "intro_batch")
+# The calls by which the batch hands the learner back to the line when it is over.
+BATCH_HAND_BACKS = ("continue_study_path", "continue_learning")
+
+
+def batch_quiz_question(app):
+    """The quiz question the batch quiz page shown now asks (None once it was answered, on the page
+    本批小测已完成 and before the paused page)."""
+    return getattr(app, "_intro_quiz_question", None)
+
+
+def batch_card_entry(app):
+    """The batch entry (content id and introduction id) of the card the page 新项说明 shows, as drawn."""
+    return getattr(app, "_intro_card_entry", None)
+
+
+def batch_lesson(app):
+    """The lesson the batch page shown is about (the card's item, or the quiz item asked or settled last)."""
+    return getattr(app, "_learning_item", None)
+
+
+def batch_quiz_result(app):
+    """The result area of the batch quiz page shown: its last row (empty until an answer is given)."""
+    return app.body.children[-1]
+
+
+def batch_quiz_result_texts(app):
+    """Every non-empty text of the quiz page's result area, in drawing order."""
+    from support.fake_ui import descendants
+    return [str(view.text) for view in descendants(batch_quiz_result(app)) if view.text]
+
+
+def batch_quiz_choices(app):
+    """(caption, enabled) of each answer button of the quiz page shown, in order: the pressable rows of the
+    page itself (the result area's controls are not among them)."""
+    return [(view.text, view.enabled) for view in app.body.children if view.on_press]
+
+
+def record_batch_store_calls(app, monkeypatch, *names, log=None, answers=None):
+    """Record each learner-store call of the batch introduction (BATCH_STORE_CALLS, or ``names``) with its
+    exact arguments, as record_store_calls does; ``answers`` answers those instead of the store."""
+    return record_store_calls(app, monkeypatch, *(names or BATCH_STORE_CALLS), log=log, answers=answers)
+
+
+def record_batch_hand_back(app, monkeypatch, *, study_path=True, log=None):
+    """Record the batch's hand-back to the line without running it. ``study_path``: the app offers the study
+    path (a recording continue_study_path is installed); False: it offers none (continue_study_path is
+    removed). continue_learning is recorded in both cases. Install it before the page is drawn."""
+    log = [] if log is None else log
+    if study_path:
+        def study(*args, **kwargs):
+            log.append(Call("continue_study_path", args, dict(kwargs), page=getattr(app, "page", None)))
+        monkeypatch.setattr(app, "continue_study_path", study, raising=False)
+    elif hasattr(app, "continue_study_path"):
+        monkeypatch.delattr(app, "continue_study_path")
+    record_entries(app, monkeypatch, real=False, log=log, names=("continue_learning",))
+    return log
+
+
+def record_known_reads(monkeypatch, *, log=None):
+    """Record each read of the learner's known items (the ready items and the introduced kana) that a
+    page makes, logged as "known_ids"; the reads still answer."""
+    from kanamemory import course_planning
+    log = [] if log is None else log
+    real = course_planning.known_ids
+
+    def read(*args, **kwargs):
+        call = Asked("known_ids", args, dict(kwargs))
+        log.append(call)
+        call.result = real(*args, **kwargs)
+        return call.result
+    monkeypatch.setattr(course_planning, "known_ids", read)
+    return log

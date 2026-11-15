@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 
 from support.learning_fixtures import learning_app, click, finish_guided_learning
+from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of
 from kanamemory import intro_batch
@@ -63,7 +64,7 @@ def restart(app):
 def test_wrong_answer_shows_answer_and_card_then_requeues_last(learning_app):
     app = learning_app
     start_quiz(app, [word(1), word(2)])
-    question = app._intro_quiz_question
+    question = batch_quiz_question(app)
     cid = question["target_id"]
     n = cid[-1]
     assert f"語{n}です。" not in text_of(app.body)
@@ -74,12 +75,12 @@ def test_wrong_answer_shows_answer_and_card_then_requeues_last(learning_app):
     assert [h["content_id"] for h in queue(app)][-1] == cid and len(queue(app)) == 2
     assert frozen(app, cid)["answers"][question["id"]]["correct"] is False
     click(app, "继续")
-    assert app.page == "learning_batch_quiz" and app._intro_quiz_question["target_id"] != cid
+    assert app.page == "learning_batch_quiz" and batch_quiz_question(app)["target_id"] != cid
     # A correct answer gets brief feedback without the card.
-    click(app, app._intro_quiz_question["answer"])
+    click(app, batch_quiz_question(app)["answer"])
     assert "说明卡" not in text_of(app.body)
     click(app, "继续")
-    assert app._intro_quiz_question["target_id"] == cid
+    assert batch_quiz_question(app)["target_id"] == cid
 
 
 def test_reask_uses_second_frozen_question_when_available(learning_app):
@@ -87,39 +88,39 @@ def test_reask_uses_second_frozen_question_when_available(learning_app):
     start_quiz(app, [word(1, contexts=2), word(2)])
     two, one = frozen(app, "word:synthetic:w1")["questions"], frozen(app, "word:synthetic:w2")["questions"]
     assert len(two) == 2 and two[0]["prompt"] != two[1]["prompt"] and len(one) == 1
-    while app._intro_quiz_question["target_id"] != "word:synthetic:w1":
-        click(app, app._intro_quiz_question["answer"])
+    while batch_quiz_question(app)["target_id"] != "word:synthetic:w1":
+        click(app, batch_quiz_question(app)["answer"])
         click(app, "继续")
-    assert app._intro_quiz_question == two[0]
+    assert batch_quiz_question(app) == two[0]
     click(app, wrong(two[0]))
     click(app, "继续")
-    if app._intro_quiz_question["target_id"] != "word:synthetic:w1":
-        click(app, app._intro_quiz_question["answer"])
+    if batch_quiz_question(app)["target_id"] != "word:synthetic:w1":
+        click(app, batch_quiz_question(app)["answer"])
         click(app, "继续")
-    assert app._intro_quiz_question == two[1]
+    assert batch_quiz_question(app) == two[1]
     click(app, wrong(two[1]))
     click(app, "继续")
     # Both questions answered: the first one comes back.
-    assert app._intro_quiz_question == two[0]
+    assert batch_quiz_question(app) == two[0]
 
 
 def test_restart_mid_quiz_resumes_same_frozen_head(learning_app):
     app = learning_app
     start_quiz(app, [word(1), word(2), word(3)])
-    done = app._intro_quiz_question["target_id"]
-    click(app, app._intro_quiz_question["answer"])
+    done = batch_quiz_question(app)["target_id"]
+    click(app, batch_quiz_question(app)["answer"])
     click(app, "继续")
-    click(app, wrong(app._intro_quiz_question))
+    click(app, wrong(batch_quiz_question(app)))
     head = queue(app)[0]
     expected = next(q for q in frozen(app, head["content_id"])["questions"] if q["id"] == head["question_id"])
     before = {cid: frozen(app, cid) for cid in ("word:synthetic:w1", "word:synthetic:w2", "word:synthetic:w3")}
     restart(app)
-    assert app.page == "learning_batch_quiz" and app._intro_quiz_question == expected
+    assert app.page == "learning_batch_quiz" and batch_quiz_question(app) == expected
     assert {cid: frozen(app, cid) for cid in before} == before
     asked = []
-    while app.page == "learning_batch_quiz" and app._intro_quiz_question is not None:
-        asked.append(app._intro_quiz_question["target_id"])
-        click(app, app._intro_quiz_question["answer"])
+    while app.page == "learning_batch_quiz" and batch_quiz_question(app) is not None:
+        asked.append(batch_quiz_question(app)["target_id"])
+        click(app, batch_quiz_question(app)["answer"])
         click(app, "继续")
     assert done not in asked and len(asked) == 2
     assert app.learning_store.intro_batch() is None
@@ -128,7 +129,7 @@ def test_restart_mid_quiz_resumes_same_frozen_head(learning_app):
 def test_closed_kind_pauses_the_same_head(learning_app):
     app = learning_app
     start_quiz(app, [word(1), word(2)])
-    question, saved = app._intro_quiz_question, queue(app)
+    question, saved = batch_quiz_question(app), queue(app)
     # A kept page cannot answer once the kind is closed.
     app.store.set_setting(LEARNING_PREFS, prefs(["grammar_meaning"]))
     click(app, question["choices"][0])
@@ -140,7 +141,7 @@ def test_closed_kind_pauses_the_same_head(learning_app):
     assert app.page != "learning_batch_quiz" and queue(app) == saved
     app.store.set_setting(LEARNING_PREFS, prefs(KINDS))
     restart(app)
-    assert app.page == "learning_batch_quiz" and app._intro_quiz_question == question
+    assert app.page == "learning_batch_quiz" and batch_quiz_question(app) == question
 
 
 def test_completion_bridges_without_formal_evidence(learning_app):
@@ -162,11 +163,11 @@ def test_completion_bridges_without_formal_evidence(learning_app):
     assert len(questions) == 2 and all(row[4] == "pending" and row[6] is None for row in questions)
     while app.page == "learning_card":
         click(app, "下一项")
-    click(app, wrong(app._intro_quiz_question))
+    click(app, wrong(batch_quiz_question(app)))
     click(app, "继续")
     while queue(app):
         assert db.execute("SELECT COUNT(*) FROM learning_event").fetchone()[0] == 0
-        click(app, app._intro_quiz_question["answer"])
+        click(app, batch_quiz_question(app)["answer"])
         assert formal() == questions and schedule() == units
         if queue(app):
             click(app, "继续")

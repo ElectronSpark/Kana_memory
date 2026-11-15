@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from support.learning_fixtures import learning_app, click
+from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app
 from support.fake_ui import text_of, descendants
 from kanamemory import intro_batch
@@ -89,7 +90,7 @@ def test_known_writes_diagnostic_profile_and_skips_quiz(learning_app):
     click(app, "下一项")
     assert app.page == "learning_batch_quiz"
     assert app.learning_store.intro_batch()["quiz_queue"][0]["content_id"] == "word:synthetic:w2"
-    click(app, app._intro_quiz_question["answer"])
+    click(app, batch_quiz_question(app)["answer"])
     click(app, "继续")
     assert app.learning_store.intro_batch() is None
     assert app.learning_store.get_item("word:synthetic:w2")["stage"] == "bridge"
@@ -108,13 +109,13 @@ def test_four_words_then_one_grammar(learning_app):
         click(app, "下一项")
     assert app.page == "learning_batch_quiz"
     while app.page == "learning_batch_quiz":
-        click(app, app._intro_quiz_question["answer"])
+        click(app, batch_quiz_question(app)["answer"])
         click(app, "继续")
     # The fifth word opens its own batch before the grammar in dispatch order.
     state = app.learning_store.intro_batch()
     assert app.page == "learning_card" and [e["content_id"] for e in state["entries"]] == ["word:synthetic:w5"]
     click(app, "下一项")
-    click(app, app._intro_quiz_question["answer"])
+    click(app, batch_quiz_question(app)["answer"])
     click(app, "继续")
     state = app.learning_store.intro_batch()
     assert app.page == "learning_card" and state["family"] == "grammar" and len(state["entries"]) == 1
