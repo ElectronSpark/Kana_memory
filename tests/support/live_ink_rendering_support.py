@@ -12,6 +12,7 @@ from toga.widgets.canvas import State
 from kanamemory import app as app_module
 from copy import deepcopy
 import pytest
+from support import kana_support
 
 
 class Handle:
@@ -116,17 +117,18 @@ class RecordingCanvas(Canvas):
 
 @pytest.fixture
 def ink_app(monkeypatch):
-    app = SimpleNamespace(
+    app = kana_support.with_state(SimpleNamespace(
         page="free_ink", _page_token=3, _ink_revision=2, _ink_busy=False,
         _paint_handle=None, loop=AndroidIdleLoop(), canvas=RecordingCanvas(),
-        ink_width=360, ink_height=210, _ink_view_width=360, _ink_view_height=210,
-        strokes=[], _active_stroke=None, ink_result_box=Mock(),
+        _ink_view_width=360, _ink_view_height=210,
+        _active_stroke=None, ink_result_box=Mock(),
         ink_status_label=SimpleNamespace(text=""), _checkpoint=Mock(),
         model_state="ready", free_ink=True, recognize_button=SimpleNamespace(),
         platform=SimpleNamespace(stop=Mock(), recognize=AsyncMock(return_value=[])),
         title_label=SimpleNamespace(text=""), subtitle_label=SimpleNamespace(text=""),
         content_slot=Mock(),
-    )
+    ),
+        ink_width=360, ink_height=210, strokes=[])
     for name in ("ink_press", "ink_drag", "ink_release", "ink_resize",
                  "_ink_transform", "_ink_point", "_schedule_ink_draw", "_redraw_ink",
                  "undo_ink", "clear_ink", "screen", "recognize_ink"):

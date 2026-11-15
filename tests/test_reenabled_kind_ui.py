@@ -95,7 +95,8 @@ def test_reenabled_step_waits_until_original_due_then_uses_same_review_record(
     app.continue_spaced_practice = MethodType(KanaMemory.continue_spaced_practice, app)
 
     def ink_page(**kwargs):
-        app.page, app.strokes = "ink_question", []
+        app.page = "ink_question"
+        kana_support.set_strokes(app, [])
     app.show_ink_page = ink_page
 
     with StudyStore(tmp_path / "learner", time_zone="UTC") as store:

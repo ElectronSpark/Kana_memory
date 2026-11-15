@@ -86,7 +86,7 @@ def test_visual_handwriting_recognition_and_confirmation_work_without_audio(ques
     assert app.page == "ink_question" and kana_support.question_audio_ok(app)
     assert "ka" in text_of(app.body) and "播放声音" not in text_of(app.body)
     assert ("请写平假名" if script == "hiragana" else "请写片假名") in text_of(app.body)
-    app.strokes = [[(10, 20, 0), (40, 60, 100)]]
+    kana_support.set_strokes(app, [[(10, 20, 0), (40, 60, 100)]])
     asyncio.run(app.recognize_ink())
     candidate = next(v for v in descendants(app.ink_result_box) if v.text == kana_support.question(app).answer and v.on_press)
     candidate.on_press(None)
@@ -124,8 +124,8 @@ def test_new_production_modes_checkpoint_backup_resume_keep_input_without_tts(le
         if kind == "romaji_kana_full":
             assert kana_support.word_answer(app) == app.word_answer_label.text == "あ"
         else:
-            assert [[p[:2] for p in stroke] for stroke in app.strokes] == [[(10, 20), (20, 30)]]
-            assert app.strokes[0][1][2] - app.strokes[0][0][2] == 20
+            assert [[p[:2] for p in stroke] for stroke in kana_support.strokes(app)] == [[(10, 20), (20, 30)]]
+            assert kana_support.strokes(app)[0][1][2] - kana_support.strokes(app)[0][0][2] == 20
         if feedback:
             app.check_answer.assert_called_once_with("あ")
             assert kana_support.answer_revealed(app)

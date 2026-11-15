@@ -105,25 +105,25 @@ def test_busy_recognition_is_labeled_until_the_actual_model_finishes(model_app):
 
 def test_successful_download_refreshes_the_same_ink_page_and_preserves_drawing(model_app):
     app = model_app
-    canvas, strokes, token = app.canvas, app.strokes, app._page_token
+    canvas, strokes, token = app.canvas, kana_support.strokes(app), app._page_token
     asyncio.run(app.download_model())
     app.platform.download_model.assert_awaited_once()
     app.platform.model_status.assert_awaited_once()
     assert app.model_state == "ready" and not app._model_downloading
     assert app.recognize_button.enabled
-    assert app.canvas is canvas and app.strokes is strokes and app._page_token == token
+    assert app.canvas is canvas and kana_support.strokes(app) is strokes and app._page_token == token
     assert app.service_message == "日语声音已就绪"
     assert app.store.mock_calls == []
 
 
 def test_download_failure_is_retriable_without_losing_ink_or_grading(model_app):
     app = model_app
-    strokes = app.strokes
+    strokes = kana_support.strokes(app)
     app.platform.download_model.side_effect = RuntimeError("暂时无法联网")
     asyncio.run(app.download_model())
     assert app.model_state == "error" and not app._model_downloading
     assert "暂时无法联网" in app.model_message
-    assert not app.recognize_button.enabled and app.strokes is strokes
+    assert not app.recognize_button.enabled and kana_support.strokes(app) is strokes
     app.platform.download_model.side_effect = None
     asyncio.run(app.download_model())
     assert app.model_state == "ready" and app.recognize_button.enabled
@@ -222,13 +222,13 @@ def test_entering_ink_page_exposes_download_without_having_to_write_first(model_
     assert "下载日语手写模型" in text_of(app.body)
     assert "重新检查模型" in text_of(app.body)
     assert not app.recognize_button.enabled
-    assert not app.strokes and app.store.mock_calls == []
+    assert not kana_support.strokes(app) and app.store.mock_calls == []
 
 
 @pytest.mark.parametrize("destination", ["home", "settings", "practice_setup"])
 def test_download_completion_updates_current_page_without_returning_to_old_ink(model_app, destination):
     app = model_app
-    strokes = app.strokes
+    strokes = kana_support.strokes(app)
 
     async def run():
         pending = asyncio.get_running_loop().create_future()
@@ -244,7 +244,7 @@ def test_download_completion_updates_current_page_without_returning_to_old_ink(m
         await task
 
     asyncio.run(run())
-    assert app.page == destination and app.model_state == "ready" and app.strokes is strokes
+    assert app.page == destination and app.model_state == "ready" and kana_support.strokes(app) is strokes
     if destination == "settings":
         assert "已下载" in text_of(app.model_panel)
         assert "下载日语手写模型" not in text_of(app.model_panel)
@@ -273,19 +273,22 @@ def test_voice_check_finishing_on_home_needs_no_removed_service_panel(model_app)
 
 def test_back_refreshes_retained_ink_controls_after_background_download(model_app):
     app = model_app
-    strokes, canvas, model_panel = app.strokes, app.canvas, app.ink_model_panel
+    strokes, canvas, model_panel = kana_support.strokes(app), app.canvas, app.ink_model_panel
     app.refresh_model_ui()
     assert "下载日语手写模型" in text_of(model_panel)
     body = View(canvas, model_panel, app.recognize_button)
-    saved = {name: getattr(app, name) for name in app_module.INK_BINDINGS}
+    saved = {**{name: getattr(app, name) for name in app_module.INK_BINDINGS if name not in kana_support.INK},
+             **kana_support.kept_ink(**kana_support.ink(app))}
     app.back_stack.pages.append(PageState(("show_free_ink", None), "free_ink", "试写", body, saved))
     app.page = "settings"
-    app.canvas, app.strokes, app.ink_model_panel = View(), [], View()
+    app.canvas = View()
+    kana_support.set_strokes(app, [])
+    app.ink_model_panel = View()
     app.recognize_button = View(enabled=False)
     asyncio.run(app.download_model())
     app.go_back()
     assert app.page == "free_ink" and app.content_slot.children == [body]
-    assert app.canvas is canvas and app.strokes is strokes and app.ink_model_panel is model_panel
+    assert app.canvas is canvas and kana_support.strokes(app) is strokes and app.ink_model_panel is model_panel
     assert app.recognize_button.enabled and "已下载" in text_of(model_panel)
     assert "下载日语手写模型" not in text_of(model_panel)
     app._schedule_ink_draw.assert_called_once()
@@ -380,7 +383,7 @@ def test_recognition_after_preparation_uses_only_actual_strokes_and_model_candid
     app = model_app
     asyncio.run(app.download_model())
     app.platform.recognize.return_value = ["い", "り", "い"]
-    strokes = [list(stroke) for stroke in app.strokes]
+    strokes = [list(stroke) for stroke in kana_support.strokes(app)]
     asyncio.run(app.recognize_ink())
     app.platform.recognize.assert_awaited_once_with(strokes, 360, 210)
     assert [control.text for control in buttons(app.ink_result_box)] == ["い", "り"]

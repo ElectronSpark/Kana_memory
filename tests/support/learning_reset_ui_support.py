@@ -34,7 +34,8 @@ def reset_app(setup_app, tmp_path):
         app._ink_revision, app._audio_serial = 2, 3
         kana_support.set_assisted_attempts(app, {(kana_support.session_id(app), 2)})
         kana_support.set_answered_attempts(app, {(kana_support.session_id(app), 0), (kana_support.session_id(app), 1)})
-        app.strokes, app._active_stroke = [[[1, 2, 3]]], [(1, 2, 3)]
+        kana_support.set_strokes(app, [[[1, 2, 3]]])
+        app._active_stroke = [(1, 2, 3)]
         app._preview_pending, app._practice_context = object(), True
         app._practice_start_token, app._practice_start_task = object(), None
         app._navigating, app._view_key = False, ("show_settings", None)
@@ -67,5 +68,5 @@ def saved_tables(app):
 def retained_state(app):
     return (kana_support.session_id(app), kana_support.questions(app), kana_support.question(app), kana_support.question_index(app), kana_support.session_right(app),
             set(kana_support.assisted_attempts(app)), set(kana_support.answered_attempts(app)), list(app.back_stack.pages),
-            app.strokes, app._active_stroke, app._preview_pending, app._practice_context,
+            kana_support.strokes(app), app._active_stroke, app._preview_pending, app._practice_context,
             app._ink_revision, app._audio_serial, app._practice_start_token)

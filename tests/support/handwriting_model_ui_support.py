@@ -53,8 +53,8 @@ def model_app(monkeypatch):
         page="free_ink", _page_token=8, _ink_revision=2, _ink_busy=False,
         _model_request=0, _model_downloading=False, _model_checking=False, _paint_handle=None,
         model_state="not_downloaded", model_message="", service_message="日语声音已就绪",
-        strokes=[[(12.0, 18.0, 1), (20.0, 30.0, 2)]], _active_stroke=None,
-        ink_width=360, ink_height=210, free_ink=True, _ink_view_width=360, _ink_view_height=210,
+        _active_stroke=None,
+        free_ink=True, _ink_view_width=360, _ink_view_height=210,
         canvas=View(), ink_model_panel=View(), model_panel=View(),
         ink_status_label=View(), ink_result_box=View(), recognize_button=View(enabled=False),
         settings_message=View(text="日语声音已就绪"), question_notice=View(),
@@ -72,7 +72,8 @@ def model_app(monkeypatch):
         check_answer=Mock(), content_label=lambda text, **kw: View(text=text, **kw),
         alert=Mock(), _checkpoint=Mock(), refresh_home_actions=Mock(),
     ),
-        script="hiragana", question=None)
+        script="hiragana", question=None,
+        strokes=[[(12.0, 18.0, 1), (20.0, 30.0, 2)]], ink_width=360, ink_height=210)
     for name in ("model_label", "_services_summary", "model_controls", "refresh_model_ui", "check_model",
                  "download_model", "recognize_ink", "confirm_ink", "ink_press",
                  "ink_drag", "ink_release", "ink_resize", "_ink_transform", "_ink_point", "undo_ink", "clear_ink",

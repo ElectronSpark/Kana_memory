@@ -29,12 +29,12 @@ def session_app(store, kind="word_kana", assisted=False, feedback=False):
     question = store.get_session_questions(sid)[0]  # The frozen snapshot owns the queue.
     app = kana_support.with_state(SimpleNamespace(store=store, _restoring_practice=False,
         page="feedback" if feedback else ("word_question" if kind == "word_kana" else "ink_question"),
-        use_full_keyboard=True, strokes=[[(10, 20, 100), (20, 30, 120)]],
-        ink_width=360, ink_height=210, alert=Mock(), back_stack=BackStack()),
+        use_full_keyboard=True, alert=Mock(), back_stack=BackStack()),
         answer_revealed=assisted, answered_text="あ" if feedback else None, question_audio_ok=True,
         assisted_attempts={(sid, 0)} if assisted else set(), answered_attempts=set(),
         session_id=sid, questions=[question], question=question, question_index=0, session_right=0,
-        word_answer="あ")
+        word_answer="あ",
+        strokes=[[(10, 20, 100), (20, 30, 120)]], ink_width=360, ink_height=210)
     app._practice_preferences = KanaMemory._clean_preferences({})
     app._practice_preferences["mixed_kinds"] = [kind]
     bind(app, "_checkpoint", "_attempt_key", "resume_practice")

@@ -103,7 +103,7 @@ def test_success_retires_session_views_and_audio_but_retains_preferences_and_res
     assert kana_support.session_id(app) is None and kana_support.questions(app) == [] and kana_support.question(app) is None
     assert kana_support.question_index(app) == kana_support.session_right(app) == 0
     assert kana_support.assisted_attempts(app) == kana_support.answered_attempts(app) == set()
-    assert app.strokes == [] and app._active_stroke is None
+    assert kana_support.strokes(app) == [] and app._active_stroke is None
     assert app._preview_pending is None and app._practice_context is False
     assert app._practice_start_token is app._practice_start_task is None
     assert not app._starting_practice and app.back_stack.pages == []

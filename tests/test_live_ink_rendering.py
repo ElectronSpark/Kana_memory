@@ -16,6 +16,7 @@ from kanamemory.app import GREEN, KanaMemory
 
 
 from support.live_ink_rendering_support import Handle, AndroidIdleLoop, RecordingContext, RecordingCanvas, ink_app
+from support import kana_support
 
 
 @pytest.mark.parametrize("page", ["free_ink", "ink_question"])
@@ -29,7 +30,7 @@ def test_pen_movement_is_visible_before_release_or_recognition(ink_app, page):
     app.ink_drag(app.canvas, 45, 60)
     app.loop.idle_turn()
     assert app.canvas.ink == [(("move", 20, 30), ("line", 45, 60))]
-    assert app._active_stroke is app.strokes[0]
+    assert app._active_stroke is kana_support.strokes(app)[0]
     app.platform.recognize.assert_not_called()
     app._checkpoint.assert_not_called()
 
@@ -45,7 +46,7 @@ def test_multiple_touch_points_in_one_turn_render_once_without_losing_points(ink
     assert len(app.canvas.frames) == initial_frames + 1
     assert app.canvas.ink == [(("move", 10, 20), ("line", 20, 30),
                                ("line", 35, 45), ("line", 40, 65))]
-    assert len(app.strokes[0]) == 4
+    assert len(kana_support.strokes(app)[0]) == 4
     app.loop.idle_turn()
     assert len(app.canvas.frames) == initial_frames + 1
 
@@ -92,7 +93,7 @@ def test_leaving_page_cancels_queued_draw_before_another_ink_canvas_is_shown(ink
     # Without cancellation it could mistakenly paint this unrelated canvas.
     app.canvas = RecordingCanvas()
     app.page = "free_ink"
-    app.strokes = []
+    kana_support.set_strokes(app, [])
     app.loop.idle_turn()
     assert len(old_canvas.frames) == old_frame_count
     assert app.canvas.frames == []
@@ -112,13 +113,13 @@ def test_live_paint_and_resize_preserve_recognition_coordinates_and_timestamps(i
     app.ink_release(app.canvas, 70, 80)
     app.loop.idle_turn()
     expected = [[(30.0, 40.0, 1000), (50.0, 60.0, 1025), (70.0, 80.0, 1060)]]
-    assert app.strokes == expected
+    assert kana_support.strokes(app) == expected
     app.ink_resize(app.canvas, 720, 420)
     app.loop.idle_turn()
     assert app.canvas.ink == [(("move", 60, 80), ("line", 100, 120), ("line", 140, 160))]
-    assert app.strokes == expected
+    assert kana_support.strokes(app) == expected
     # Restore the real clock before asyncio creates and runs its own loop.
     monkeypatch.undo()
     asyncio.run(app.recognize_ink())
     app.platform.recognize.assert_awaited_once_with(expected, 360, 210)
-    assert app.strokes == expected
+    assert kana_support.strokes(app) == expected

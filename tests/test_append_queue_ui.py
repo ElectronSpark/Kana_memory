@@ -47,7 +47,8 @@ def test_append_restores_original_draft_feedback_audio_and_question_settings(que
             setattr(app, method, MethodType(getattr(KanaMemory, method), app))
         app._redraw_ink = Mock()
         def ink_page(**kwargs):
-            app.page, app.strokes = "ink_question", []
+            app.page = "ink_question"
+            kana_support.set_strokes(app, [])
         app.show_ink_page = ink_page
         # Retain this direction in current settings while checking the append
         # contract. A disabled old direction is intentionally skipped now.
@@ -75,8 +76,8 @@ def test_append_restores_original_draft_feedback_audio_and_question_settings(que
         elif kind == "word_kana":
             assert kana_support.word_answer(app) == app.word_answer_label.text == "あ"
         else:
-            assert [[point[:2] for point in stroke] for stroke in app.strokes] == [[(10, 20), (20, 40)]]
-            assert app.strokes[0][1][2] - app.strokes[0][0][2] == 20
+            assert [[point[:2] for point in stroke] for stroke in kana_support.strokes(app)] == [[(10, 20), (20, 40)]]
+            assert kana_support.strokes(app)[0][1][2] - kana_support.strokes(app)[0][0][2] == 20
             app._redraw_ink.assert_called_once()
         assert not app.practice_replace_slot.children
         app.alert.assert_not_called()

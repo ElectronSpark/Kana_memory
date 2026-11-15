@@ -14,6 +14,7 @@ from kanamemory.platform_android import AndroidPlatform, PlatformError
 
 
 from support.tts_setup_support import INSTALL, Voice, Voices, Intent, tts_environment
+from support import kana_support
 SETTINGS = "com.android.settings.TTS_SETTINGS"
 ACCESSIBILITY = "android.settings.ACCESSIBILITY_SETTINGS"
 
@@ -197,17 +198,18 @@ def test_background_initialization_refreshes_an_already_open_settings_page():
 def test_sound_refresh_does_not_overwrite_independent_model_failure(method):
     platform = SimpleNamespace(model_status=AsyncMock(side_effect=PlatformError("日语模型下载连接失败")),
                                prepare_tts=AsyncMock(return_value="ready"), tts_detail="系统日语声音已就绪")
-    page = SimpleNamespace(platform=platform, page="free_ink", model_state="error",
+    page = kana_support.with_state(SimpleNamespace(platform=platform, page="free_ink", model_state="error",
                            model_message="日语模型下载连接失败", service_message="", _model_request=0,
                            _model_downloading=False, _model_checking=False, refresh_model_ui=Mock(),
-                           strokes=[[(1, 2, 3)]], store=Mock())
+                           store=Mock()),
+        strokes=[[(1, 2, 3)]])
     page.check_model = MethodType(KanaMemory.check_model, page)
     page.refresh_services = MethodType(KanaMemory.refresh_services, page)
-    strokes = page.strokes
+    strokes = kana_support.strokes(page)
     asyncio.run(getattr(KanaMemory, method)(page))
     assert page.model_state == "error" and page.model_message == "日语模型下载连接失败"
     assert page.service_message == "系统日语声音已就绪"
-    assert page.strokes is strokes and page.store.mock_calls == []
+    assert kana_support.strokes(page) is strokes and page.store.mock_calls == []
     platform.prepare_tts.assert_awaited_once()
     page.refresh_model_ui.assert_called()
 

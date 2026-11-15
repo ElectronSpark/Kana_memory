@@ -157,7 +157,7 @@ def test_scrollable_canvas_reserves_drawing_gesture_and_releases_parent(focused_
     app.canvas.options["on_drag"](app.canvas, 20, 90)
     app.canvas.options["on_release"](app.canvas, 20, 150)
     assert parent.requestDisallowInterceptTouchEvent.call_args_list == [call(True), call(False)]
-    assert [[point[:2] for point in stroke] for stroke in app.strokes] == [[(20, 30), (20, 90), (20, 150)]]
+    assert [[point[:2] for point in stroke] for stroke in kana_support.strokes(app)] == [[(20, 30), (20, 90), (20, 150)]]
     app._checkpoint.assert_called_once_with()
     assert app._active_stroke is None
 
