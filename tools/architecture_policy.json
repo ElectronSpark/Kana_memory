@@ -205,7 +205,7 @@
     "store_access": {
       "app/src/kanamemory/ai_service_ui.py": 13,
       "app/src/kanamemory/ai_ui.py": 43,
-      "app/src/kanamemory/app.py": 98,
+      "app/src/kanamemory/app.py": 94,
       "app/src/kanamemory/backup_ui.py": 2,
       "app/src/kanamemory/content_library_ui.py": 2,
       "app/src/kanamemory/example_ui.py": 18,
@@ -229,7 +229,7 @@
     "app_state": {
       "app/src/kanamemory/ai_service_ui.py": 19,
       "app/src/kanamemory/ai_ui.py": 24,
-      "app/src/kanamemory/app.py": 181,
+      "app/src/kanamemory/app.py": 180,
       "app/src/kanamemory/backup_ui.py": 18,
       "app/src/kanamemory/content_library_ui.py": 6,
       "app/src/kanamemory/example_ui.py": 19,

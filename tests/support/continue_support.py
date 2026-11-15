@@ -10,10 +10,10 @@ its own pages (本轮已保存, 暂时没有可进行的假名题型, 本次学�
 page and the error page "无法准备下一题"). The decision and the course-head wait
 live in kanamemory.continue_runtime (decide returns the next step, perform
 makes its call); the action's own state between its moments (the enrollment
-notice, the waiting page and its timer, the course-head wait's task) is one
+notice, the waiting page and its timer, the tasks of both waits) is one
 ContinueState object on the app. How the action keeps its state (also the
-background switch, the kana assembly wait's task, the teaching passed over
-this run, the extra-practice step counter, the mark on an error already
+background switch, the teaching passed over this run, the extra-practice
+step counter, the mark on an error already
 shown) and where it looks names up (the decision itself, the share dispatch,
 the wait delay, the two background runners, the queue summary, the
 promotion, the take-over) is known only here. Tests never name the module or
@@ -31,7 +31,8 @@ are public and kanamemory modules.
 import asyncio
 from dataclasses import dataclass, field
 
-from kanamemory.app import KANA_ASSEMBLY_ATTEMPTS, KANA_ASSEMBLY_PAGE
+from kanamemory.app import KANA_ASSEMBLY_PAGE
+from kanamemory.continue_runtime import KANA_ASSEMBLY_ATTEMPTS
 from support.fake_ui import descendants
 from support.review_wait_ui_support import ControlledLoop
 from support.study_home_support import made_with, record_controls
@@ -79,7 +80,7 @@ def background_enabled(app):
 
 def kana_wait_task(app):
     """The task of the kana queue assembly wait (W1) started by the last continue that waited, or None."""
-    return getattr(app, "_kana_assembly_task", None)
+    return _state(app).kana_task
 
 
 def course_wait_task(app):
@@ -173,14 +174,13 @@ def set_wait_seconds(monkeypatch, seconds):
 
 def kana_runner():
     """The background runner the kana queue assembly wait (W1) awaits, as installed now."""
-    from kanamemory import app as app_module
-    return app_module.run_in_background
+    return _continue().run_in_background
 
 
 def replace_kana_runner(monkeypatch, runner):
-    """The kana queue assembly wait (W1) awaits ``runner(repo, store, work, options)`` instead."""
-    from kanamemory import app as app_module
-    monkeypatch.setattr(app_module, "run_in_background", runner)
+    """The kana queue assembly wait (W1) awaits ``runner(repo, store, work, options)`` instead (the
+    course-head wait W2 awaits the same runner)."""
+    monkeypatch.setattr(_continue(), "run_in_background", runner)
 
 
 def course_runner():
@@ -189,7 +189,8 @@ def course_runner():
 
 
 def replace_course_runner(monkeypatch, runner):
-    """The course-head wait (W2) awaits ``runner(repo, store, work, options)`` instead."""
+    """The course-head wait (W2) awaits ``runner(repo, store, work, options)`` instead (the kana queue
+    assembly wait W1 awaits the same runner)."""
     monkeypatch.setattr(_continue(), "run_in_background", runner)
 
 

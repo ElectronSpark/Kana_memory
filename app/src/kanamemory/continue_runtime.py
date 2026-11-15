@@ -27,13 +27,16 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .next_step.model import (STAY_CHECKPOINT, STAY_KINDS, STAY_LANE, CourseItem, EndActionKind, ExtraOr, Failed,
-                              KanaItem, NoKanaKind, Reference, RoundEnd, RouteEnd, Stay, WaitCourseHead)
+                              KanaItem, NoKanaKind, Reference, RoundEnd, RouteEnd, Stay, WaitCourseHead,
+                              WaitKanaPlan)
 from .practice_availability import summarize_queue_availability
 from .practice_preferences import clean_preferences, enabled_preference_kinds
 from .practice_worker import BackgroundTicket, run_in_background
 from .study_path_runtime import (_UNREAD, CourseCurrentResume, PreparedKana, StudyPathRuntimeMixin,
                                  cancel_continue_wait, course_current_in_worker, show_continue_error,
                                  skipped_teaching_ids)
+
+KANA_ASSEMBLY_ATTEMPTS = 2
 
 
 @dataclass(eq=False)
@@ -117,10 +120,10 @@ def continue_action(app, K, widget=None, *, checkpoint_saved=False, **kwargs):
             plan = kwargs.get("_kana_plan")
             # WP5: assemble the kana queue on a worker connection when the app
             # enabled it; this action then ends on a short wait page and resumes
-            # here with the plan (KanaMemory._finish_kana_queue_assembly).
-            if plan is None and K._plan_kana_queue_in_background(app, service, kinds,
+            # here with the plan (finish_kana_wait).
+            if plan is None and (step := kana_wait_request(app, service, kinds,
                     audio_available=audio, handwriting_available=handwriting,
-                    attempt=kwargs.get("_kana_attempt", 0)):
+                    attempt=kwargs.get("_kana_attempt", 0))) is not None and perform(app, step):
                 return
             queued = service.ensure_kana_queue(kinds, audio_available=audio,
                 handwriting_available=handwriting, lazy_questions=True, plan=plan)
@@ -158,6 +161,63 @@ def continue_action(app, K, widget=None, *, checkpoint_saved=False, **kwargs):
     # dispatch, protected-teaching probes and the course page share it.
     with app.learning_store.read_operation(now=now) as read:
         perform(app, decide(app, K, pending, now, read, service, prepared_kana, scope=scope), read=read)
+
+
+def kana_wait_request(app, service, kinds, *, audio_available, handwriting_available,
+                      attempt=0):
+    """Start the kana queue assembly on a worker: the wait to start, or None.
+
+    Enabled only by startup (fixtures and tools keep the inline path), inside
+    the running loop, with real stores and no open transaction. The wait page
+    bumps the page token; the ticket then records the UI connection's revision
+    (after that page change flushed any draft). The worker only reads.
+    """
+    import asyncio
+    from .content import ContentRepository
+    from .domain import StudyStore
+    if (not getattr(app, "_background_assembly", False) or attempt >= KANA_ASSEMBLY_ATTEMPTS
+            or not isinstance(app.repo, ContentRepository) or not isinstance(app.store, StudyStore)
+            or app.store.in_transaction):
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    options = service.kana_queue_plan_options(kinds, audio_available=audio_available,
+        handwriting_available=handwriting_available, lazy_questions=True)
+    if options is None:
+        return None
+    return WaitKanaPlan(loop, options, attempt)
+
+
+async def finish_kana_wait(app, ticket, options, attempt):
+    """Apply a worker plan on the UI thread only if its page and data still match.
+
+    Left page: drop it (the next continue assembles again). Changed data:
+    assemble again (one more worker attempt, then inline). A worker error is
+    recorded and the inline path runs, which raises a persistent error
+    through the normal continue path instead of hiding it.
+    """
+    from .study_path import plan_kana_queue_in_worker
+    plan = error = None
+    try:
+        plan = await run_in_background(app.repo, app.store, plan_kana_queue_in_worker, options)
+    except Exception as exc:
+        error = exc
+        from .diagnostic_events import record_error
+        record_error("kana_queue_assembly", "read", exc)
+    if not ticket.page_current(getattr(app, "page", None), app._page_token):
+        return
+    if error is None and not ticket.data_current(app.store):
+        plan = None
+    cancel_continue_wait(app)
+    try:
+        app.continue_study_path(_checkpoint_saved=True, _kana_plan=plan,
+                                _kana_attempt=attempt + 1 if error is None else KANA_ASSEMBLY_ATTEMPTS)
+    except Exception as exc:
+        # A task error would only reach the loop log and leave the wait
+        # page up; record it and show the actionable error page.
+        continue_failed(app, exc, source="async_task")
 
 
 def course_wait_request(app, pending, now, prepared_kana):
@@ -495,6 +555,8 @@ def perform(app, step, *, read=None) -> bool:
     if isinstance(step, Failed):
         show_continue_error(app, step.error, title=step.title)
         return True
+    if isinstance(step, WaitKanaPlan):
+        return _start_kana_wait(app, step)
     if isinstance(step, WaitCourseHead):
         return _start_course_wait(app, step)
 
@@ -529,6 +591,20 @@ def perform(app, step, *, read=None) -> bool:
                    *study_end_page(model, next_rows=next_rows, extra_rows=extra, on_action=on_action))
         return True
     raise TypeError(f"unknown next step {step!r}")
+
+
+def _start_kana_wait(app, step) -> bool:
+    """Draw the waiting page and start the kana queue worker; False when the inline path must go on."""
+    from .next_step.display import KANA_ASSEMBLY_PAGE
+    from .study_path_runtime import show_continue_wait
+    if not show_continue_wait(app, KANA_ASSEMBLY_PAGE, step.loop):
+        return False
+    ticket = BackgroundTicket.capture(app.page, app._page_token, app.store)
+    step.options["revision"] = ticket.revision
+    from .draft_debounce import create_task_awake
+    continue_state(app).kana_task = create_task_awake(
+        step.loop, finish_kana_wait(app, ticket, step.options, step.attempt))
+    return True
 
 
 def _start_course_wait(app, step) -> bool:

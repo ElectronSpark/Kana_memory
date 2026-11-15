@@ -39,8 +39,8 @@ from .detail_content import dialect_entry, is_kana_combination, sense_entries
 from .detail_enrichment import REFERENCE_PAGE_NOTE, history_entries, japanese_entries, reference_entries, source_cards
 from .pronunciation_samples import pronunciation_samples
 from .origin_images import OriginImageCatalog
-from .practice_worker import BackgroundTicket, build_in_background, run_in_background, study_revision
-from .draft_debounce import DraftDebouncer, call_later_awake, create_task_awake, is_database_locked, loop_scheduler
+from .practice_worker import build_in_background, study_revision
+from .draft_debounce import DraftDebouncer, call_later_awake, is_database_locked, loop_scheduler
 from .practice_availability import summarize_queue_availability
 from .practice_inventory import kana_scope_inventory
 from .word_spelling import analyze_spelling
@@ -88,11 +88,10 @@ DETAIL_PAGES = {"kana_detail", "kana_readings", "word_detail", "word_references"
 REPORT_PAGES = {"report_editor", "report_list", "report_detail", "feedback_analysis", "feedback_batch"}
 QUESTION_PAGES = {"question", "word_question", "ink_question"}
 # WP5: short wait page while a worker assembles the kana queue.
-KANA_ASSEMBLY_PAGE = "kana_queue_assembly"
+from .next_step.display import KANA_ASSEMBLY_PAGE
 # Header subtitle per page (review 2026-11-08 section 5); "" hides it.
 DEFAULT_SUBTITLE = "假名 · 字源 · 听写 · 间隔复习"
 PAGE_SUBTITLES = {KANA_ASSEMBLY_PAGE: "", "content_libraries": "内容库与路线", "practice_deck": "", "extra_intro": ""}
-KANA_ASSEMBLY_ATTEMPTS = 2
 # Practice setup's way to the orientation screen's "假名练到哪一步" (design 12 D2).
 KANA_DEPTH_BUTTON = "假名练到哪一步"
 FOCUSED_PAGES = FOCUSED_PAGES | {KANA_ASSEMBLY_PAGE}
@@ -243,7 +242,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         archive_previous_rounds(self.store)
         enable(self.store)
         # Only the real app assembles the kana queue on a worker connection;
-        # fixtures and tools keep the inline path (_plan_kana_queue_in_background).
+        # fixtures and tools keep the inline path (continue_runtime.kana_wait_request).
         self._background_assembly = True
         from .retention_schedule import visit as retention_visit
         retention_visit(self.store)
@@ -4618,67 +4617,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if deck is None:
             return False
         return KanaMemory.show_practice_deck(self, deck)
-
-    def _plan_kana_queue_in_background(self, service, kinds, *, audio_available, handwriting_available,
-                                       attempt=0):
-        """Start the kana queue assembly on a worker; True when this action now waits.
-
-        Enabled only by startup (fixtures and tools keep the inline path), inside
-        the running loop, with real stores and no open transaction. The wait page
-        bumps the page token; the ticket then records the UI connection's revision
-        (after that page change flushed any draft). The worker only reads.
-        """
-        if (not getattr(self, "_background_assembly", False) or attempt >= KANA_ASSEMBLY_ATTEMPTS
-                or not isinstance(self.repo, ContentRepository) or not isinstance(self.store, StudyStore)
-                or self.store.in_transaction):
-            return False
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return False
-        options = service.kana_queue_plan_options(kinds, audio_available=audio_available,
-            handwriting_available=handwriting_available, lazy_questions=True)
-        if options is None:
-            return False
-        from .study_path_runtime import show_continue_wait
-        if not show_continue_wait(self, KANA_ASSEMBLY_PAGE, loop):
-            return False
-        ticket = BackgroundTicket.capture(self.page, self._page_token, self.store)
-        options["revision"] = ticket.revision
-        self._kana_assembly_task = create_task_awake(
-            loop, KanaMemory._finish_kana_queue_assembly(self, ticket, options, attempt))
-        return True
-
-    async def _finish_kana_queue_assembly(self, ticket, options, attempt):
-        """Apply a worker plan on the UI thread only if its page and data still match.
-
-        Left page: drop it (the next continue assembles again). Changed data:
-        assemble again (one more worker attempt, then inline). A worker error is
-        recorded and the inline path runs, which raises a persistent error
-        through the normal continue path instead of hiding it.
-        """
-        from .study_path import plan_kana_queue_in_worker
-        plan = error = None
-        try:
-            plan = await run_in_background(self.repo, self.store, plan_kana_queue_in_worker, options)
-        except Exception as exc:
-            error = exc
-            from .diagnostic_events import record_error
-            record_error("kana_queue_assembly", "read", exc)
-        if not ticket.page_current(getattr(self, "page", None), self._page_token):
-            return
-        if error is None and not ticket.data_current(self.store):
-            plan = None
-        from .study_path_runtime import cancel_continue_wait
-        from .continue_runtime import continue_failed
-        cancel_continue_wait(self)
-        try:
-            self.continue_study_path(_checkpoint_saved=True, _kana_plan=plan,
-                                     _kana_attempt=attempt + 1 if error is None else KANA_ASSEMBLY_ATTEMPTS)
-        except Exception as exc:
-            # A task error would only reach the loop log and leave the wait
-            # page up; record it and show the actionable error page.
-            continue_failed(self, exc, source="async_task")
 
     def alert(self, text):
         async def show():
