@@ -48,16 +48,21 @@ class Asked(Call):
     inside: object = None
 
 
+def _teaching():
+    from kanamemory import course_teaching_runtime
+    return course_teaching_runtime
+
+
 # --- what the decision keeps -------------------------------------------------------------------------------
 
 def course_head(app):
     """The course step the line settled on last (None when it ended the round or nothing was settled yet)."""
-    return getattr(app, "_learning_current", None)
+    return _teaching().head(app)
 
 
 def set_course_head(app, head):
     """As if the line had settled on ``head`` last (None: it remembers no step)."""
-    app._learning_current = head
+    _teaching().set_head(app, head)
 
 
 def wait_due(app):
@@ -467,7 +472,7 @@ def batch_card_entry(app):
 
 def batch_lesson(app):
     """The lesson the batch page shown is about (the card's item, or the quiz item asked or settled last)."""
-    return getattr(app, "_learning_item", None)
+    return _teaching().item(app)
 
 
 def batch_quiz_result(app):
@@ -803,34 +808,34 @@ def record_setting_reads(app, monkeypatch, *keys, log=None):
 def taught_item(app):
     """The lesson the teaching pages are about: the item being introduced or led through a guide, or the one
     whose card or batch quiz is shown (None when the line holds none)."""
-    return getattr(app, "_learning_item", None)
+    return _teaching().item(app)
 
 
 def set_taught_item(app, item):
     """As if ``item`` were the lesson the teaching pages are about (None: the line holds none)."""
-    app._learning_item = item
+    _teaching().set_item(app, item)
 
 
 def guide_question(app):
     """The guide question on the page: the frozen question the learner is led through (None when there is
     none)."""
-    return getattr(app, "_learning_guide", None)
+    return _teaching().guide(app)
 
 
 def set_guide_question(app, question):
     """As if ``question`` were the guide question on the page (None: there is none)."""
-    app._learning_guide = question
+    _teaching().set_guide(app, question)
 
 
 def familiarity_state(app):
     """What the page 开始前 holds while the learner says how familiar a lesson is: the lesson, the ability
     asked now, the levels chosen so far and whether a choice is being saved. It is the line's own dict."""
-    return app._learning_familiarity_state
+    return _teaching().familiarity(app)
 
 
 def set_familiarity_state(app, state):
     """As if the page 开始前 held ``state``."""
-    app._learning_familiarity_state = state
+    _teaching().set_familiarity(app, state)
 
 
 # --- what a teaching head becomes, the page 开始前 and the teaching stop pages -----------------------------------

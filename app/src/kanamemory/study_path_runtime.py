@@ -165,8 +165,9 @@ def show_continue_error(app, error, *, title=None):
 
 def _course_title(app, before):
     """Title of the course item this continue action reached, when known."""
-    for name in ("_learning_item", "_learning_current"):
-        value = getattr(app, name, None)
+    from .course_teaching_runtime import teaching_session
+    session = teaching_session(app)
+    for name, value in (("item", session.item), ("head", session.head)):
         if value is None or value is before.get(name):
             continue
         content = value.get("content", value) if isinstance(value, dict) else None
@@ -488,7 +489,8 @@ class StudyPathRuntimeMixin:
         from .app import KanaMemory
         from .continue_runtime import continue_action, perform
         from .next_step.model import Failed
-        before = {name: getattr(self, name, None) for name in ("_learning_item", "_learning_current")}
+        from .course_teaching_runtime import teaching_session
+        before = {"item": teaching_session(self).item, "head": teaching_session(self).head}
         notice = take_enrollment_notice(self)
         try:
             result = continue_action(self, KanaMemory, widget, checkpoint_saved=_checkpoint_saved, **kwargs)

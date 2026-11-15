@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from . import course_teaching_runtime as teaching
 from .course_line import batch_display
 from .course_line.batch import BatchIntroduction
 from .course_line.batch_model import (BatchActionKind, BatchClosed, BatchOver, CardStep, CardUnavailable, QuizPaused,
@@ -96,7 +97,7 @@ def show_card(app, entry):
         model = batch_display.card_unavailable_model()
         app.screen(model.page, model.title, *batch_pages.card_unavailable_page(model, on_action=_on_action(app)))
         return
-    app._learning_item = opened.item
+    teaching.set_item(app, opened.item)
     app._intro_batch_page = replace(batch_page(app), card_entry=opened.entry)
     hint_rows = app.intro_batch_review_hint()
     body_rows = app._intro_card_body(opened.item, origin=True)
@@ -118,7 +119,7 @@ def show_quiz(app):
         model = batch_display.quiz_unavailable_model()
         app.screen(model.page, model.title, *batch_pages.quiz_unavailable_page(model, on_action=_on_action(app)))
         return
-    app._learning_item = asked.item
+    teaching.set_item(app, asked.item)
     if isinstance(asked, QuizSettled):
         model = batch_display.quiz_settled_model()
         view = batch_pages.quiz_settled_page(model, on_action=_on_action(app))
@@ -167,7 +168,7 @@ def answer(app, question, answer):
     from .course_line.ui import batch_pages
     page = batch_page(app)
     app._intro_batch_page = replace(page, question=None)
-    card_rows = [] if result.correct else app._intro_card_body(app._learning_item, origin=True)
+    card_rows = [] if result.correct else app._intro_card_body(teaching.item(app), origin=True)
     model = batch_display.quiz_result_model(question, correct=result.correct, done=batch.quiz_done())
     batch_pages.show_quiz_result(page.result, page.buttons, model, card_rows=card_rows, on_action=_on_action(app))
 

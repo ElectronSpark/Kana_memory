@@ -106,11 +106,11 @@ INK_PAGES = {"free_ink", "ink_question"}
 INK_BINDINGS = "free_ink strokes ink_width ink_height _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
 PRACTICE_BINDINGS = "questions question_index session_id question session_right script use_full_keyboard answer_revealed answered_text answer_correct question_audio_ok _question_started _answer_submitted_at _answer_duration_ms question_notice practice_preview_slot word_conversion_source word_conversion_convention word_used_conversion".split()
 PAGE_BINDINGS = {
-    "learning_familiarity": "_learning_item _learning_familiarity_state".split(),
-    "learning_intro": ["_learning_item"],
-    "learning_card": "_learning_item _intro_batch_page".split(),
-    "learning_batch_quiz": "_learning_item _intro_batch_page".split(),
-    "learning_guide": "_learning_item _learning_guide _learning_guide_result _learning_pitch_context".split(),
+    "learning_familiarity": ["_course_teaching"],
+    "learning_intro": ["_course_teaching"],
+    "learning_card": "_course_teaching _intro_batch_page".split(),
+    "learning_batch_quiz": "_course_teaching _intro_batch_page".split(),
+    "learning_guide": "_course_teaching _learning_guide_result _learning_pitch_context".split(),
     "learning_question": "_course_answer _learning_input _learning_composition _learning_status _learning_pitch_context _learning_blocks_context".split(),
     "learning_feedback": ["_course_answer"],
     "learning_feedback_detail": ["_course_answer"],

@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 
 from . import course_answer_runtime
+from . import course_teaching_runtime as teaching
 from . import pitch_practice as pitch
 
 
@@ -224,9 +225,9 @@ class LearningPitchUIMixin:
                 if on_change is not None:
                     on_change(updated)
                 elif guided:
-                    self.learning_store.advance_instruction(self._learning_item["id"], "guide",
+                    self.learning_store.advance_instruction(teaching.item(self)["id"], "guide",
                         state={"guide_draft": updated, "guide_question": deepcopy(question),
-                               "guide_answer": None, "guide_correct": False}, instruction_scope=self._learning_item.get("instruction_scope"))
+                               "guide_answer": None, "guide_correct": False}, instruction_scope=teaching.item(self).get("instruction_scope"))
                     self._learning_guide_result.clear()
                 else:
                     course_answer_runtime.keep_draft(self, question["id"], updated)

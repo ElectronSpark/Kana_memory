@@ -51,7 +51,10 @@ def set_draft(app, draft) -> None:
 def shown_question(app, guided=False):
     """The question an answer control belongs to must still be this one: the guide's question of a teaching
     step (``guided``), else the course question on the page."""
-    return getattr(app, "_learning_guide", None) if guided else answer_session(app).question
+    if guided:
+        from .course_teaching_runtime import teaching_session
+        return teaching_session(app).guide
+    return answer_session(app).question
 
 
 def _fair_new(app):

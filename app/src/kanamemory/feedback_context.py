@@ -399,11 +399,11 @@ def _capture_content(c, app, page, key):
             result["learning_item"] = c.copy(item, "content/learning_item")
     title = c.attr(c.attr(app, "title_label", "content/page_title"), "text", "content/page_title", "") or c.attr(app, "title", "content/page_title", "")
     if page in {"learning_familiarity", "learning_intro", "learning_guide", "learning_card", "learning_batch_quiz"} or page == "learning_prerequisite" and title == "接续说明":
-        item = c.attr(app, "_learning_item", "content/current_learning_item")
+        item = getattr(c.attr(app, "_course_teaching", "content/current_learning_item"), "item", None)
         if isinstance(item, Mapping):
             result["learning_item"] = c.copy(item, "content/current_learning_item")
     if page == "learning_familiarity":
-        state = c.attr(app, '_learning_familiarity_state', 'content/familiarity_selections', {})
+        state = getattr(c.attr(app, "_course_teaching", 'content/familiarity_selections'), "familiarity", None) or {}
         if isinstance(state, Mapping):
             result['familiarity_selections'] = c.copy(state, 'content/familiarity_selections')
     if page == "learning_detail" and route == "show_learning_detail":
@@ -488,7 +488,7 @@ def _capture_practice(c, app, page):
             if isinstance(saved, Mapping):
                 result["saved_state"] = c.copy({key: saved.get(key) for key in ("question_id", "status", "draft", "result", "not_before_utc")}, "practice/saved_state")
     if page == "learning_guide":
-        result.update(_question_capture(c, c.attr(app, "_learning_guide", "practice/guide"), "practice"))
+        result.update(_question_capture(c, getattr(c.attr(app, "_course_teaching", "practice/guide"), "guide", None), "practice"))
     if page in {"free_ink", "ink_question"}:
         result["ink"] = {name: c.copy(c.attr(app, name, "practice/ink/" + name), "practice/ink/" + name)
             for name in ("strokes", "_active_stroke", "ink_width", "ink_height", "_ink_view_width", "_ink_view_height", "_ink_revision")}

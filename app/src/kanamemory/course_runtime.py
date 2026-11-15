@@ -20,6 +20,7 @@ stay at call time, so their own patch targets keep working.
 """
 from __future__ import annotations
 
+from . import course_teaching_runtime as teaching
 from .course_line import display
 from .course_line.model import (PAUSED_DISABLED, PAUSED_NO_HEAD, Ask, Batch, CourseActionKind, Diagnostic, Done,
                                 LibraryOff, MaterialBlocked, Paused, Prerequisite, Teach, Wait)
@@ -32,7 +33,7 @@ def decide_course(app, *, restart_finished, selected_current=None, projection=No
     ``restart_finished``: a press restarts a finished round. ``selected_current``: the head the continue
     action protected or promoted (checked again here). ``projection``: the continue action's read context
     (reused only while nothing was written; None: read live). Draws nothing and arms no timer; the round's
-    writes, the remembered head (app._learning_current) and the batch route's opening are made here.
+    writes, the remembered head (the teaching session's) and the batch route's opening are made here.
     """
     from .practice_round import begin, seal, mark_finished, sealed
     begin(app.store, restart_finished=restart_finished)
@@ -84,7 +85,7 @@ def decide_course(app, *, restart_finished, selected_current=None, projection=No
         current = app.learning_store.current(enabled, fair_new=fair_enabled(app),
                                              **({"skip_teaching_ids": skipped} if skipped else {}))
     seal(app.store)
-    app._learning_current = current
+    teaching.set_head(app, current)
     if current and current['type'] == 'content_blocked' and current.get('reason') == 'library_disabled':
         return LibraryOff(current.get('counts', {}).get('library_unavailable', 0))
     if current and current['type'] == 'content_blocked':
@@ -98,7 +99,8 @@ def decide_course(app, *, restart_finished, selected_current=None, projection=No
     left_out = getattr(app, "_sealed_round_left_out", None)
     if (sealed_before and current and current.get("type") == "disabled" and callable(left_out)
             and left_out(current, projection)):
-        current = app._learning_current = None
+        current = None
+        teaching.set_head(app, None)
     elif not current and app.learning_store.counts(enabled, **shared)["disabled"]:
         return Paused(PAUSED_NO_HEAD, display.PAUSED_NO_HEAD_TEXT)
     if not current or current.get("type") in {"empty", "done"}:
