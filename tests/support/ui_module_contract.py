@@ -1,5 +1,5 @@
-"""The contract of a design 13 C4 page module (the ui packages of arrangement, admission, home and next_step),
-read from its source.
+"""The contract of a design 13 C4 page module (the ui packages of arrangement, admission, home, next_step and
+course_line), read from its source.
 
 A page module holds no app object or store (no name or attribute app, store,
 learning_store, self_app) and imports no service, source or app module. The

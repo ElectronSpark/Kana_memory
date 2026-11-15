@@ -55,6 +55,11 @@
   "app/src/kanamemory/next_step/display.py": ["__future__", "dataclasses", "..arrangement.display", ".model"],
   "app/src/kanamemory/next_step/ui/__init__.py": [],
   "app/src/kanamemory/next_step/ui/end_pages.py": ["__future__", "collections.abc", "kanamemory.ui_components", "kanamemory.arrangement.ui.section_note", "..display", "..model"],
+  "app/src/kanamemory/course_line/__init__.py": [],
+  "app/src/kanamemory/course_line/model.py": ["__future__", "dataclasses", "enum", "typing"],
+  "app/src/kanamemory/course_line/display.py": ["__future__", "dataclasses", "..next_step.display", ".model"],
+  "app/src/kanamemory/course_line/ui/__init__.py": [],
+  "app/src/kanamemory/course_line/ui/line_pages.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", "..model"],
   "app/src/kanamemory/study_routes.py": ["__future__", "copy", "hashlib", "re", ".study_path_catalog", "json", "datetime", "uuid", ".learning_dependencies"],
   "app/src/kanamemory/ui_theme.py": [],
   "app/src/kanamemory/request_outcome.py": [
