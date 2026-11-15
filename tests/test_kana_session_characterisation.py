@@ -59,8 +59,8 @@ def saved_queue(app, monkeypatch, prepared, *, lane="word_romaji", session="sess
     """The store holds a saved queue of ``session`` and prepares ``prepared`` as its next head (None: nothing)."""
     app.store.practice_lane = lane
     stub_pages(app)
-    monkeypatch.setattr(app_module, "summarize_queue_availability",
-                        lambda *a, **k: SimpleNamespace(waiting_count=1, ready_count=1))
+    kana_support.replace_asked(monkeypatch, "summarize_queue_availability",
+                               lambda *a, **k: SimpleNamespace(waiting_count=1, ready_count=1))
     pending = {"session_id": session, "questions": kana_support.questions(app), "question_index": 0,
                "session_right": 0, "state": {}, "assisted_indices": []}
     app.store.load_session_progress.return_value = pending

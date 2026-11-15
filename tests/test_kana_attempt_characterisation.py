@@ -94,8 +94,8 @@ def queue_progress(app, monkeypatch, prepared_extra, *, assisted=(), state=None)
     app.store.practice_lane = "word_romaji"
     for name in ("show_word_drill_setup", "show_practice_hub", "show_home", "resume_practice", "continue_spaced_practice"):
         setattr(app, name, Mock())
-    monkeypatch.setattr(app_module, "summarize_queue_availability",
-                        lambda *a, **k: SimpleNamespace(waiting_count=1, ready_count=1))
+    kana_support.replace_asked(monkeypatch, "summarize_queue_availability",
+                               lambda *a, **k: SimpleNamespace(waiting_count=1, ready_count=1))
     pending = {"session_id": kana_support.session_id(app), "questions": kana_support.questions(app), "question_index": 0, "session_right": 0,
                "state": state or {}, "assisted_indices": list(assisted)}
     app.store.load_session_progress.return_value = pending

@@ -8,6 +8,9 @@ session's attempts as assisted or answered. An attempt is named by ``(session id
 """
 from __future__ import annotations
 
+import importlib
+import sys
+
 from kanamemory import kana_attempt_runtime as _line
 from kanamemory import kana_session_runtime as _position
 from kanamemory.kana_line.attempt import AttemptMarks, KanaAttempt
@@ -247,3 +250,25 @@ def kept_values(page):
     kept = page.bindings.get("_kana_session")
     held = kept.set_fields() if isinstance(kept, KanaSession) else {}
     return {name: held[name] for name in POSITION if name in held}
+
+
+# --- what the practice line asks of other modules ------------------------------------------------------------------
+
+_ASKED = {
+    "summarize_queue_availability": "kanamemory.practice_availability",
+    "should_introduce": "kanamemory.kana_learning_intro",
+    "intro_wait_until": "kanamemory.kana_learning_intro",
+    "current_route_next": "kanamemory.study_path_runtime",
+}
+
+
+def replace_asked(monkeypatch, name, value):
+    """Replace one of the functions the practice line asks by name: what a queue can still offer
+    (``summarize_queue_availability``), whether a kana is introduced first and until when its introduction
+    waits (``should_introduce``, ``intro_wait_until``), the route's next step (``current_route_next``). The
+    replacement reaches the line wherever it finds the function: in the module that owns it and in every
+    module of the app that took the name from there."""
+    current = getattr(importlib.import_module(_ASKED[name]), name)
+    for module in list(sys.modules.values()):
+        if getattr(module, "__name__", "").startswith("kanamemory") and getattr(module, name, None) is current:
+            monkeypatch.setattr(module, name, value)
