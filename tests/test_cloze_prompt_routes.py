@@ -16,6 +16,7 @@ from support.app_fixtures import setup_app, question_app
 from support.learning_fixtures import learning_app
 from support.fake_ui import descendants
 from support.multi_cloze_integration_support import cloze_case, enqueue, score_primary, CID, KIND, scheduling_state
+from support import course_support
 
 
 @pytest.mark.parametrize('route', ['course', 'guide', 'tutor', 'diagnostic'])
@@ -39,8 +40,9 @@ def test_retained_sentence_and_saved_undo_in_all_supported_routes(learning_app, 
         elif route == 'guide':
             from kanamemory import ui_components as u
             q = build_learning_question(case.item, KIND, guided=True)
-            app._learning_item = case.learning.instruction_item(CID)
-            app._learning_guide, app.page = q, 'learning_guide'
+            course_support.set_taught_item(app, case.learning.instruction_item(CID))
+            course_support.set_guide_question(app, q)
+            app.page = 'learning_guide'
             app._learning_guide_result = u.col()
             root = u.col(*app._learning_guide_controls(q, {}))
             read = lambda: case.learning.instruction_item(CID)['checkpoint']['guide_draft']

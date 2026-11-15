@@ -171,12 +171,12 @@ def test_pitch_guide_draft_survives_reopen_and_remains_exposure_only(learning_ap
     app.learning_store.advance_instruction(item["id"], "intro_done")
     app.show_learning_instruction(app.learning_store.get_item(item["id"]))
     assert app.page == "learning_guide"
-    assert app._learning_guide["input_mode"] == "pitch_fill"
+    assert course_support.guide_question(app)["input_mode"] == "pitch_fill"
     click(app, "▔")
-    original_id = app._learning_guide["id"]
+    original_id = course_support.guide_question(app)["id"]
     app.learning_store = LearningStore(app.store)
     app.show_learning_instruction(app.learning_store.get_item(item["id"]))
-    assert app._learning_guide["id"] == original_id
+    assert course_support.guide_question(app)["id"] == original_id
     assert diagrams(app)[-1]._feedback_fragment["levels"] == ["H", "H", None, None]
     click(app, "▁")
     click(app, "▁")
@@ -274,7 +274,7 @@ def test_legacy_completed_hint_return_keeps_normalized_draft_without_duplicate_r
 
 def pending_guide_scroll(app):
     app.page = "learning_guide"
-    app._learning_guide = {"id": "synthetic-scroll"}
+    course_support.set_guide_question(app, {"id": "synthetic-scroll"})
     app._learning_guide_result = SimpleNamespace(layout=SimpleNamespace(absolute_content_top=900))
     scroll = SimpleNamespace(content=SimpleNamespace(layout=SimpleNamespace(absolute_content_top=40)),
                              vertical_position=0)
@@ -302,7 +302,7 @@ def test_delayed_guide_scroll_never_moves_a_different_page(learning_app, changed
     if changed == "page":
         app.page = "home"
     elif changed == "question":
-        app._learning_guide = {"id": "other-question"}
+        course_support.set_guide_question(app, {"id": "other-question"})
     elif changed == "result":
         app._learning_guide_result = SimpleNamespace()
     else:

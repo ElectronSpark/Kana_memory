@@ -12,6 +12,7 @@ import pytest
 
 from support.fake_ui import View, descendants
 from support.course_support import batch_quiz_question
+from support import course_support
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
 from kanamemory.learning_content import get_learning_item
@@ -130,7 +131,7 @@ def finish_guided_learning(app, limit=8):
     """
     for _ in range(limit):
         if app.page == "learning_guide":
-            click(app, app._learning_guide["answer"])
+            click(app, course_support.guide_question(app)["answer"])
             click(app, "继续")
         elif app.page == "learning_familiarity":
             click(app, "初学")

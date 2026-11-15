@@ -796,3 +796,155 @@ def record_setting_reads(app, monkeypatch, *keys, log=None):
         return real(key, *args, **kwargs)
     monkeypatch.setattr(app.store, "get_setting", get_setting)
     return log
+
+
+# --- the teaching step (讲解与引导) ---------------------------------------------------------------------------
+
+def taught_item(app):
+    """The lesson the teaching pages are about: the item being introduced or led through a guide, or the one
+    whose card or batch quiz is shown (None when the line holds none)."""
+    return getattr(app, "_learning_item", None)
+
+
+def set_taught_item(app, item):
+    """As if ``item`` were the lesson the teaching pages are about (None: the line holds none)."""
+    app._learning_item = item
+
+
+def guide_question(app):
+    """The guide question on the page: the frozen question the learner is led through (None when there is
+    none)."""
+    return getattr(app, "_learning_guide", None)
+
+
+def set_guide_question(app, question):
+    """As if ``question`` were the guide question on the page (None: there is none)."""
+    app._learning_guide = question
+
+
+def familiarity_state(app):
+    """What the page 开始前 holds while the learner says how familiar a lesson is: the lesson, the ability
+    asked now, the levels chosen so far and whether a choice is being saved. It is the line's own dict."""
+    return app._learning_familiarity_state
+
+
+def set_familiarity_state(app, state):
+    """As if the page 开始前 held ``state``."""
+    app._learning_familiarity_state = state
+
+
+# --- what a teaching head becomes, the page 开始前 and the teaching stop pages -----------------------------------
+
+# The learner-store calls the teaching step makes while it decides what a teaching head becomes and while the
+# page 开始前 is shown and answered (reads and writes together, so that their order can be seen).
+TEACHING_STORE_CALLS = ("is_batch_route", "intro_batch", "prepare_initial_familiarity", "save_familiarity_draft",
+                        "set_initial_familiarity", "has_other_instruction_exposure", "prerequisite_status",
+                        "mark_instruction_exposed", "advance_instruction", "instruction_item", "guided_sequence",
+                        "guided_question")
+
+
+@dataclass
+class TeachingMoment:
+    """What the teaching pages held when a learner-store call was made: the lesson they were about and the
+    guide question on the page (both as held, not copied)."""
+    item: object = None
+    guide: object = None
+
+
+def record_teaching_calls(app, monkeypatch, *names, log=None, answers=None):
+    """Record each call the teaching step makes to these learner-store methods (TEACHING_STORE_CALLS when none
+    are named) with its exact arguments; each Asked also keeps ``moment``, a TeachingMoment of the call.
+    ``answers``: {name: callable(*args, **kwargs)} answers those instead of the store (it may raise)."""
+    log = [] if log is None else log
+    answers = dict(answers or {})
+    store = app.learning_store
+    names = names or TEACHING_STORE_CALLS
+    originals = {name: getattr(store, name) for name in names}
+
+    def answer(name):
+        def call(*args, **kwargs):
+            log[-1].moment = TeachingMoment(taught_item(app), guide_question(app))
+            return (answers[name] if name in answers else originals[name])(*args, **kwargs)
+        return call
+    return record_store_calls(app, monkeypatch, *names, log=log,
+                              answers={name: answer(name) for name in names})
+
+
+def guide_result_column(app):
+    """The column under a guide question where its result is shown (the guide page's own widget; None before
+    any guide was prepared)."""
+    return getattr(app, "_learning_guide_result", None)
+
+
+# --- the guide page (引导题) and the introduction page's buttons: what the guide page shows and holds ----------
+
+def _guide_page_controls(app):
+    """The live controls of the guide page drawn last ({} for a guide answered by plain choice buttons)."""
+    return getattr(app, "_learning_guide_context", None) or {}
+
+
+def guide_draft(app):
+    """What the learner has entered on the guide page and not submitted yet (None when the page holds none).
+    It is the page's own dict."""
+    return _guide_page_controls(app).get("draft")
+
+
+def guide_locked(app):
+    """Whether the guide page's answer controls are locked (after a right answer)."""
+    return bool(_guide_page_controls(app).get("locked"))
+
+
+def guide_status(app):
+    """The status line under the guide's answer controls ("" when it says nothing, None without one)."""
+    status = _guide_page_controls(app).get("status")
+    return None if status is None else status.text
+
+
+def guide_field(app):
+    """The text field of the guide page drawn last (None when it has none)."""
+    return _guide_page_controls(app).get("input")
+
+
+def guide_answer_controls(app):
+    """The answer controls of the guide page drawn last (choices, blocks, field, 撤回末项, 提交, 跟随示范完成)."""
+    return list(_guide_page_controls(app).get("buttons") or [])
+
+
+def guide_result(app):
+    """The result column of the guide page: what is shown under the answer once it is graded."""
+    return getattr(app, "_learning_guide_result", None)
+
+
+def guide_result_texts(app):
+    """Every non-empty text of the guide's result column, in drawing order."""
+    from support.fake_ui import descendants
+    column = guide_result(app)
+    return [] if column is None else [str(view.text) for view in descendants(column) if view.text]
+
+
+def guide_result_made_with(app):
+    """(kind, text, keyword arguments) of every control of the guide's result column (record_controls first)."""
+    column = guide_result(app)
+    return [] if column is None else made_with(column)
+
+
+def set_orientation(app, mode):
+    """The learner's arrangement: "breadth" (breadth first) or "thorough" (depth first)."""
+    from kanamemory.arrangement.services.preferences import ArrangementPreferences
+    ArrangementPreferences(app.store).set_orientation(mode)
+
+
+def record_guide_autoplay(monkeypatch, *, log=None):
+    """Record each request to play a guide's answer aloud after its result is drawn (its text and its key),
+    without changing what it does."""
+    from kanamemory import learning_ui as home
+    log = [] if log is None else log
+    real = home.autoplay_answer
+
+    def autoplay(app, text, key):
+        call = Asked("autoplay", (text, key), {}, page=getattr(app, "page", None))
+        log.append(call)
+        call.result = real(app, text, key)
+        return call.result
+    monkeypatch.setattr(home, "autoplay_answer", autoplay)
+    return log

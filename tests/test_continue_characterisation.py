@@ -582,7 +582,7 @@ def test_error_page_names_the_course_item_the_action_reached(app, monkeypatch):
     course(app, "title")
 
     def failing(*args, **kwargs):
-        app._learning_item = {"content": {"title": "合成课程标题"}}
+        course_support.set_taught_item(app, {"content": {"title": "合成课程标题"}})
         raise RuntimeError("合成")
     app.continue_learning = failing
     with pytest.raises(RuntimeError):
@@ -1293,7 +1293,7 @@ def test_p8_a_failure_inside_the_take_overs_own_continue_draws_the_error_page_on
 def test_error_page_has_no_title_line_for_a_course_item_set_before_the_action(app, monkeypatch):
     """P8: a course item that was already set before the action is not named on 无法准备下一题; only one the
     action itself reached is."""
-    app._learning_item = {"content": {"title": "旧课程标题"}}
+    course_support.set_taught_item(app, {"content": {"title": "旧课程标题"}})
     cs.make_dispatch_raise(monkeypatch, RuntimeError("合成"))
     with pytest.raises(RuntimeError):
         app.continue_study_path()

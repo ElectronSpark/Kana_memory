@@ -17,6 +17,7 @@ from kanamemory.learning_store import LearningStore, validate_backup_rows
 from support.app_fixtures import question_app, setup_app
 from support.fake_ui import View, descendants, text_of
 from support.learning_fixtures import LEARNING_PREFS, NOW, click, learning_app
+from support import course_support
 
 
 def synthetic_lesson():
@@ -50,13 +51,13 @@ def synthetic_lesson():
 
 def mount_saved_guide(app, content_id):
     """Use the real controller without loading the whole course presentation."""
-    app._learning_item = app.learning_store.get_item(content_id)
-    checkpoint = app._learning_item["checkpoint"]
-    app._learning_guide = checkpoint["guide_question"]
+    course_support.set_taught_item(app, app.learning_store.get_item(content_id))
+    checkpoint = course_support.taught_item(app)["checkpoint"]
+    course_support.set_guide_question(app, checkpoint["guide_question"])
     app._learning_guide_result = ui_components.col()
     app._page_scroll = None
     app.screen("learning_guide", "跟着做")
-    app.body.add(*app._learning_guide_controls(app._learning_guide, checkpoint["guide_draft"]),
+    app.body.add(*app._learning_guide_controls(course_support.guide_question(app), checkpoint["guide_draft"]),
                  app._learning_guide_result)
     if checkpoint.get("guide_answer") is not None:
         app.render_learning_guide_result(checkpoint["guide_correct"])
@@ -111,7 +112,7 @@ def assert_exposure_only(app, item, before_units):
 def test_complete_answer_saves_one_consistent_submission_without_formal_scoring(guided, raw, normalized, correct):
     app, item = guided
     before_units = deepcopy(app.learning_store.get_item(item["id"])["units"])
-    frozen = deepcopy(app._learning_guide)
+    frozen = deepcopy(course_support.guide_question(app))
     context = enter(app, raw)
     assert checkpoint(app, item)["guide_draft"]["answer"] == raw
     assert context["submit"].enabled
@@ -196,7 +197,7 @@ def test_feedback_round_trip_keeps_raw_draft_and_live_submission_controls(guided
     app.render_feedback_editor = render_editor
     app.begin_page_feedback(screenshot=b"synthetic-screenshot")
     assert app.page == "report_editor"
-    app._learning_guide = {"id": "unrelated-report-view"}
+    course_support.set_guide_question(app, {"id": "unrelated-report-view"})
     app.return_from_feedback()
     assert app.page == "learning_guide"
     assert app.content_slot.children == [original]

@@ -24,6 +24,7 @@ from kanamemory.course_line.answer_model import (AnswerAction, AnswerActionKind,
                                                  OpenCancelled, Rated, Recorded, Refused)
 from kanamemory.question_support import clean_prompt_preferences
 from support.learning_store_fixtures import START, item, question, ready, stores  # noqa: F401
+from support import course_support
 
 CID = "grammar:synthetic-answering:one"
 KINDS = ["grammar_meaning"]
@@ -345,7 +346,8 @@ def test_assigning_a_field_gives_the_app_a_new_session_and_leaves_the_old_one_al
 
 def test_the_question_an_answer_control_belongs_to():
     question, guide = {"id": "q1"}, {"id": "g1"}
-    app = SimpleNamespace(_learning_guide=guide)
+    app = SimpleNamespace()
+    course_support.set_guide_question(app, guide)
     course_answer_runtime.assign(app, question=question)
     assert course_answer_runtime.shown_question(app) is question
     assert course_answer_runtime.shown_question(app, guided=True) is guide

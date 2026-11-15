@@ -72,7 +72,7 @@ def test_next_advances_and_restart_resumes_at_saved_card(learning_app):
     app.learning_store = LearningStore(app.store)
     app.page = "home"
     app.continue_learning()
-    assert app.page == "learning_card" and app._learning_item["id"] == "word:synthetic:w2"
+    assert app.page == "learning_card" and course_support.taught_item(app)["id"] == "word:synthetic:w2"
     assert app.learning_store.intro_batch()["card_index"] == 1
 
 
