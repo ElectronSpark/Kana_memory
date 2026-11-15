@@ -46,7 +46,7 @@ class CourseAnswering:
         self.store = store
         self._fair_new = fair_new
         self._early_submit = early_submit
-        self._record_error = record_error
+        self.record_error = record_error
 
     # --- opening a question -------------------------------------------------------------------------------
 
@@ -123,7 +123,7 @@ class CourseAnswering:
         try:
             saved = self.learning_store.save_draft(question["id"], proposed)
         except Exception as exc:
-            self._record_error("learning_word_blocks", "save", exc)
+            self.record_error("learning_word_blocks", "save", exc)
             return EditFailed(exc)
         if saved["status"] != "pending" or saved.get("result"):
             return EditLeft()
@@ -200,7 +200,7 @@ class CourseAnswering:
             if not is_database_locked(exc):
                 raise
             # Rolled back: nothing was graded. The same press can be retried.
-            self._record_error("learning_submit", "save", exc)
+            self.record_error("learning_submit", "save", exc)
             return Busy()
         return Recorded(saved)
 
@@ -290,6 +290,6 @@ class CourseAnswering:
             if not is_database_locked(exc):
                 raise
             # The busy timeout aborted the write transaction; the rating can be retried.
-            self._record_error("learning_submit", "commit", exc)
+            self.record_error("learning_submit", "commit", exc)
             return Busy()
         return Rated(self.learning_store.get_item(question["target_id"]))

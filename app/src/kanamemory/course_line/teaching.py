@@ -37,7 +37,7 @@ class CourseTeaching:
         self.store = store
         self._enabled_kinds = enabled_kinds
         self._fair_new = fair_new
-        self._record_error = record_error or (lambda *args: None)
+        self.record_error = record_error or (lambda *args: None)
 
     def step(self, item, keep):
         """What the teaching head ``item`` becomes.
@@ -253,7 +253,7 @@ class CourseTeaching:
             self.learning_store.advance_instruction(item["id"], "guide" if result["status"] == "correct" else "guide_failed",
                 state=state, instruction_scope=item.get("instruction_scope"))
         except Exception as exc:
-            self._record_error("learning_guide", "submit", exc)
+            self.record_error("learning_guide", "submit", exc)
             return GuideSaveFailed()
         return GuideAnswered(result["status"] == "correct", state.get("guide_draft"))
 

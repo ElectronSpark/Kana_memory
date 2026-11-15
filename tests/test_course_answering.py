@@ -715,3 +715,19 @@ def test_the_session_module_is_pure_and_the_service_and_the_app_side_module_impo
         if isinstance(node, ast.ImportFrom):
             module_level.add(node.module)
     assert "course_line.ui" not in module_level      # the page module is imported only when a page is drawn
+
+
+def test_the_services_note_their_errors_through_calls_a_source_check_can_read():
+    """A check of the source reads every call named ``record_error`` with two literal names and holds them against
+    the registered operations and stages: the services' calls keep that shape, and their names are registered."""
+    from kanamemory import diagnostic_events
+    found = set()
+    for name in ("course_line/answer.py", "course_line/teaching.py"):
+        for node in ast.walk(ast.parse((SOURCE_DIR / name).read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "record_error"
+                    and len(node.args) >= 2 and all(isinstance(arg, ast.Constant) for arg in node.args[:2])):
+                found.add((node.args[0].value, node.args[1].value))
+    assert found == {("learning_word_blocks", "save"), ("learning_submit", "save"), ("learning_submit", "commit"),
+                     ("learning_guide", "submit")}
+    assert all(operation in diagnostic_events.OPERATIONS and stage in diagnostic_events.STAGES
+               for operation, stage in found)
