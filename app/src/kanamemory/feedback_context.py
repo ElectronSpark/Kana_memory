@@ -18,6 +18,7 @@ from pathlib import PurePath
 
 from .arrangement.services.preferences import KEYS as ARRANGEMENT_KEYS
 from .kana_line.attempt import KanaAttempt
+from .kana_line.session import KanaSession
 
 FORMAT = "kanamemory-feedback-context"
 VERSION = 1
@@ -381,7 +382,7 @@ def _capture_content(c, app, page, key):
         result["selected_id"] = identity
         result["snapshot_origin"] = "read_only_bundled_repository"
     if page in _QUESTION_PAGES and repo is not None:
-        question = _question_record(c.attr(app, "question", "content/question"))
+        question = _question_record(_position(c, app, "content/question").get("question"))
         if question and isinstance(question.get("content_id"), str):
             content_id = question["content_id"]
             method = "get_word" if str(question.get("kind", "")).startswith("word_") else "get_kana"
@@ -441,9 +442,12 @@ def _capture_content(c, app, page, key):
 def _capture_practice(c, app, page):
     result = {}
     if page in _SESSION_PAGES:
-        for name in ("session_id", "question_index", "session_right", "script", "use_full_keyboard"):
-            result[name] = c.copy(c.attr(app, name, "practice/" + name), "practice/" + name)
-        queue = c.attr(app, "questions", "practice/queue", ())
+        position = _position(c, app, "practice/position")
+        for name in ("session_id", "question_index", "session_right", "script"):
+            result[name] = c.copy(position.get(name), "practice/" + name)
+        result["use_full_keyboard"] = c.copy(c.attr(app, "use_full_keyboard", "practice/use_full_keyboard"),
+                                             "practice/use_full_keyboard")
+        queue = position.get("questions", ())
         from .domain import _QuestionSequence
         if isinstance(queue, (list, tuple, _QuestionSequence)):
             result["queue_length"] = len(queue)
@@ -460,7 +464,7 @@ def _capture_practice(c, app, page):
             except Exception as exc:
                 c.warn("practice/session", "session_read_failed", error_type=type(exc).__name__)
     if page in _QUESTION_PAGES:
-        result.update(_question_capture(c, c.attr(app, "question", "practice/question"), "practice"))
+        result.update(_question_capture(c, _position(c, app, "practice/question").get("question"), "practice"))
         attempt = c.attr(app, "_kana_attempt", "practice/draft/attempt")
         evidence = attempt.set_fields() if isinstance(attempt, KanaAttempt) else {}
         for name, field in (("answer_revealed", "revealed"), ("answered_text", "answered_text"),
@@ -472,12 +476,12 @@ def _capture_practice(c, app, page):
             value = c.attr(app, name, "practice/draft/" + name, _MISSING)
             if value is not _MISSING:
                 result.setdefault("draft", {})[name] = c.copy(value, "practice/draft/" + name)
-        index = c.attr(app, "question_index", "practice/index")
+        index = _position(c, app, "practice/index").get("question_index")
         marks = c.attr(app, "_kana_marks", "practice/marks")
         for name, field in (("_assisted_attempts", "assisted"), ("_answered_attempts", "answered")):
             indices = c.attr(marks, field, "practice/" + name, ())
             if isinstance(indices, (set, list, tuple)):
-                session_id = c.attr(app, "session_id", "practice/session_id")
+                session_id = _position(c, app, "practice/session_id").get("session_id")
                 result[name.removeprefix("_")] = index in indices or (session_id, index) in indices
     if page in _LEARNING_QUESTION_PAGES:
         session = c.attr(app, "_course_answer", "practice/question")
@@ -676,3 +680,9 @@ def capture_feedback_context(app, *, overlay=None):
     result['fragment_bindings'] = capture_bindings(result)
     result["sha256"] = context_sha256(result)
     return result
+
+
+def _position(c, app, path):
+    """The kana practice session's position on the app object (an empty one when it has none)."""
+    value = c.attr(app, "_kana_session", path)
+    return value if isinstance(value, KanaSession) else KanaSession()

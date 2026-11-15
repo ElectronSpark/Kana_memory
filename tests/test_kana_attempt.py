@@ -245,7 +245,8 @@ def imported(path):
 
 
 def test_the_rules_import_nothing_of_the_app():
-    assert imported(SOURCE / "kana_line" / "attempt.py") == {"__future__", "collections.abc", "dataclasses"}
+    assert imported(SOURCE / "kana_line" / "attempt.py") == {"__future__", "collections.abc", "dataclasses",
+                                                             ".fields"}
     assert imported(SOURCE / "kana_line" / "__init__.py") == set()
 
 

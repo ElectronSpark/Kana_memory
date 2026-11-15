@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
+from . import kana_session_runtime as kana_session
 from .navigation import page_view
 from .study_path import StudyPathService
 
@@ -98,7 +99,7 @@ def _landed_content_id(app, page):
         from .course_answer_runtime import answer_session
         question = answer_session(app).question
         return question.get("content_id") if isinstance(question, dict) else None
-    return getattr(getattr(app, "question", None), "content_id", None)
+    return getattr(kana_session.session(app).get("question"), "content_id", None)
 
 
 def place_enrollment_notice(app, notice):

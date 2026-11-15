@@ -8,6 +8,7 @@ from .domain import StudyStore
 from .learning_store import LearningStore
 from . import progress_backup
 from . import kana_attempt_runtime as kana_attempt
+from . import kana_session_runtime as kana_session
 
 
 def _other_app_work():
@@ -203,8 +204,7 @@ async def restore(app):
         result = await _stage(app, 'restore', '正在恢复学习记录…', data)
         if not result.committed:
             raise RuntimeError('学习记录未替换。')
-        app.session_id, app.questions, app.question = None, [], None
-        app.question_index = app.session_right = 0
+        kana_session.assign(app, session_id=None, questions=[], question=None, question_index=0, session_right=0)
         kana_attempt.assisted(app).clear()
         kana_attempt.answered(app).clear()
         app.back_stack.pages.clear()

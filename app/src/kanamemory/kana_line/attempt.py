@@ -10,32 +10,13 @@ Pure: no Toga, no store, no clock of its own (times are handed in), no app objec
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 
-
-class _Unset:
-    """The value of an evidence field that was never set since the app started."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "UNSET"
-
-    def __bool__(self) -> bool:
-        return False
-
-    def __copy__(self):
-        return self
-
-    def __deepcopy__(self, memo):
-        return self
-
-
-UNSET = _Unset()
+from .fields import UNSET, PartlySet
 
 
 @dataclass(eq=False)
-class KanaAttempt:
+class KanaAttempt(PartlySet):
     """What happened in the attempt on the page.
 
     The app side keeps one of these and REPLACES it whenever a field is assigned; it never edits one in
@@ -49,15 +30,6 @@ class KanaAttempt:
     started: object = UNSET         # float: the monotonic time at which the question page was drawn
     submitted_at: object = UNSET    # str | None: the UTC time of the first submit, ISO text
     duration_ms: object = UNSET     # int: from the drawing of the page to the first submit
-
-    def get(self, name: str, default=None):
-        """A field, or ``default`` when it was never set."""
-        value = getattr(self, name)
-        return default if value is UNSET else value
-
-    def set_fields(self) -> dict:
-        """The fields that were set, by name."""
-        return {item.name: getattr(self, item.name) for item in fields(self) if getattr(self, item.name) is not UNSET}
 
 
 @dataclass(eq=False)

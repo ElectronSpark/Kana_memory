@@ -71,7 +71,9 @@
   "app/src/kanamemory/course_line/ui/answer_pages.py": ["__future__", "collections.abc", "kanamemory.ui_components", "kanamemory.answer_feedback", "kanamemory.answer_result_ui", "..answer_display", "..answer_model"],
   "app/src/kanamemory/course_line/ui/teaching_pages.py": ["__future__", "collections.abc", "dataclasses", "kanamemory.ui_components", "..teaching_display", "..teaching_model"],
   "app/src/kanamemory/kana_line/__init__.py": [],
-  "app/src/kanamemory/kana_line/attempt.py": ["__future__", "collections.abc", "dataclasses"],
+  "app/src/kanamemory/kana_line/attempt.py": ["__future__", "collections.abc", "dataclasses", ".fields"],
+  "app/src/kanamemory/kana_line/fields.py": ["__future__", "dataclasses"],
+  "app/src/kanamemory/kana_line/session.py": ["__future__", "dataclasses", ".fields"],
   "app/src/kanamemory/study_routes.py": ["__future__", "copy", "hashlib", "re", ".study_path_catalog", "json", "datetime", "uuid", ".learning_dependencies"],
   "app/src/kanamemory/ui_theme.py": [],
   "app/src/kanamemory/request_outcome.py": [
@@ -92,6 +94,7 @@
     "time"
   ],
   "app/src/kanamemory/page_restore.py": [
+    ".kana_line.fields",
     ".navigation",
     ".personal_content_notes_ui"
   ],
@@ -244,8 +247,8 @@
     "app_state": {
       "app/src/kanamemory/ai_service_ui.py": 19,
       "app/src/kanamemory/ai_ui.py": 24,
-      "app/src/kanamemory/app.py": 171,
-      "app/src/kanamemory/backup_ui.py": 18,
+      "app/src/kanamemory/app.py": 165,
+      "app/src/kanamemory/backup_ui.py": 13,
       "app/src/kanamemory/content_library_ui.py": 6,
       "app/src/kanamemory/example_ui.py": 19,
       "app/src/kanamemory/feedback_analysis_ui.py": 2,

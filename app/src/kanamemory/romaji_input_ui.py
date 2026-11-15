@@ -1,5 +1,6 @@
 """Romaji utility and word-spelling composer using the same offline parser."""
 from .romaji_input import convert_romaji
+from . import kana_session_runtime as kana_session
 
 CONVENTIONS = {"本 App 罗马音": "reading", "输入法拼写": "keyboard"}
 SCRIPTS = {"平假名": "hiragana", "片假名": "katakana"}
@@ -77,7 +78,7 @@ def word_converter(app, u, question):
     notice = u.label("", size=12, color=u.MUTED)
 
     def active():
-        return app.page == "word_question" and app.question is question and getattr(app, "_word_converter", None) is composer
+        return app.page == "word_question" and kana_session.question(app) is question and getattr(app, "_word_converter", None) is composer
 
     def changed(source, convention, exposed):
         if not active():
@@ -114,7 +115,7 @@ def restore_word_converter(app, state):
     app.word_conversion_convention = state.get("word_conversion_convention", "reading")
     # Retain old drafts and the help already seen even when this question no
     # longer offers a converter. Never append its source during restoration.
-    preview = convert_romaji(app.word_conversion_source, script=app.question.script,
+    preview = convert_romaji(app.word_conversion_source, script=kana_session.question(app).script,
                              convention=app.word_conversion_convention)['text']
     app.word_used_conversion = state.get("word_used_conversion") is True or bool(preview)
     if composer is None:
@@ -137,7 +138,7 @@ def show_romaji_tool(app, u):
             return True
         try:
             affected = app.store.mark_pending_word_conversion()
-            if (getattr(app, "session_id", None), getattr(app, "question_index", None)) in affected:
+            if (kana_session.session(app).get("session_id"), kana_session.session(app).get("question_index")) in affected:
                 app.word_used_conversion = True
             if affected:
                 status.text = "未完成的单词题将按转换辅助作答处理。"

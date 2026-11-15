@@ -52,6 +52,7 @@ when the deck is used up or arranged work has come due); Nothing -> the mode
 ends and the page is shown. A failed read when entering or after a deck
 alerts and leaves the page as it is, so pressing again retries.
 """
+from . import kana_session_runtime as kana_session
 from .arrangement.display import EXTRA_NOTHING
 from .arrangement.model import Arranged, EarlyCourse, EarlyKana, Practice
 
@@ -124,8 +125,8 @@ def extra_inputs(app):
 def _hold_batch(app, session_id):
     """The app's queue in memory becomes the new early batch, as after the practice-setup page started one:
     a checkpoint of the replaced session can then never be written over the new one."""
-    app.questions, app.session_id = app.store.get_session_questions(session_id), session_id
-    app.question_index, app.session_right = 0, 0
+    kana_session.assign(app, questions=app.store.get_session_questions(session_id), session_id=session_id,
+                        question_index=0, session_right=0)
     marks = getattr(app, "_kana_marks", None)
     if marks is not None:
         marks.clear()
@@ -134,10 +135,9 @@ def _hold_batch(app, session_id):
 def _forget_batch(app, session_id):
     """An ended early batch leaves the app's memory too when it is the queue held there, so no later
     checkpoint can write it back."""
-    if session_id is None or getattr(app, "session_id", None) != session_id:
+    if session_id is None or kana_session.session(app).get("session_id") != session_id:
         return
-    app.questions, app.session_id = [], None
-    app.question_index, app.session_right = 0, 0
+    kana_session.assign(app, questions=[], session_id=None, question_index=0, session_right=0)
     back_stack = getattr(app, "back_stack", None)
     if back_stack is not None:
         back_stack.discard(PRACTICE_PAGES)

@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from . import app_clock
 from . import kana_attempt_runtime as kana_attempt
+from . import kana_session_runtime as kana_session
 from copy import deepcopy
 import asyncio
 import random
@@ -166,7 +167,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         teaching returns before that screen exists. Never use the current UI's
         input bindings here: they may still contain a previous question's draft.
         """
-        sid, index = self.session_id, self.question_index
+        sid, index = kana_session.session_id(self), kana_session.question_index(self)
         pending = self.store.load_session_progress()
         if pending is not None:
             if (pending["session_id"] != sid or pending["question_index"] != index
@@ -175,11 +176,11 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             # Existing drafts and assistance state are owned by their checkpoint.
             return
         questions = self.store.get_session_questions(sid)
-        if (index != 0 or self.session_right != 0 or not questions or questions[0] != question
+        if (index != 0 or kana_session.session_right(self) != 0 or not questions or questions[0] != question
                 or self.store._session_lane(sid) != self.store.practice_lane):
             raise ValueError("The introduction does not match a newly started queue")
         assisted = [i for session, i in kana_attempt.assisted(self) if session == sid]
-        self.store.save_session_progress(sid, index, self.session_right, assisted, {})
+        self.store.save_session_progress(sid, index, kana_session.session_right(self), assisted, {})
         pending = self.store.load_session_progress()
         if pending is None or pending["session_id"] != sid or pending["question_index"] != index:
             raise ValueError("The introduction no longer belongs to the active question")
@@ -193,7 +194,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             return
         data = intro_content(self.repo, question)
         self._kana_intro_question = question
-        context = (self.session_id, self.question_index, question)
+        context = (kana_session.session_id(self), kana_session.question_index(self), question)
         familiarity = initial_familiarity(self.store, question)
         if familiarity is None:
             # Reuse only this question's cue: do not reveal a reverse question's
@@ -239,7 +240,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
 
     def select_kana_familiarity(self, level, *, expected=None):
         from .kana_learning_intro import select_initial_familiarity
-        current = (self.session_id, self.question_index, self._kana_intro_question)
+        current = (kana_session.session_id(self), kana_session.question_index(self), self._kana_intro_question)
         if self.page != "kana_introduction" or (expected is not None and expected != current):
             return
         try:
@@ -261,7 +262,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
 
     def finish_kana_introduction(self, widget=None, *, expected=None, **kwargs):
         from .kana_learning_intro import finish_introduction
-        current = (self.session_id, self.question_index, self._kana_intro_question)
+        current = (kana_session.session_id(self), kana_session.question_index(self), self._kana_intro_question)
         if self.page != "kana_introduction" or (expected is not None and expected != current):
             return
         from .new_dispatch import enabled

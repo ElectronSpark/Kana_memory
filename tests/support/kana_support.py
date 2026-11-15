@@ -9,7 +9,9 @@ session's attempts as assisted or answered. An attempt is named by ``(session id
 from __future__ import annotations
 
 from kanamemory import kana_attempt_runtime as _line
+from kanamemory import kana_session_runtime as _position
 from kanamemory.kana_line.attempt import AttemptMarks, KanaAttempt
+from kanamemory.kana_line.session import KanaSession
 
 
 # --- the evidence of the attempt on the page ----------------------------------------------------------------------
@@ -159,56 +161,56 @@ def kept_evidence(**fields):
 
 def session_id(app):
     """The id of the session whose queue the practice holds, None when it holds none."""
-    return app.session_id
+    return _position.session_id(app)
 
 
 def set_session_id(app, value):
-    app.session_id = value
+    _position.set_session_id(app, value)
 
 
 def questions(app):
     """The queue: the session's questions in their order; the practice's own list."""
-    return app.questions
+    return _position.questions(app)
 
 
 def set_questions(app, value):
-    app.questions = value
+    _position.set_questions(app, value)
 
 
 def question_index(app):
     """The place in the queue of the question on the page (the queue's length once it is finished)."""
-    return app.question_index
+    return _position.question_index(app)
 
 
 def set_question_index(app, value):
-    app.question_index = value
+    _position.set_question_index(app, value)
 
 
 def session_right(app):
     """How many answers of the session were right so far."""
-    return app.session_right
+    return _position.session_right(app)
 
 
 def set_session_right(app, value):
-    app.session_right = value
+    _position.set_session_right(app, value)
 
 
 def question(app):
     """The question on the page, None when the practice holds none."""
-    return app.question
+    return _position.question(app)
 
 
 def set_question(app, value):
-    app.question = value
+    _position.set_question(app, value)
 
 
 def script(app):
     """The script of the question on the page: hiragana or katakana."""
-    return app.script
+    return _position.script(app)
 
 
 def set_script(app, value):
-    app.script = value
+    _position.set_script(app, value)
 
 
 POSITION = ("session_id", "questions", "question_index", "session_right", "question", "script")
@@ -222,7 +224,7 @@ _SETTERS.update({
 def kept_position(**fields):
     """What a practice page kept for Back holds of the session's position: the entries of its saved bindings that
     give these values (named like the readers above) back to the practice when the learner returns to it."""
-    return dict(fields)
+    return {"_kana_session": KanaSession(**fields)}
 
 
 # --- the whole position at once, and what a kept practice page holds of it -----------------------------------------
@@ -242,4 +244,6 @@ def position(app):
 def kept_values(page):
     """What a practice page kept for Back holds of the session's position, named like the readers above (only the
     values it holds)."""
-    return {name: page.bindings[name] for name in POSITION if name in page.bindings}
+    kept = page.bindings.get("_kana_session")
+    held = kept.set_fields() if isinstance(kept, KanaSession) else {}
+    return {name: held[name] for name in POSITION if name in held}

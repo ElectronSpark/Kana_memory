@@ -3,6 +3,7 @@ import json
 
 from .feedback_bindings import candidates, intact
 from . import kana_attempt_runtime as kana_attempt
+from . import kana_session_runtime as kana_session
 
 
 def origin_questions(context):
@@ -88,5 +89,5 @@ def expose(app, record, bindings):
     app._mark_visible_tutor_help(set(by_target), abilities_by_target=by_target, sources={'ai', 'tutor'})
     keys = mark_legacy_heads(app.store, origins)
     if keys: kana_attempt.assisted(app).update(keys)
-    if (getattr(app, 'session_id', None), getattr(app, 'question_index', None)) in keys:
+    if (kana_session.session(app).get("session_id"), kana_session.session(app).get("question_index")) in keys:
         kana_attempt.set_revealed(app, True)
