@@ -455,12 +455,14 @@ BATCH_HAND_BACKS = ("continue_study_path", "continue_learning")
 def batch_quiz_question(app):
     """The quiz question the batch quiz page shown now asks (None once it was answered, on the page
     本批小测已完成 and before the paused page)."""
-    return getattr(app, "_intro_quiz_question", None)
+    from kanamemory.intro_batch_runtime import batch_page
+    return batch_page(app).question
 
 
 def batch_card_entry(app):
     """The batch entry (content id and introduction id) of the card the page 新项说明 shows, as drawn."""
-    return getattr(app, "_intro_card_entry", None)
+    from kanamemory.intro_batch_runtime import batch_page
+    return batch_page(app).card_entry
 
 
 def batch_lesson(app):

@@ -108,8 +108,8 @@ PRACTICE_BINDINGS = "questions question_index session_id question session_right 
 PAGE_BINDINGS = {
     "learning_familiarity": "_learning_item _learning_familiarity_state".split(),
     "learning_intro": ["_learning_item"],
-    "learning_card": "_learning_item _intro_card_entry".split(),
-    "learning_batch_quiz": "_learning_item _intro_quiz_question _intro_quiz_result _intro_quiz_buttons".split(),
+    "learning_card": "_learning_item _intro_batch_page".split(),
+    "learning_batch_quiz": "_learning_item _intro_batch_page".split(),
     "learning_guide": "_learning_item _learning_guide _learning_guide_result _learning_pitch_context".split(),
     "learning_question": "_learning_question _learning_question_state _learning_answer _learning_parts _learning_used _learning_input _learning_composition _learning_status _learning_audio_ok _learning_pitch_context _learning_blocks_context".split(),
     "learning_feedback": "_learning_question _learning_question_state _learning_feedback_view_result".split(),

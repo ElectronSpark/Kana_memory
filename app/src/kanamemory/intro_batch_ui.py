@@ -1,24 +1,23 @@
-"""Batch introduction cards and the batch quiz for new words/grammar (四之二).
+"""Batch introduction cards and the batch quiz for new words/grammar (四之二): the entries the app keeps.
 
-Pages call LearningStore public methods only: no SQL, connection or pending
-queue access here. intro_batch owns the rules; the store owns every write.
-Card choices are self-reports and quiz answers are guided evidence: neither
-creates a formal question, learning event or scheduler change.
+Each entry is a thin call into intro_batch_runtime, which asks the service
+(course_line.batch: every decision and every write of a batch) and draws the
+pages (course_line.ui.batch_pages). What stays here as control code: the
+card's body (说明卡), shared by the card page, the quiz's wrong-answer
+feedback and the card opened from a formal question; the review hint's label;
+the help row of a formal question of a batch item; and the loanword source
+labels. Card choices are self-reports and quiz answers are guided evidence:
+neither creates a formal question, learning event or scheduler change.
 """
 from __future__ import annotations
 
-from . import intro_batch
+from . import intro_batch_runtime
 from . import loanword_origins
 from . import ui_components as u
-from .course_line.batch_display import CARD_BUTTON, QUIZ_PAUSED, REVIEW_HINT, ability_hint
-from .intro_batch_quiz import EARLY_REVIEWS, intro_quiz_question, intro_quiz_questions
-from .learning_questions import grade_learning_answer
-from .new_dispatch import study_path_available
-from .question_instruction_ui import instruction_widgets
-from .question_support import learning_text_role, option_labels
+from .course_line.batch_display import CARD_BUTTON, CARD_PAGE, QUIZ_PAGE, REVIEW_HINT
 from .structured_lesson_ui import block_widget, teaching_block
 
-INTRO_BATCH_PAGES = {"learning_card", "learning_batch_quiz"}
+INTRO_BATCH_PAGES = {CARD_PAGE, QUIZ_PAGE}
 
 
 def origin_labels(item):
@@ -33,121 +32,30 @@ def origin_labels(item):
 
 
 class IntroBatchUIMixin:
-    def _intro_batch_fair(self):
-        from .new_dispatch import enabled
-        return enabled(self)
-
     def _intro_batch_known_ids(self, extra=()):
         """Items a batch sentence may use besides the new one: ready items,
         introduced kana (design 11 section 5, D5) and this batch."""
-        from .course_planning import known_ids
-        state = self.learning_store.intro_batch()
-        return {*known_ids(self.store.queries),
-                *(entry["content_id"] for entry in (state or {}).get("entries", ())), *extra}
-
-    def _intro_batch_continue(self):
-        # Same continuation as finishing a single guide.
-        if study_path_available(self) and callable(getattr(self, "continue_study_path", None)):
-            self.continue_study_path(_checkpoint_saved=True)
-        else:
-            self.continue_learning()
+        return intro_batch_runtime.service(self).known_ids(extra)
 
     def route_intro_batch(self, current, enabled):
-        """Resume an open batch or open one at an eligible instruction head.
+        """Whether the batch introduction takes this head: it resumes an open batch whose item the head is,
+        or opens a new one at an eligible instruction head (then the batch is written).
 
-        current() keeps owning dispatch order: due reviews, saved answers,
-        explicit starts, waits and blocks decide as before. An open batch is
-        resumed (from its saved cursor) when the dispatched instruction head
-        is one of its items; another head keeps its own route, so a paused
-        batch (closed kind, suspension, prerequisite) never blocks other work.
         True: the batch owns this head; the caller shows it (course_runtime.perform_course).
         """
-        kind = (current or {}).get("type")
-        state = self.learning_store.intro_batch()
-        if state is not None:
-            content = (current or {}).get("content") or {}
-            if (kind == "instruction" and content.get("instruction_scope") is None
-                    and any(entry["content_id"] == content.get("id") for entry in state["entries"])):
-                return True
-            return False
-        if kind != "instruction":
-            return False
-        content = current.get("content") or {}
-        if (content.get("instruction_scope") is not None or content.get("family") not in intro_batch.SIZE_RANGES
-                or content.get("stage") != "intro" or (content.get("checkpoint") or {}).get("initial_familiarity")):
-            return False
-        candidates = self.learning_store.intro_batch_candidates(enabled, content["id"], fair_new=self._intro_batch_fair())
-        # Only items whose batch quiz can actually be presented join a batch.
-        def quizzable(cid):
-            # The batch teaches the easiest admitted ability first (as start_intro_batch).
-            item = self.learning_store.instruction_item(cid)
-            admitted = item.get("enrolled_abilities") or [unit["ability"] for unit in item["units"]]
-            try:
-                first = intro_batch.first_ability(item["family"], admitted)
-            except ValueError:
-                return False
-            return intro_quiz_question(item, enabled, ability=first, known_background_ids=known) is not None
-        known = self._intro_batch_known_ids(candidates)
-        candidates = [cid for cid in candidates if quizzable(cid)]
-        if not candidates or candidates[0] != content["id"]:
-            return False
-        try:
-            self.learning_store.start_intro_batch(candidates, family=content["family"])
-        except ValueError:
-            return False
-        return True
+        return intro_batch_runtime.service(self).route(current, enabled)
 
     def show_intro_batch(self, widget=None, **kwargs):
-        state = self.learning_store.intro_batch()
-        if state is None:
-            self._intro_batch_continue()
-            return
-        entries = state["entries"]
-        if state["phase"] == "cards" and state["card_index"] < len(entries):
-            self.show_intro_card(entries[state["card_index"]])
-            return
-        if state["phase"] == "cards" and not intro_batch.quiz_items(state):
-            # Every item chose "我已经会了": an empty quiz closes the batch.
-            self.learning_store.start_intro_quiz({})
-            self.learning_store.complete_intro_batch(fair_new=self._intro_batch_fair())
-            self._intro_batch_continue()
-            return
-        self.show_intro_batch_quiz()
+        intro_batch_runtime.show(self)
 
     def intro_batch_review_due(self):
         """Due review count shown as a hint only; it never blocks a batch."""
-        enabled = self.learning_preferences()["enabled"]
-        count = self.learning_store.counts(enabled)["ready"]
-        if not count and study_path_available(self) and hasattr(self.store, "load_session_progress"):
-            from .practice_availability import summarize_queue_availability
-            pending = self.store.load_session_progress(lane="main", lazy_questions=True)
-            count = summarize_queue_availability(self.store, pending).ready_count
-        return count
+        return intro_batch_runtime.service(self).review_due()
 
     def intro_batch_review_hint(self):
-        if self.learning_store.intro_batch() is None or not self.intro_batch_review_due():
+        if not intro_batch_runtime.service(self).batch_open() or not self.intro_batch_review_due():
             return []
         return [u.label(REVIEW_HINT, size=13, color=u.MUTED)]
-
-    def show_intro_card(self, entry):
-        from .assessment_policy import teaching_allowed
-        state = self.learning_store.intro_batch()
-        item = self.learning_store.instruction_item(entry["content_id"])
-        if item is None or item.get("introduction_id") != entry["introduction_id"] or not teaching_allowed(item, store=self.store):
-            self.screen("learning_wait", "说明卡暂不可用", u.label("这一项的说明已变化，原有进度已保存。"),
-                u.button("回到今日", self.leave_learning, primary=True))
-            return
-        item = self.learning_store.mark_instruction_exposed(item["id"], expected_introduction_id=item["introduction_id"])
-        self._learning_item = item
-        self._intro_card_entry = dict(entry)
-        index = next(i for i, e in enumerate(state["entries"]) if e["content_id"] == entry["content_id"])
-        expected = dict(entry)
-        self.screen("learning_card", "新项说明",
-            u.label(f"第 {index + 1} / {len(state['entries'])} 项", size=13, color=u.MUTED),
-            *self.intro_batch_review_hint(), *self._intro_card_body(item, origin=True),
-            u.button("下一项", lambda w: self.choose_intro_card("next", expected=expected), primary=True),
-            u.button("我已经会了", lambda w: self.choose_intro_card("known", expected=expected)),
-            u.button("稍后再学", self.leave_learning))
 
     def _intro_card_body(self, item, *, origin=False):
         """说明卡 content, shared by the card page and wrong-answer feedback.
@@ -192,128 +100,10 @@ class IntroBatchUIMixin:
         return children
 
     def choose_intro_card(self, choice, *, expected):
-        if self.page != "learning_card" or getattr(self, "_intro_card_entry", None) != expected:
-            return
-        try:
-            self.learning_store.choose_intro_card(expected["content_id"], choice,
-                expected_introduction_id=expected["introduction_id"],
-                fair_new=self._intro_batch_fair() if choice == "known" else False)
-        except ValueError:
-            # A stale or repeated press: the saved cursor decides what is shown.
-            pass
-        self.show_intro_batch()
-
-    def _intro_batch_questions(self, state, known=None):
-        enabled = self.learning_preferences()["enabled"]
-        known = self._intro_batch_known_ids() if known is None else known
-        questions = {}
-        for cid in intro_batch.quiz_items(state):
-            item = self.learning_store.instruction_item(cid)
-            frozen = intro_quiz_questions(item, enabled, known_background_ids=known) if item else []
-            if not frozen:
-                raise ValueError("这一批里有内容暂时没有可用的小测题型，请检查题型设置。")
-            questions[cid] = frozen
-        return questions
+        intro_batch_runtime.choose_card(self, choice, expected)
 
     def show_intro_batch_quiz(self):
-        """Rebuild the quiz from saved state: the head's frozen choice question.
-
-        The quiz is choice-only, so the item draft slot stays unused.
-        """
-        state = self.learning_store.intro_batch()
-        if state is None:
-            self._intro_batch_continue()
-            return
-        known = None  # One read per page: quiz selection and the kana of unlearned words share it.
-        if state["phase"] == "cards":
-            known = self._intro_batch_known_ids()
-            try:
-                state = self.learning_store.start_intro_quiz(self._intro_batch_questions(state, known))
-            except ValueError as exc:
-                self.alert(str(exc))
-                self.screen("learning_wait", "批小测暂不可用", u.label("说明卡进度已保存。"),
-                    u.button("题型设置", self.show_learning_settings, primary=True),
-                    u.button("回到今日", self.leave_learning))
-                return
-        head = intro_batch.quiz_head(state)
-        if head is None:
-            # Every item settled (answered correctly, or under breadth first
-            # missed on each of its questions); resuming here never skips the
-            # learner's own "继续" into formal work.
-            self._learning_item = self.learning_store.instruction_item(intro_batch.quiz_items(state)[-1])
-            self._intro_quiz_question = None
-            self._intro_quiz_result = u.col()
-            self._intro_quiz_buttons = []
-            self.screen("learning_batch_quiz", "批小测", u.label("本批小测已完成。", size=18),
-                u.button("继续", self.finish_intro_batch_quiz, primary=True))
-            return
-        item = self.learning_store.instruction_item(head["content_id"])
-        frozen = item["checkpoint"][intro_batch.ITEM_KEY]["questions"]
-        question = next(q for q in frozen if q["id"] == head["question_id"])
-        self._learning_item = item
-        if question["kind"] not in self.learning_preferences()["enabled"]:
-            # Never skip or answer a closed kind: the same frozen head resumes.
-            self._intro_quiz_question = None
-            from .course_runtime import perform_course
-            from .course_line.model import PAUSED_QUIZ, Paused
-            perform_course(self, Paused(PAUSED_QUIZ, QUIZ_PAUSED))
-            return
-        self._intro_quiz_question = question
-        self._intro_quiz_result = u.col()
-        known = self._intro_batch_known_ids() if known is None else known
-        # Display only: the answer callbacks keep the raw choice.
-        labels = option_labels(question, known)
-        self._intro_quiz_buttons = [u.button(labels.get(choice, choice), lambda w, answer=choice: self.answer_intro_batch_quiz(answer, expected=question),
-                                             multiline=True, text_role=learning_text_role(question, "choice"))
-                                    for choice in question.get("choices", [])]
-        self.screen("learning_batch_quiz", "批小测", u.label("批小测", size=13, color=u.MUTED),
-            *self.intro_batch_review_hint(), self._learning_prompt_block(question, size=20, known_ids=known),
-            *instruction_widgets(u, question, known), *self._intro_quiz_buttons, self._intro_quiz_result)
-
-    def answer_intro_batch_quiz(self, answer, *, expected):
-        if self.page != "learning_batch_quiz" or getattr(self, "_intro_quiz_question", None) is not expected:
-            return
-        if expected["kind"] not in self.learning_preferences()["enabled"]:
-            self.show_intro_batch_quiz()
-            return
-        from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import answer_text, shown_answer, shown_explanation
-        result = grade_learning_answer(expected, answer)
-        if result.get("status") in {"empty", "invalid"}:
-            return
-        correct = result.get("status") == "correct"
-        try:
-            self.learning_store.answer_intro_quiz(expected["target_id"], expected["id"],
-                                                  answered_text=answer, correct=correct)
-        except ValueError:
-            self.show_intro_batch()
-            return
-        for button in self._intro_quiz_buttons:
-            button.enabled = False
-        self._intro_quiz_question = None
-        self._intro_quiz_result.clear()
-        self._intro_quiz_result.add(build_answer_feedback({"correct": correct}))
-        if not correct:
-            self._intro_quiz_result.add(u.label(shown_answer(expected), bold=True,
-                                                text_role=learning_text_role(expected, "answer")))
-        if expected.get("feedback"):
-            self._intro_quiz_result.add(u.label(shown_explanation(expected, expected["feedback"])))
-        if not correct:
-            # The card again; the item then waits at the end of the quiz unless
-            # the store released it (design 12 Q2, breadth first).
-            self._intro_quiz_result.add(u.label("说明卡", size=13, color=u.MUTED))
-            self._intro_quiz_result.add(u.col(*self._intro_card_body(self._learning_item, origin=True)))
-        done = intro_batch.quiz_head(self.learning_store.intro_batch() or {"phase": "cards", "quiz_queue": []}) is None
-        self._intro_quiz_result.add(u.button("继续", self.finish_intro_batch_quiz if done else self.show_intro_batch,
-                                             primary=True))
-
-    def finish_intro_batch_quiz(self, widget=None, **kwargs):
-        if self.page != "learning_batch_quiz":
-            return
-        state = self.learning_store.intro_batch()
-        if state is not None and state["phase"] == "quiz" and intro_batch.quiz_head(state) is None:
-            self.learning_store.complete_intro_batch(fair_new=self._intro_batch_fair())
-        self._intro_batch_continue()
+        intro_batch_runtime.show_quiz(self)
 
     def open_batch_ability(self, item):
         """A later ability of a batch item: no intro page, no picker (四之二 item 4).
@@ -321,15 +111,7 @@ class IntroBatchUIMixin:
         The store writes the card self-report and opens the scope; the next
         dispatch shows its first formal question with a one-line hint.
         """
-        try:
-            self.learning_store.open_batch_ability(item["id"], instruction_scope=item["instruction_scope"],
-                expected_introduction_id=item["introduction_id"],
-                enabled_kinds=self.learning_preferences()["enabled"], fair_new=self._intro_batch_fair())
-        except ValueError:
-            self.screen("learning_wait", "新能力暂不可用", u.label("原有进度已保存。"),
-                *self.learning_next_content_controls(), u.button("回到今日", self.leave_learning))
-            return
-        self._intro_batch_continue()
+        intro_batch_runtime.open_ability(self, item)
 
     def intro_batch_question_help(self, current):
         """(hint labels, action buttons) for a formal question of a batch item.
@@ -338,18 +120,8 @@ class IntroBatchUIMixin:
         opening it marks the draft assisted through learning_hint. The first
         question of a later ability also gets one short hint line.
         """
-        question = current["question"]
-        content = current.get("content") or {}
-        marked = getattr(self.learning_store, "is_batch_route", None)
-        if not callable(marked) or not marked(question["target_id"]):
-            return [], []
-        unit = self.learning_store.get_unit(question["target_id"], question["ability"]) or {}
-        hints, actions = [], []
-        profile = (content.get("checkpoint") or {}).get("initial_familiarity") or {}
-        if (content.get("instruction_scope") and profile.get("source") == intro_batch.CARD_SOURCE
-                and not unit.get("attempt_count")):
-            hints.append(u.label(ability_hint(question), size=13, color=u.MUTED))
-        if unit.get("review_count", 0) < EARLY_REVIEWS:
-            actions.append(u.button(CARD_BUTTON, lambda w: self.learning_hint(w, card=True),
-                                    compact=True, font_size=12, flex=1))
+        help_ = intro_batch_runtime.service(self).question_help(current)
+        hints = [u.label(help_.hint, size=13, color=u.MUTED)] if help_.hint is not None else []
+        actions = ([u.button(CARD_BUTTON, lambda w: self.learning_hint(w, card=True),
+                             compact=True, font_size=12, flex=1)] if help_.card else [])
         return hints, actions
