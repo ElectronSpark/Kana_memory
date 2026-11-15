@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .kana_line.attempt import UNSET, AttemptMarks, KanaAttempt
+from .kana_line.attempt import AttemptMarks, KanaAttempt
 
 
 # --- the evidence of the attempt on the page ----------------------------------------------------------------------
@@ -42,10 +42,7 @@ def assign(app, **fields) -> None:
 
 
 def _read(app, name: str):
-    value = getattr(attempt(app), name)
-    if value is UNSET:
-        raise AttributeError(name)
-    return value
+    return attempt(app).need(name)
 
 
 def revealed(app):

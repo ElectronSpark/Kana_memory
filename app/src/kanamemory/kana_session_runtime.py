@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from .kana_line.fields import UNSET
 from .kana_line.session import KanaSession
 
 
@@ -48,10 +47,7 @@ def kept_attempt_key(bindings) -> tuple:
 
 
 def _read(app, name: str):
-    value = getattr(session(app), name)
-    if value is UNSET:
-        raise AttributeError(name)
-    return value
+    return session(app).need(name)
 
 
 def session_id(app):

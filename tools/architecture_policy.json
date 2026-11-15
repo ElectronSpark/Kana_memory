@@ -74,6 +74,8 @@
   "app/src/kanamemory/kana_line/attempt.py": ["__future__", "collections.abc", "dataclasses", ".fields"],
   "app/src/kanamemory/kana_line/fields.py": ["__future__", "dataclasses"],
   "app/src/kanamemory/kana_line/session.py": ["__future__", "dataclasses", ".fields"],
+  "app/src/kanamemory/kana_line/rating_model.py": ["__future__", "collections.abc", "dataclasses", "datetime", "..practice_preferences", ".attempt", ".session"],
+  "app/src/kanamemory/kana_line/rating.py": ["__future__", "collections.abc", "..draft_debounce", ".attempt", ".rating_model", ".session"],
   "app/src/kanamemory/study_routes.py": ["__future__", "copy", "hashlib", "re", ".study_path_catalog", "json", "datetime", "uuid", ".learning_dependencies"],
   "app/src/kanamemory/ui_theme.py": [],
   "app/src/kanamemory/request_outcome.py": [
@@ -225,7 +227,7 @@
     "store_access": {
       "app/src/kanamemory/ai_service_ui.py": 13,
       "app/src/kanamemory/ai_ui.py": 43,
-      "app/src/kanamemory/app.py": 94,
+      "app/src/kanamemory/app.py": 91,
       "app/src/kanamemory/backup_ui.py": 2,
       "app/src/kanamemory/content_library_ui.py": 2,
       "app/src/kanamemory/example_ui.py": 18,

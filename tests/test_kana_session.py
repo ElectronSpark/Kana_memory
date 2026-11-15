@@ -165,5 +165,4 @@ def test_the_state_modules_import_nothing_of_the_app():
 
 
 def test_the_app_side_module_imports_no_controls_and_not_the_app():
-    assert imported(SOURCE / "kana_session_runtime.py") == {"__future__", "dataclasses", ".kana_line.fields",
-                                                            ".kana_line.session"}
+    assert imported(SOURCE / "kana_session_runtime.py") == {"__future__", "dataclasses", ".kana_line.session"}

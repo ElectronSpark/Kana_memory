@@ -90,6 +90,7 @@ QUESTION_PAGES = {"question", "word_question", "ink_question"}
 # WP5: short wait page while a worker assembles the kana queue.
 from .next_step.display import KANA_ASSEMBLY_PAGE
 from . import kana_attempt_runtime as kana_attempt
+from . import kana_rating_runtime as kana_rating
 from . import kana_session_runtime as kana_session
 from .kana_line import attempt as attempt_rules
 # Header subtitle per page (review 2026-11-08 section 5); "" hides it.
@@ -4448,54 +4449,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         kana_attempt.set_revealed(self, kana_attempt.revealed(self) or self._attempt_key() in kana_attempt.assisted(self))
         if KanaMemory._go_on_after_practice(self):
             return
-        if kana_session.question(self).kind in WORD_PRACTICE_KINDS:
-            rating = None
-        if kana_attempt.revealed(self) and rating != 1 and kana_session.question(self).kind not in WORD_PRACTICE_KINDS:
-            self.alert("已查看学习提示，本题只能选择再学一次。")
-            return
-        try:
-            extra = {}
-            from .domain import utc_now
-            from .session_content import fingerprint
-            finalized_at = utc_now()
-            if kana_session.question(self).kind in WORD_PRACTICE_KINDS:
-                rows, _, corrections = KanaMemory._word_spelling_plan(self, kana_attempt.answered_text(self))
-                if corrections:
-                    KanaMemory._set_queue_kind_policy(self, kana_session.session_id(self),
-                        corrections[0].metadata["practice_config"]["kinds"])
-                extra = {"kana_rows": rows, "spelling_corrections": corrections,
-                         **KanaMemory._word_romaji_submission(self, kana_attempt.answered_text(self))}
-            result = self.store.record_review(kana_session.question(self).content_id, kana_session.question(self).kind, kana_session.question(self).script, rating,
-                                     session_id=kana_session.session_id(self), question_index=kana_session.question_index(self), answered_text=kana_attempt.answered_text(self),
-                                     outcome="correct" if kana_attempt.correct(self) else "incorrect", audio_ok=kana_attempt.audio_ok(self),
-                                     content_version=kana_session.question(self).metadata["content_version"], assisted=kana_attempt.revealed(self),
-                                     duration_ms=kana_attempt.attempt(self).get("duration_ms", 0),
-                                     now=(finalized_at if kana_session.question(self).kind in WORD_PRACTICE_KINDS else
-                                          datetime.fromisoformat(kana_attempt.submitted_at(self)) if kana_attempt.attempt(self).get("submitted_at") else None),
-                                     finalized_at=finalized_at, fair_new=KanaMemory._lazy_practice_questions(self),
-                                     question_fingerprint=fingerprint(kana_session.question(self)),
-                                     **extra)
-            if not result["scheduled"]:
-                self.alert("这次作答未安排复习：" + result.get("reason", "请重试"))
-                return
-        except Exception as exc:
-            if is_database_locked(exc):
-                # The transaction rolled back; the same rating can simply be retried.
-                from .diagnostic_events import record_error
-                record_error("practice_rating", "commit", exc)
-                self.alert("数据库正忙，复习记录尚未保存。请稍后再点一次评级。")
-                return
-            self.alert(f"复习记录尚未保存：{exc}")
-            return
-        if kana_attempt.correct(self) and not kana_session.question(self).metadata.get("spelling_correction_of"):
-            kana_session.set_session_right(self, kana_session.session_right(self) + 1)
-        kana_session.set_question_index(self, kana_session.question_index(self) + 1)
-        if (kana_session.question(self).metadata.get("practice_config", {}).get("schedule_mode") == "spaced"
-                or result.get("queue_extended") is True):
-            kana_session.set_questions(self, (self.store.get_session_questions(kana_session.session_id(self), lazy=True)
-                              if KanaMemory._lazy_practice_questions(self) else
-                              self.store.get_session_questions(kana_session.session_id(self))))
-        KanaMemory._dispatch_after_answer(self)
+        kana_rating.rate(self, KanaMemory, rating)
 
     def _dispatch_after_answer(self):
         """The next question after a durable answer (a rating, or a practice-only answer moved past)."""

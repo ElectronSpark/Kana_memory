@@ -40,6 +40,14 @@ class PartlySet:
         value = getattr(self, name)
         return default if value is UNSET else value
 
+    def need(self, name: str):
+        """A field that must have been set: AttributeError with its name for one that never was, as reading
+        an attribute that was never assigned raised."""
+        value = getattr(self, name)
+        if value is UNSET:
+            raise AttributeError(name)
+        return value
+
     def set_fields(self) -> dict:
         """The fields that were set, by name."""
         return {item.name: getattr(self, item.name) for item in fields(self) if getattr(self, item.name) is not UNSET}

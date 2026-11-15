@@ -74,16 +74,16 @@ def submitted(attempt: KanaAttempt, answer: str, key, marks: AttemptMarks, *,
     if not attempt.get("submitted_at"):
         at = utc_iso()
         attempt = replace(attempt, submitted_at=at,
-                          duration_ms=max(0, int((monotonic() - _required(attempt, "started")) * 1000)))
+                          duration_ms=max(0, int((monotonic() - attempt.need("started")) * 1000)))
     marks.answered.add(key)
-    if _required(attempt, "revealed"):
+    if attempt.need("revealed"):
         marks.assisted.add(key)
     return attempt
 
 
 def judged(attempt: KanaAttempt, matches) -> KanaAttempt:
     """The verdict: right only for a matching answer given without help."""
-    return replace(attempt, correct=matches and not _required(attempt, "revealed"))
+    return replace(attempt, correct=matches and not attempt.need("revealed"))
 
 
 def restored_result(attempt: KanaAttempt, state: dict, *, heard: bool) -> KanaAttempt:
@@ -104,9 +104,3 @@ def moved_start(started, now: float, entered: float):
     as answering time."""
     return started + now - entered
 
-
-def _required(attempt: KanaAttempt, name: str):
-    value = getattr(attempt, name)
-    if value is UNSET:
-        raise AttributeError(name)
-    return value
