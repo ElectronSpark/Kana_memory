@@ -95,7 +95,8 @@ def take_enrollment_notice(app):
 
 def _landed_content_id(app, page):
     if page in {"learning_question", "learning_feedback"}:
-        question = getattr(app, "_learning_question", None)
+        from .course_answer_runtime import answer_session
+        question = answer_session(app).question
         return question.get("content_id") if isinstance(question, dict) else None
     return getattr(getattr(app, "question", None), "content_id", None)
 

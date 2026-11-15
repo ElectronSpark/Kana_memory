@@ -386,7 +386,7 @@ def _capture_content(c, app, page, key):
             method = "get_word" if str(question.get("kind", "")).startswith("word_") else "get_kana"
             result["question_content"] = c.copy(c.read(repo, method, "content/question_content", content_id), "content/question_content")
     if page in _LEARNING_QUESTION_PAGES:
-        q = c.attr(app, "_learning_question", "content/question")
+        q = getattr(c.attr(app, "_course_answer", "content/question"), "question", None)
         target = q.get("target_id", q.get("content_id")) if isinstance(q, Mapping) else None
         if isinstance(target, str):
             item = c.read(c.attr(app, "learning_store", "content/learning_item"), "get_item", "content/learning_item", target)
@@ -473,11 +473,15 @@ def _capture_practice(c, app, page):
                 session_id = c.attr(app, "session_id", "practice/session_id")
                 result[name.removeprefix("_")] = index in indices or (session_id, index) in indices
     if page in _LEARNING_QUESTION_PAGES:
-        q = c.attr(app, "_learning_question", "practice/question")
+        session = c.attr(app, "_course_answer", "practice/question")
+        q = getattr(session, "question", None)
         result.update(_question_capture(c, q, "practice"))
-        for name in ("_learning_question_state", "_learning_parts", "_learning_used", "_learning_audio_ok"):
-            value = c.attr(app, name, "practice/" + name, _MISSING)
-            if value is not _MISSING:
+        # The report keeps its keys. A field the question pages have not set yet (None) is left out, as its
+        # attribute was while it did not exist yet.
+        for name, field in (("_learning_question_state", "state"), ("_learning_parts", "parts"),
+                            ("_learning_used", "used"), ("_learning_audio_ok", "audio_ok")):
+            value = getattr(session, field, None)
+            if value is not None:
                 result[name.removeprefix("_")] = c.copy(value, "practice/" + name)
         if isinstance(q, Mapping) and q.get("id"):
             saved = c.read(c.attr(app, "learning_store", "practice/saved"), "get_question", "practice/saved", q["id"])

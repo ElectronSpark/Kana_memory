@@ -953,6 +953,8 @@ app/src/kanamemory/next_step/model.py
 app/src/kanamemory/next_step/ui/__init__.py
 app/src/kanamemory/next_step/ui/end_pages.py
 app/src/kanamemory/course_line/__init__.py
+app/src/kanamemory/course_line/answer.py
+app/src/kanamemory/course_line/answer_model.py
 app/src/kanamemory/course_line/batch_display.py
 app/src/kanamemory/course_line/batch_model.py
 app/src/kanamemory/course_line/batch.py
@@ -964,6 +966,7 @@ app/src/kanamemory/course_line/ui/line_pages.py
 app/src/kanamemory/home_runtime.py
 app/src/kanamemory/continue_runtime.py
 app/src/kanamemory/course_runtime.py
+app/src/kanamemory/course_answer_runtime.py
 tests/support/library_availability_support.py
 tests/test_content_availability.py
 tests/test_library_availability_store.py
@@ -981,6 +984,7 @@ tests/test_continue_characterisation.py
 tests/test_course_decision_characterisation.py
 tests/test_course_result_characterisation.py
 tests/test_course_answer_characterisation.py
+tests/test_course_answering.py
 tests/test_course_line_pages.py
 tests/test_course_batch_pages.py
 tests/test_course_decide.py

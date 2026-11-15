@@ -61,6 +61,7 @@
   "app/src/kanamemory/course_line/display.py": ["__future__", "dataclasses", "..next_step.display", ".model"],
   "app/src/kanamemory/course_line/batch_display.py": ["__future__", "dataclasses", "..answer_result_ui", "..learning_questions", "..next_step.display", "..question_support", ".batch_model", ".display"],
   "app/src/kanamemory/course_line/batch_model.py": ["__future__", "dataclasses", "enum"],
+  "app/src/kanamemory/course_line/answer_model.py": ["__future__", "dataclasses"],
   "app/src/kanamemory/course_line/ui/__init__.py": [],
   "app/src/kanamemory/course_line/ui/line_pages.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", "..model"],
   "app/src/kanamemory/course_line/ui/batch_pages.py": ["__future__", "collections.abc", "dataclasses", "kanamemory.ui_components", "kanamemory.answer_feedback", "kanamemory.question_instruction_ui", "..batch_display", "..batch_model"],
@@ -220,9 +221,9 @@
       "app/src/kanamemory/example_ui.py": 18,
       "app/src/kanamemory/feedback_analysis_ui.py": 3,
       "app/src/kanamemory/feedback_ui.py": 2,
-      "app/src/kanamemory/learning_pitch_ui.py": 3,
+      "app/src/kanamemory/learning_pitch_ui.py": 1,
       "app/src/kanamemory/learning_records.py": 6,
-      "app/src/kanamemory/learning_ui.py": 120,
+      "app/src/kanamemory/learning_ui.py": 103,
       "app/src/kanamemory/lexical_example_ui.py": 6,
       "app/src/kanamemory/material_reference_ui.py": 11,
       "app/src/kanamemory/material_share_ui.py": 2,
@@ -244,9 +245,9 @@
       "app/src/kanamemory/feedback_analysis_ui.py": 2,
       "app/src/kanamemory/feedback_batch_ui.py": 3,
       "app/src/kanamemory/feedback_ui.py": 16,
-      "app/src/kanamemory/learning_pitch_ui.py": 2,
+      "app/src/kanamemory/learning_pitch_ui.py": 1,
       "app/src/kanamemory/learning_records.py": 2,
-      "app/src/kanamemory/learning_ui.py": 39,
+      "app/src/kanamemory/learning_ui.py": 31,
       "app/src/kanamemory/lexical_example_ui.py": 3,
       "app/src/kanamemory/material_reference_ui.py": 4,
       "app/src/kanamemory/material_share_ui.py": 1,
@@ -256,7 +257,7 @@
       "app/src/kanamemory/retention_session_ui.py": 7,
       "app/src/kanamemory/study_path_runtime.py": 4,
       "app/src/kanamemory/study_path_ui.py": 7,
-      "app/src/kanamemory/tutor_ui.py": 26
+      "app/src/kanamemory/tutor_ui.py": 25
     }
   },
   "exceptions": [

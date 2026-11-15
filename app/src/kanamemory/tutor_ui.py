@@ -11,6 +11,8 @@ from copy import deepcopy
 from hashlib import sha256
 import json
 
+from . import course_answer_runtime
+from .course_answer_runtime import answer_session
 from .navigation import page_view
 from .answer_result_ui import answer_text, shown_answer, shown_explanation
 from .question_instruction_ui import instruction_widgets
@@ -42,7 +44,7 @@ def page_draft_debouncer(app, attribute, on_due):
 
 
 def _current_question_ids(app):
-    return {'learning': (getattr(app, '_learning_question', None) or {}).get('id'),
+    return {'learning': (answer_session(app).question or {}).get('id'),
             'ai': (getattr(app, '_ai_current', None) or {}).get('id'),
             'tutor': (getattr(app, '_tutor_current', None) or {}).get('id')}
 
@@ -596,7 +598,7 @@ class TutorUIMixin:
             if source == 'learning':
                 self.learning_store.save_draft(row['id'], draft)
                 if row['id'] == current_ids[source]:
-                    self._learning_question_state = deepcopy(draft)
+                    course_answer_runtime.set_draft(self, deepcopy(draft))
             elif source == 'ai':
                 self.ai_practice_store().save_draft(row['id'], draft)
             else:
@@ -828,8 +830,8 @@ class TutorUIMixin:
         draft.update(assisted=True, hint_used=True)
         if origin["source"] == "learning":
             self.learning_store.save_draft(origin["question_id"], draft)
-            if getattr(self, "_learning_question", {}).get("id") == origin["question_id"]:
-                self._learning_question_state = deepcopy(draft)
+            if (answer_session(self).question or {}).get("id") == origin["question_id"]:
+                course_answer_runtime.set_draft(self, deepcopy(draft))
         elif origin["source"] == "ai":
             self.ai_practice_store().save_draft(origin["question_id"], draft)
         else:

@@ -50,7 +50,8 @@ def append_notes(app, u, children, kind, resource, *, page):
     def reveal(widget=None):
         if app.page != page: return
         # Never use a stale page closure to reveal another question's notes.
-        if kind == 'question' and getattr(app, '_learning_question', {}).get('id') != resource['id']: return
+        from .course_answer_runtime import answer_session
+        if kind == 'question' and (answer_session(app).question or {}).get('id') != resource['id']: return
         if opened[0]:
             forget_shown(); set_opened(False); return
         from .feedback_bindings import current_resource

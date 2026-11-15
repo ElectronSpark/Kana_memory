@@ -526,67 +526,72 @@ def record_known_reads(monkeypatch, *, log=None):
 
 # --- the question being answered (答题) -----------------------------------------------------------------------
 
+def _answering():
+    from kanamemory import course_answer_runtime
+    return course_answer_runtime
+
+
 def course_question(app):
     """The course question on the page: the one being answered or, on its result page, the one just answered
     (None when the line holds none)."""
-    return getattr(app, "_learning_question", None)
+    return _answering().answer_session(app).question
 
 
 def set_course_question(app, question):
     """As if ``question`` were the course question on the page (None: the line holds none)."""
-    app._learning_question = question
+    _answering().assign(app, question=question)
 
 
 def answer_draft(app):
     """The draft the line holds for the question on the page: what was typed or chosen so far and the aids
     used. It is the line's own dict — changing it changes the draft the line goes on with."""
-    return app._learning_question_state
+    return _answering().answer_session(app).state
 
 
 def set_answer_draft(app, draft):
     """As if the line held ``draft`` for the question on the page."""
-    app._learning_question_state = draft
+    _answering().assign(app, state=draft)
 
 
 def typed_answer(app):
     """The text the page's answer field started with (the draft's answer when the page was drawn)."""
-    return app._learning_answer
+    return _answering().answer_session(app).answer
 
 
 def chosen_blocks(app):
     """The blocks chosen so far for a question answered by putting blocks together, in their order."""
-    return app._learning_parts
+    return _answering().answer_session(app).parts
 
 
 def set_chosen_blocks(app, parts):
     """As if these blocks were the ones chosen so far."""
-    app._learning_parts = parts
+    _answering().assign(app, parts=parts)
 
 
 def used_blocks(app):
     """The positions of the offered blocks that the chosen ones use."""
-    return app._learning_used
+    return _answering().answer_session(app).used
 
 
 def set_used_blocks(app, used):
     """As if the chosen blocks used these positions of the offered ones."""
-    app._learning_used = used
+    _answering().assign(app, used=used)
 
 
 def audio_heard(app):
     """Whether the audio of the question on the page has played successfully (a heard question can be
     answered only then)."""
-    return app._learning_audio_ok
+    return _answering().answer_session(app).audio_ok
 
 
 def set_audio_heard(app, heard):
     """As if the audio of the question on the page had (or had not) played successfully."""
-    app._learning_audio_ok = heard
+    _answering().assign(app, audio_ok=heard)
 
 
 def result_view(app):
     """(question id, result) of the result page drawn last."""
-    return app._learning_feedback_view_result
+    return _answering().answer_session(app).feedback_view
 
 
 # --- answering a question, up to the submit: the answer field, the status line, what one drawing reads ------

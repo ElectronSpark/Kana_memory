@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 
+from . import course_answer_runtime
 from . import pitch_practice as pitch
 
 
@@ -135,9 +136,9 @@ class LearningPitchUIMixin:
         def active():
             if is_active is not None:
                 return is_active() and not context['locked']
-            attr = "_learning_guide" if guided else "_learning_question"
             page = "learning_guide" if guided else "learning_question"
-            return self.page == page and getattr(self, attr, None) is question and not context["locked"]
+            return (self.page == page and course_answer_runtime.shown_question(self, guided) is question
+                    and not context["locked"])
 
         def render(*, follow_cursor=True):
             view = pitch.state_view(question, context["draft"])
@@ -228,8 +229,7 @@ class LearningPitchUIMixin:
                                "guide_answer": None, "guide_correct": False}, instruction_scope=self._learning_item.get("instruction_scope"))
                     self._learning_guide_result.clear()
                 else:
-                    self.learning_store.save_draft(question["id"], updated)
-                    self._learning_question_state = updated
+                    course_answer_runtime.keep_draft(self, question["id"], updated)
             except Exception as exc:
                 from .diagnostic_events import record_error
                 record_error('learning_pitch', 'save', exc)
@@ -284,11 +284,11 @@ class LearningPitchUIMixin:
                 # The editor now gives that boundary; keep the normalized
                 # response and reversible draft together at actual submission.
                 try:
-                    self.learning_store.save_draft(question["id"], context["draft"])
+                    course_answer_runtime.service(self).save_draft(question["id"], context["draft"])
                 except Exception as exc:
                     message.text = "暂未保存，当前输入仍保留：" + str(exc)
                     return
-                self._learning_question_state = context["draft"]
+                course_answer_runtime.set_draft(self, context["draft"])
                 self.submit_learning_answer(answer, question_id=question["id"])
 
         children = [holder]
