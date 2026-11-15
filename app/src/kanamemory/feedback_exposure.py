@@ -2,6 +2,7 @@
 import json
 
 from .feedback_bindings import candidates, intact
+from . import kana_attempt_runtime as kana_attempt
 
 
 def origin_questions(context):
@@ -86,6 +87,6 @@ def expose(app, record, bindings):
     # course drafts. Do not route its reserved question through save_draft.
     app._mark_visible_tutor_help(set(by_target), abilities_by_target=by_target, sources={'ai', 'tutor'})
     keys = mark_legacy_heads(app.store, origins)
-    if keys: app._assisted_attempts.update(keys)
+    if keys: kana_attempt.assisted(app).update(keys)
     if (getattr(app, 'session_id', None), getattr(app, 'question_index', None)) in keys:
-        app.answer_revealed = True
+        kana_attempt.set_revealed(app, True)

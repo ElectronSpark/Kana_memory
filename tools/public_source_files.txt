@@ -228,6 +228,9 @@ app/src/kanamemory/ink_renderer.py
 app/src/kanamemory/intro_batch.py
 app/src/kanamemory/intro_batch_quiz.py
 app/src/kanamemory/intro_batch_runtime.py
+app/src/kanamemory/kana_attempt_runtime.py
+app/src/kanamemory/kana_line/__init__.py
+app/src/kanamemory/kana_line/attempt.py
 app/src/kanamemory/intro_batch_state.py
 app/src/kanamemory/intro_batch_ui.py
 app/src/kanamemory/kana_ability_bridge.py
@@ -1000,6 +1003,7 @@ tests/test_course_answering.py
 tests/test_course_line_pages.py
 tests/test_course_teaching_pages.py
 tests/test_course_teaching.py
+tests/test_kana_attempt.py
 tests/test_course_guide_service.py
 tests/test_course_batch_pages.py
 tests/test_course_decide.py

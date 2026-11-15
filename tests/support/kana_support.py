@@ -8,90 +8,100 @@ session's attempts as assisted or answered. An attempt is named by ``(session id
 """
 from __future__ import annotations
 
+from kanamemory import kana_attempt_runtime as _line
+from kanamemory.kana_line.attempt import AttemptMarks, KanaAttempt
+
 
 # --- the evidence of the attempt on the page ----------------------------------------------------------------------
 
 def answer_revealed(app):
     """Whether this attempt saw the answer or a hint (it then counts as assisted)."""
-    return app.answer_revealed
+    return _line.revealed(app)
 
 
 def set_answer_revealed(app, value):
-    app.answer_revealed = value
+    _line.set_revealed(app, value)
 
 
 def answered_text(app):
     """The submitted answer, None before a submit."""
-    return app.answered_text
+    return _line.answered_text(app)
 
 
 def set_answered_text(app, value):
-    app.answered_text = value
+    _line.set_answered_text(app, value)
 
 
 def answer_correct(app):
     """The verdict of the submitted answer."""
-    return app.answer_correct
+    return _line.correct(app)
 
 
 def set_answer_correct(app, value):
-    app.answer_correct = value
+    _line.set_correct(app, value)
 
 
 def question_audio_ok(app):
     """Whether the question's sound was played to its end (always true for a question that is not heard)."""
-    return app.question_audio_ok
+    return _line.audio_ok(app)
 
 
 def set_question_audio_ok(app, value):
-    app.question_audio_ok = value
+    _line.set_audio_ok(app, value)
 
 
 def question_started(app):
     """The monotonic time at which the question page was drawn."""
-    return app._question_started
+    return _line.started(app)
 
 
 def set_question_started(app, value):
-    app._question_started = value
+    _line.set_started(app, value)
 
 
 def answer_submitted_at(app):
     """The UTC time of the first submit as ISO text, None before it."""
-    return app._answer_submitted_at
+    return _line.submitted_at(app)
 
 
 def set_answer_submitted_at(app, value):
-    app._answer_submitted_at = value
+    _line.set_submitted_at(app, value)
 
 
 def answer_duration_ms(app):
     """Milliseconds from the page's drawing to the first submit."""
-    return app._answer_duration_ms
+    return _line.duration_ms(app)
 
 
 def set_answer_duration_ms(app, value):
-    app._answer_duration_ms = value
+    _line.set_duration_ms(app, value)
 
 
 # --- the marks of the session's attempts ---------------------------------------------------------------------------
 
+def _own_marks(app):
+    """The app object's marks; a hand-made object that has none yet gets empty ones."""
+    if not isinstance(getattr(app, "_kana_marks", None), AttemptMarks):
+        _line.new_marks(app)
+    return _line.marks(app)
+
+
 def assisted_attempts(app):
     """The set of attempts that saw help; the line's own set, changed in place."""
-    return app._assisted_attempts
+    return _line.assisted(app)
 
 
 def set_assisted_attempts(app, value):
-    app._assisted_attempts = value
+    _own_marks(app).assisted = value
 
 
 def answered_attempts(app):
     """The set of attempts already submitted; the line's own set, changed in place."""
-    return app._answered_attempts
+    return _line.answered(app)
 
 
 def set_answered_attempts(app, value):
-    app._answered_attempts = value
+    _own_marks(app).answered = value
 
 
 # --- hand-made app objects ------------------------------------------------------------------------------------------
@@ -123,9 +133,9 @@ _READERS = {
 }
 
 _KEPT = {
-    "answer_revealed": "answer_revealed", "answered_text": "answered_text", "answer_correct": "answer_correct",
-    "question_audio_ok": "question_audio_ok", "question_started": "_question_started",
-    "answer_submitted_at": "_answer_submitted_at", "answer_duration_ms": "_answer_duration_ms",
+    "answer_revealed": "revealed", "answered_text": "answered_text", "answer_correct": "correct",
+    "question_audio_ok": "audio_ok", "question_started": "started",
+    "answer_submitted_at": "submitted_at", "answer_duration_ms": "duration_ms",
 }
 
 
@@ -142,4 +152,4 @@ def marks(app):
 def kept_evidence(**fields):
     """What a practice page kept for Back holds of the attempt of its moment: the entries of its saved bindings
     that give these values (named like the readers above) back to the practice when the learner returns to it."""
-    return {_KEPT[name]: value for name, value in fields.items()}
+    return {"_kana_attempt": KanaAttempt(**{_KEPT[name]: value for name, value in fields.items()})}

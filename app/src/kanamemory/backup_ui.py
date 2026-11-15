@@ -7,6 +7,7 @@ from .backup_worker import BackupJob, BackupCancelled
 from .domain import StudyStore
 from .learning_store import LearningStore
 from . import progress_backup
+from . import kana_attempt_runtime as kana_attempt
 
 
 def _other_app_work():
@@ -204,8 +205,8 @@ async def restore(app):
             raise RuntimeError('学习记录未替换。')
         app.session_id, app.questions, app.question = None, [], None
         app.question_index = app.session_right = 0
-        app._assisted_attempts.clear()
-        app._answered_attempts.clear()
+        kana_attempt.assisted(app).clear()
+        kana_attempt.answered(app).clear()
         app.back_stack.pages.clear()
         app._practice_preferences = app._clean_preferences(app.store.get_setting('practice_preferences', {}))
         app.show_home()

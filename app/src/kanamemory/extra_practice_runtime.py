@@ -126,8 +126,9 @@ def _hold_batch(app, session_id):
     a checkpoint of the replaced session can then never be written over the new one."""
     app.questions, app.session_id = app.store.get_session_questions(session_id), session_id
     app.question_index, app.session_right = 0, 0
-    for name in ("_assisted_attempts", "_answered_attempts"):
-        getattr(app, name, set()).clear()
+    marks = getattr(app, "_kana_marks", None)
+    if marks is not None:
+        marks.clear()
 
 
 def _forget_batch(app, session_id):

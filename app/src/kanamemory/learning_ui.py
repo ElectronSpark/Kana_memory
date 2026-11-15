@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from . import app_clock
+from . import kana_attempt_runtime as kana_attempt
 from copy import deepcopy
 import asyncio
 import random
@@ -177,7 +178,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if (index != 0 or self.session_right != 0 or not questions or questions[0] != question
                 or self.store._session_lane(sid) != self.store.practice_lane):
             raise ValueError("The introduction does not match a newly started queue")
-        assisted = [i for session, i in self._assisted_attempts if session == sid]
+        assisted = [i for session, i in kana_attempt.assisted(self) if session == sid]
         self.store.save_session_progress(sid, index, self.session_right, assisted, {})
         pending = self.store.load_session_progress()
         if pending is None or pending["session_id"] != sid or pending["question_index"] != index:

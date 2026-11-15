@@ -6,6 +6,8 @@ from pathlib import Path
 import time
 
 from .feedback_context import capture_feedback_context, context_sha256
+from . import kana_attempt_runtime as kana_attempt
+from .kana_line import attempt as attempt_rules
 from .feedback_store import FeedbackStore
 
 
@@ -71,7 +73,7 @@ class FeedbackLifecycleMixin:
         extra = {name: getattr(self, name) for name in REPORT_BINDINGS.get(self.page, ()) if hasattr(self, name)}
         extra["_active_stroke"] = getattr(self, "_active_stroke", None)
         frame = {"page": previous, "stack": list(self.back_stack.pages), "bindings": extra,
-                 "entered": time.monotonic(), "question_started": getattr(self, "_question_started", None)}
+                 "entered": time.monotonic(), "question_started": kana_attempt.attempt(self).get("started")}
         self._feedback_return_stack.append(frame)
         self._audio_serial += 1
         self._ink_revision += 1
@@ -127,7 +129,7 @@ class FeedbackLifecycleMixin:
                 self._feedback_manager_controls[key].value = value
         started = frame["question_started"]
         if started is not None:
-            self._question_started = started + time.monotonic() - frame["entered"]
+            kana_attempt.set_started(self, attempt_rules.moved_start(started, time.monotonic(), frame["entered"]))
 
     def return_from_feedback_detail(self):
         state = dict(getattr(self, "_feedback_manager_state", {}))

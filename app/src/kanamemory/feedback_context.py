@@ -17,6 +17,7 @@ import re
 from pathlib import PurePath
 
 from .arrangement.services.preferences import KEYS as ARRANGEMENT_KEYS
+from .kana_line.attempt import KanaAttempt
 
 FORMAT = "kanamemory-feedback-context"
 VERSION = 1
@@ -460,15 +461,21 @@ def _capture_practice(c, app, page):
                 c.warn("practice/session", "session_read_failed", error_type=type(exc).__name__)
     if page in _QUESTION_PAGES:
         result.update(_question_capture(c, c.attr(app, "question", "practice/question"), "practice"))
-        for name in ("answer_revealed", "answered_text", "answer_correct", "question_audio_ok",
-                     "word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_position",
+        attempt = c.attr(app, "_kana_attempt", "practice/draft/attempt")
+        evidence = attempt.set_fields() if isinstance(attempt, KanaAttempt) else {}
+        for name, field in (("answer_revealed", "revealed"), ("answered_text", "answered_text"),
+                            ("answer_correct", "correct"), ("question_audio_ok", "audio_ok")):
+            if field in evidence:
+                result.setdefault("draft", {})[name] = c.copy(evidence[field], "practice/draft/" + name)
+        for name in ("word_answer", "romaji_answer", "word_romaji_parts", "word_romaji_position",
                      "word_romaji_choices", "word_romaji_current", "word_romaji_plan", "word_romaji_unit_mode"):
             value = c.attr(app, name, "practice/draft/" + name, _MISSING)
             if value is not _MISSING:
                 result.setdefault("draft", {})[name] = c.copy(value, "practice/draft/" + name)
         index = c.attr(app, "question_index", "practice/index")
-        for name in ("_assisted_attempts", "_answered_attempts"):
-            indices = c.attr(app, name, "practice/" + name, ())
+        marks = c.attr(app, "_kana_marks", "practice/marks")
+        for name, field in (("_assisted_attempts", "assisted"), ("_answered_attempts", "answered")):
+            indices = c.attr(marks, field, "practice/" + name, ())
             if isinstance(indices, (set, list, tuple)):
                 session_id = c.attr(app, "session_id", "practice/session_id")
                 result[name.removeprefix("_")] = index in indices or (session_id, index) in indices

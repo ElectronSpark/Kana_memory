@@ -89,6 +89,8 @@ REPORT_PAGES = {"report_editor", "report_list", "report_detail", "feedback_analy
 QUESTION_PAGES = {"question", "word_question", "ink_question"}
 # WP5: short wait page while a worker assembles the kana queue.
 from .next_step.display import KANA_ASSEMBLY_PAGE
+from . import kana_attempt_runtime as kana_attempt
+from .kana_line import attempt as attempt_rules
 # Header subtitle per page (review 2026-11-08 section 5); "" hides it.
 DEFAULT_SUBTITLE = "假名 · 字源 · 听写 · 间隔复习"
 PAGE_SUBTITLES = {KANA_ASSEMBLY_PAGE: "", "content_libraries": "内容库与路线", "practice_deck": "", "extra_intro": ""}
@@ -104,7 +106,7 @@ CARD_STATES = {"全部状态": "all", "已到期": "due", "未开始": "new", "�
                "复习中": "review", "重新学习": "relearning", "已暂停": "suspended", "今日暂缓": "buried"}
 INK_PAGES = {"free_ink", "ink_question"}
 INK_BINDINGS = "free_ink strokes ink_width ink_height _ink_view_width _ink_view_height canvas ink_result_box ink_status_label recognize_button ink_model_panel".split()
-PRACTICE_BINDINGS = "questions question_index session_id question session_right script use_full_keyboard answer_revealed answered_text answer_correct question_audio_ok _question_started _answer_submitted_at _answer_duration_ms question_notice practice_preview_slot word_conversion_source word_conversion_convention word_used_conversion".split()
+PRACTICE_BINDINGS = "questions question_index session_id question session_right script use_full_keyboard _kana_attempt question_notice practice_preview_slot word_conversion_source word_conversion_convention word_used_conversion".split()
 PAGE_BINDINGS = {
     "learning_familiarity": ["_course_teaching"],
     "learning_intro": ["_course_teaching"],
@@ -266,8 +268,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.question = None
         self.session_right = 0
         # These are attempt facts, never rolled back with a retained page view.
-        self._assisted_attempts = set()
-        self._answered_attempts = set()
+        kana_attempt.new_marks(self)
         self._page_token = 0
         self._paint_handle = None
         self._review_wait_handle = None
@@ -648,11 +649,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return True
         if saw_feedback and self.page in {"question", "word_question", "ink_question"} and self.question is feedback_question:
             # Returning after seeing the answer must not count as fresh recall.
-            self._assisted_attempts.add(self._attempt_key())
-            self._answered_attempts.discard(self._attempt_key())
+            attempt_rules.returned_from_result(kana_attempt.marks(self), self._attempt_key())
         if self.page in QUESTION_PAGES:
-            self.answer_revealed = self.answer_revealed or self._attempt_key() in self._assisted_attempts
-            if self.answer_revealed:
+            kana_attempt.set_revealed(self, kana_attempt.revealed(self) or self._attempt_key() in kana_attempt.assisted(self))
+            if kana_attempt.revealed(self):
                 self.question_notice.text = ("已查看答案或学习提示，本题不计入无提示回忆。"
                     if self.question.kind in WORD_PRACTICE_KINDS else "已查看答案或学习提示，本题仅安排再学一次。")
         if self.page == "home":
@@ -1161,9 +1161,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             page.name in QUESTION_PAGES and (page.bindings.get("session_id"), page.bindings.get("question_index")) == key
             for page in self.back_stack.pages
         )
-        if self.session_id is not None and pending_question and key not in self._answered_attempts:
-            self._assisted_attempts.add(key)
-            self.answer_revealed = True
+        if self.session_id is not None and pending_question and key not in kana_attempt.answered(self):
+            kana_attempt.assisted(self).add(key)
+            kana_attempt.set_revealed(self, True)
             self._checkpoint()
             if self.page in QUESTION_PAGES:
                 self.question_notice.text = ("已查看学习提示，本题不计入无提示回忆。"
@@ -1482,8 +1482,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.session_id, self.questions = revised["session_id"], revised["questions"]
             self.question_index, self.session_right = revised["question_index"], revised["session_right"]
             self.question = self.questions[self.question_index] if self.question_index < len(self.questions) else None
-            self._assisted_attempts = {(self.session_id, index) for index in revised["assisted_indices"]}
-            self._answered_attempts.clear()
+            kana_attempt.set_assisted(self, attempt_rules.saved_assisted(self.session_id, revised["assisted_indices"]))
+            kana_attempt.answered(self).clear()
             self.back_stack.discard(PRACTICE_PAGES)
             KanaMemory._cancel_review_wait(self)
             self.platform.stop()
@@ -1520,7 +1520,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return
         if getattr(self, "page", None) not in PRACTICE_PAGES:
             away = ("away", self.session_id,
-                    frozenset(index for sid,index in self._assisted_attempts if sid == self.session_id))
+                    frozenset(index for sid,index in kana_attempt.assisted(self) if sid == self.session_id))
             mark = KanaMemory._checkpoint_mark(self, away)
             saved = getattr(self, "_checkpoint_saved_mark", None)
             # Any save of this session already merged these assisted indices; a
@@ -1533,7 +1533,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 pending = (self.store.load_session_progress(lazy_questions=True)
                            if KanaMemory._lazy_practice_questions(self) else self.store.load_session_progress())
                 if pending and pending["session_id"] == self.session_id:
-                    assisted = [index for sid,index in self._assisted_attempts if sid == self.session_id]
+                    assisted = [index for sid,index in kana_attempt.assisted(self) if sid == self.session_id]
                     from .session_content import fingerprint
                     index = pending["question_index"]
                     question = pending["questions"][index] if index < len(pending["questions"]) else None
@@ -1547,16 +1547,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self._checkpoint_saved_mark = None
             self.store.clear_session_progress()
             return
-        state = {"page": self.page, "answer_revealed": bool(getattr(self, "answer_revealed", False)),
-                 "feedback_pending": self.page == "feedback", "answered_text": getattr(self, "answered_text", None) or "",
-                 "question_audio_ok": bool(getattr(self, "question_audio_ok", False)),
+        state = {"page": self.page, "answer_revealed": bool(kana_attempt.attempt(self).get("revealed", False)),
+                 "feedback_pending": self.page == "feedback", "answered_text": kana_attempt.attempt(self).get("answered_text") or "",
+                 "question_audio_ok": bool(kana_attempt.attempt(self).get("audio_ok", False)),
                  "use_full_keyboard": bool(getattr(self, "use_full_keyboard", False))}
         if self.page in {"session_wait", "dependency_wait"}:
             state = {"page": self.page, "use_full_keyboard": bool(getattr(self, "use_full_keyboard", False))}
-        if self.page == "feedback" and getattr(self, "_answer_submitted_at", None):
-            state.update(submitted_at_utc=self._answer_submitted_at,
-                         answer_duration_ms=self._answer_duration_ms,
-                         answer_correct=bool(self.answer_correct))
+        if self.page == "feedback" and kana_attempt.attempt(self).get("submitted_at"):
+            state.update(submitted_at_utc=kana_attempt.submitted_at(self),
+                         answer_duration_ms=kana_attempt.duration_ms(self),
+                         answer_correct=bool(kana_attempt.correct(self)))
         if self.page not in {"session_wait", "dependency_wait"} and self.question.kind in KANA_WORD_PRACTICE_KINDS | {"romaji_kana_full"}:
             state["word_answer"] = getattr(self, "word_answer", "")
             if self.question.kind in WORD_PRACTICE_KINDS:
@@ -1571,7 +1571,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             state["romaji_answer"] = getattr(self, "romaji_answer", "")
         if self.page not in {"session_wait", "dependency_wait"} and self.question.kind in {"kana_handwriting", "romaji_handwriting"}:
             state.update(strokes=getattr(self, "strokes", []), ink_width=getattr(self, "ink_width", 360), ink_height=getattr(self, "ink_height", 210))
-        assisted = [index for sid,index in self._assisted_attempts if sid == self.session_id]
+        assisted = [index for sid,index in kana_attempt.assisted(self) if sid == self.session_id]
         try:
             import json
             from .session_content import fingerprint
@@ -1725,10 +1725,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.research_enabled = any_question_metadata(self.questions, "research_content")
         state = pending["state"]
         self.use_full_keyboard = state.get("use_full_keyboard", False)
-        self._assisted_attempts = {(self.session_id, index) for index in pending["assisted_indices"]}
+        kana_attempt.set_assisted(self, attempt_rules.saved_assisted(self.session_id, pending["assisted_indices"]))
         if state.get("answer_revealed"):
-            self._assisted_attempts.add(self._attempt_key())
-        self._answered_attempts.clear()
+            kana_attempt.assisted(self).add(self._attempt_key())
+        kana_attempt.answered(self).clear()
         self.back_stack.discard(PRACTICE_PAGES)
         self._restoring_practice = True
         try:
@@ -1759,7 +1759,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             if preserve_audio and state.get("question_audio_ok"):
                 # Appending keeps the current attempt alive. A normal reopen
                 # still asks for fresh playback before an unsubmitted answer.
-                self.question_audio_ok = True
+                kana_attempt.set_audio_ok(self, True)
             if self.question.kind in KANA_WORD_PRACTICE_KINDS | {"romaji_kana_full"}:
                 self.word_answer = state.get("word_answer", "")
                 self.word_answer_label.text = ui.wrapped(self.word_answer or "＿", columns=18)
@@ -1787,13 +1787,12 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     self.strokes = [[(x, y, timestamp + offset) for x,y,timestamp in stroke] for stroke in self.strokes]
                 self.ink_width, self.ink_height = state.get("ink_width", 360), state.get("ink_height", 210)
                 self._redraw_ink()
-            if self.answer_revealed:
+            if kana_attempt.revealed(self):
                 self.question_notice.text = ("已查看答案或学习提示，本题不计入无提示回忆。"
                     if self.question.kind in WORD_PRACTICE_KINDS else "已查看答案或学习提示，本题仅安排再学一次。")
             if state.get("feedback_pending"):
-                self.question_audio_ok = (self.question.kind not in LISTENING_PRACTICE_KINDS or state.get("question_audio_ok", False))
-                self._answer_submitted_at = state.get("submitted_at_utc")
-                self._answer_duration_ms = state.get("answer_duration_ms", 0)
+                kana_attempt.set_attempt(self, attempt_rules.restored_result(
+                    kana_attempt.attempt(self), state, heard=self.question.kind in LISTENING_PRACTICE_KINDS))
                 self.check_answer(state.get("answered_text", ""))
         finally:
             self._restoring_practice = False
@@ -1844,8 +1843,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.platform.stop()
         self.session_id, self.questions, self.question = None, [], None
         self.question_index = self.session_right = 0
-        self._assisted_attempts.clear()
-        self._answered_attempts.clear()
+        kana_attempt.assisted(self).clear()
+        kana_attempt.answered(self).clear()
         self.strokes, self._active_stroke = [], None
         self._preview_pending = None
         self._practice_context = False
@@ -2707,8 +2706,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 self.question_index, self.session_right = 0, 0
                 self.script, self.research_enabled = questions[0].script, True
                 self.use_full_keyboard = config["word_table"] == "full"
-                self._assisted_attempts.clear()
-                self._answered_attempts.clear()
+                kana_attempt.assisted(self).clear()
+                kana_attempt.answered(self).clear()
                 self.back_stack.discard(PRACTICE_PAGES)
                 self.show_question()
         except Exception as exc:
@@ -3409,8 +3408,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.questions, self.session_id = questions, session_id
         self.script, self.research_enabled, self.use_full_keyboard = script, research, word_table == "full"
         self.question_index, self.session_right = 0, 0
-        self._assisted_attempts.clear()
-        self._answered_attempts.clear()
+        kana_attempt.assisted(self).clear()
+        kana_attempt.answered(self).clear()
         self.back_stack.discard(PRACTICE_PAGES)
         self.show_question()
 
@@ -3491,9 +3490,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 self.questions = prepared["questions"]
                 self.question_index = prepared["question_index"]
                 self.session_right = prepared["session_right"]
-                self._assisted_attempts = {(self.session_id, index) for index in prepared["assisted_indices"]}
+                kana_attempt.set_assisted(self, attempt_rules.saved_assisted(self.session_id, prepared["assisted_indices"]))
                 if prepared["state"].get("answer_revealed"):
-                    self._assisted_attempts.add((self.session_id, self.question_index))
+                    kana_attempt.assisted(self).add((self.session_id, self.question_index))
                 waiting_until = prepared.get("waiting_until_utc")
         from .practice_round import seal
         seal(self.store)
@@ -3540,7 +3539,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if isinstance(prepared, dict) and prepared.get('content_blocked'):
             from .session_content import RETIRE, retired
             old = next(q for q in self.questions[self.question_index:] if retired(q))
-            self.answer_revealed, self.answered_text, self.answer_correct = False, None, False
+            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
             self.screen('session_wait', '题目内容已更新',
                 self.note('原题和草稿已保存。更新后继续使用原有学习记录。'),
                 ui.button('使用更新后的题目', lambda w, sid=self.session_id, rid=old.metadata[RETIRE]:
@@ -3549,7 +3548,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 ui.button('回到今日', self.show_home))
             return
         if isinstance(prepared, dict) and prepared.get("settings_blocked"):
-            self.answer_revealed, self.answered_text, self.answer_correct = False, None, False
+            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
             self.screen("session_wait", "题型已暂停",
                 self.note("未完成的题目和草稿已保留。开启题型后可继续。"),
                 ui.button("练习设置", self.show_word_drill_setup
@@ -3558,7 +3557,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 ui.button("回到今日", self.show_home))
             return
         if isinstance(prepared, dict) and prepared.get("dependency_blocked"):
-            self.answer_revealed, self.answered_text, self.answer_correct = False, None, False
+            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
             symbols, rule_controls = [], []
             for identity in prepared.get("blocked_prerequisites", ()):
                 if identity.startswith("pronunciation:"):
@@ -3597,7 +3596,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.use_full_keyboard = word_table == "full"
         if waiting_until:
             from .extra_practice_runtime import extra_button_rows
-            self.answer_revealed, self.answered_text, self.answer_correct = False, None, False
+            kana_attempt.set_attempt(self, attempt_rules.cleared(kana_attempt.attempt(self)))
             self._review_wait_until = app_clock.localize(datetime.fromisoformat(waiting_until))
             due = self._review_wait_until.strftime("%H:%M:%S")
             if self._review_wait_until.date() != app_clock.local_now().date():
@@ -3626,12 +3625,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             # rendering an empty input cannot overwrite its saved draft/feedback.
             self.resume_practice(preserve_audio=True)
             return
-        self.answer_revealed = self._attempt_key() in self._assisted_attempts
-        self.answered_text = None
-        self.question_audio_ok = self.question.kind not in LISTENING_PRACTICE_KINDS
-        self._question_started = time.monotonic()
-        self._answer_submitted_at = None
-        self._answer_duration_ms = 0
+        kana_attempt.set_attempt(self, attempt_rules.fresh(
+            kana_attempt.attempt(self), self._attempt_key(), kana_attempt.marks(self),
+            heard=self.question.kind in LISTENING_PRACTICE_KINDS, started=time.monotonic()))
         self.question_notice = ui.label("", size=12, color=MUTED, margin_bottom=2)
         ready_count = (summarize_queue_availability(self.store, prepared).ready_count
                        if isinstance(prepared, dict) else len(self.questions) - self.question_index)
@@ -3881,7 +3877,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.check_answer(compose_romaji_parts(self.word_romaji_plan, self.word_romaji_parts))
 
     def _word_romaji_submission(self, answer):
-        if (self.question.kind != "word_romaji" or self.answer_revealed
+        if (self.question.kind != "word_romaji" or kana_attempt.revealed(self)
                 or not getattr(self, "word_romaji_unit_mode", False)
                 or answer != compose_romaji_parts(self.word_romaji_plan, self.word_romaji_parts)):
             return {}
@@ -4217,7 +4213,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                     text = plan.text
             await self.platform.play(text)
             if token == self._page_token and question is self.question and serial == self._audio_serial:
-                self.question_audio_ok = True
+                kana_attempt.set_audio_ok(self, True)
                 self._checkpoint()
         except Exception as exc:
             if token == self._page_token and serial == self._audio_serial:
@@ -4280,10 +4276,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.alert(str(exc))
 
     def reveal_answer(self, widget=None, **kwargs):
-        if not self.question_audio_ok:
+        if not kana_attempt.audio_ok(self):
             self.alert("请先完整播放声音。语音失败不会计入复习。")
             return
-        self.answer_revealed = True
+        kana_attempt.set_revealed(self, True)
         self.check_answer("")
 
     def _word_spelling_plan(self, answer):
@@ -4294,16 +4290,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if unit_submission:
             analysis = analyze_romaji_parts(self.question.metadata["kana_answer"],
                 unit_submission["word_romaji_parts"], self.question.script, rows,
-                unit_submission["word_romaji_plan"], assisted=self.answer_revealed)
+                unit_submission["word_romaji_plan"], assisted=kana_attempt.revealed(self))
         elif self.question.kind == "word_romaji":
             analysis = analyze_word_romaji(self.question.metadata["kana_answer"], answer, self.question.script,
-                                          rows, assisted=self.answer_revealed)
+                                          rows, assisted=kana_attempt.revealed(self))
         else:
             analysis = analyze_spelling(self.question.answer, answer, self.question.script,
-                rows, assisted=self.answer_revealed,
+                rows, assisted=kana_attempt.revealed(self),
                 accepted_answers=allowed_word_spellings(self.question.answer,
                     metadata=self.question.metadata, accepted_answers=self.question.accepted_answers))
-        if not self.answer_revealed and answer_matches(self.question, answer, **unit_submission) and not analysis["correct"]:
+        if not kana_attempt.revealed(self) and answer_matches(self.question, answer, **unit_submission) and not analysis["correct"]:
             analysis = {**analysis, "correct": True, "units": [], "errors": [],
                         "evidence_limited": True, "accepted_alternative": True}
         if self.question.kind in WORD_PRACTICE_KINDS and getattr(self, "word_used_conversion", False):
@@ -4339,26 +4335,22 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if self.question.kind in WORD_PRACTICE_KINDS and getattr(self, "word_used_conversion", False):
             if self._checkpoint() is False:
                 return
-        if not self.question_audio_ok:
+        if not kana_attempt.audio_ok(self):
             self.alert("请先完整播放声音。语音失败不会计入复习。")
             return
-        self.answer_revealed = self.answer_revealed or self._attempt_key() in self._assisted_attempts
-        if not answer.strip() and not self.answer_revealed:
+        kana_attempt.set_revealed(self, kana_attempt.revealed(self) or self._attempt_key() in kana_attempt.assisted(self))
+        if not answer.strip() and not kana_attempt.revealed(self):
             self.alert("请先输入答案，或选择显示答案。")
             return
-        self.answered_text = answer
         # Freeze retrieval time before showing feedback. Time spent reading the
         # explanation or resuming days later is not extra retention evidence.
-        if not getattr(self, "_answer_submitted_at", None):
-            from .domain import utc_now
-            self._answer_submitted_at = utc_now().isoformat()
-            self._answer_duration_ms = max(0, int((time.monotonic() - self._question_started) * 1000))
-        self._answered_attempts.add(self._attempt_key())
-        if self.answer_revealed:
-            self._assisted_attempts.add(self._attempt_key())
-        self.answer_correct = answer_matches(self.question, answer,
-            **KanaMemory._word_romaji_submission(self, answer)) and not self.answer_revealed
-        feedback_info = {"correct": self.answer_correct, "assisted": self.answer_revealed}
+        from .domain import utc_now
+        kana_attempt.set_attempt(self, attempt_rules.submitted(
+            kana_attempt.attempt(self), answer, self._attempt_key(), kana_attempt.marks(self),
+            utc_iso=lambda: utc_now().isoformat(), monotonic=time.monotonic))
+        kana_attempt.set_attempt(self, attempt_rules.judged(kana_attempt.attempt(self), answer_matches(
+            self.question, answer, **KanaMemory._word_romaji_submission(self, answer))))
+        feedback_info = {"correct": kana_attempt.correct(self), "assisted": kana_attempt.revealed(self)}
         word_practice = self.question.kind in WORD_PRACTICE_KINDS
         if word_practice:
             _, analysis, corrections = KanaMemory._word_spelling_plan(self, answer)
@@ -4367,15 +4359,15 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             children = [
                 build_answer_feedback(feedback_info),
                 build_spelling_comparison(self, self.question.answer, answer,
-                    correct=self.answer_correct, assisted=self.answer_revealed),
+                    correct=kana_attempt.correct(self), assisted=kana_attempt.revealed(self)),
             ]
             unit_submission = KanaMemory._word_romaji_submission(self, answer)
-            if unit_submission and not self.answer_correct and answer == self.question.answer:
+            if unit_submission and not kana_attempt.correct(self) and answer == self.question.answer:
                 mismatches = [f"第 {index + 1} 个「{unit['kana']}」应选 {unit['answer']}（你选 {part}）"
                     for index, (unit, part) in enumerate(zip(self.word_romaji_plan["units"], self.word_romaji_parts))
                     if unit["answer"] != part]
                 children.append(ui.label("请按假名对应选择片段：" + "；".join(mismatches), size=13, color=MUTED))
-            if self.answer_revealed:
+            if kana_attempt.revealed(self):
                 children.append(ui.label("本次不计入假名掌握记录。", size=12, color=MUTED))
             elif analysis.get("used_conversion"):
                 children.append(ui.label("转换辅助 · 本题不调整假名间隔", size=12, color=MUTED))
@@ -4390,19 +4382,19 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 from .practice_round import active as fixed_round
                 children.append(ui.label("错处会用于下一轮安排。" if fixed_round(self.store)
                     else f"保存后追加 {len(corrections)} 道错处补练。", size=12, color=MUTED))
-            elif not self.answer_correct:
+            elif not kana_attempt.correct(self):
                 children.append(ui.label("保存后记录错处；补练遵循当前题型和范围。", size=12, color=MUTED))
             if analysis.get("ambiguous"):
                 children.append(ui.label("对应位置有多种可能，仅记录能确定的假名表现。", size=12, color=MUTED))
         else:
             japanese_answer = self.question.kind in {"romaji_kana", "romaji_kana_full", "romaji_handwriting", "kana_handwriting"}
-            if isolated_kana_question(self.question) and self.answer_correct and normalize("NFC", answer).strip() != normalize("NFC", self.question.answer).strip():
+            if isolated_kana_question(self.question) and kana_attempt.correct(self) and normalize("NFC", answer).strip() != normalize("NFC", self.question.answer).strip():
                 feedback_info["accepted_homophone"] = True
             children = [build_answer_feedback(feedback_info), build_spelling_comparison(self, self.question.answer, answer,
-                        correct=self.answer_correct, assisted=self.answer_revealed,
+                        correct=kana_attempt.correct(self), assisted=kana_attempt.revealed(self),
                         text_role="study" if japanese_answer else "ui", size=24)]
         children[0] = KanaMemory.practice_answer_heading(self, children[0])
-        if not self.answer_correct or self.answer_revealed:
+        if not kana_attempt.correct(self) or kana_attempt.revealed(self):
             from .kana_rule_ui import contextual_rule_ids, rule_help_widgets
             rules = contextual_rule_ids(self.question, analysis if word_practice else None)
             if not word_practice:
@@ -4416,17 +4408,17 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         labels = [(1, "再学一次")]
         if word_practice:
             labels = [(None, "保存并继续")]
-        elif self.answer_correct and correction:
+        elif kana_attempt.correct(self) and correction:
             labels = [(1, "已改对，稍后再复习")]
-        elif self.answer_correct:
+        elif kana_attempt.correct(self):
             labels += [(2, "有些困难"), (3, "记住了"), (4, "很轻松")]
         practice_rows = KanaMemory._practice_only_rows(self)
         if practice_rows:
             labels = []
             children.extend(practice_rows)
         for rating, text in labels:
-            action = ui.button(text, lambda w, r=rating, question=self.question, **kw: self.save_rating(r) if self.question is question else None, primary=word_practice or rating == (3 if self.answer_correct else 1))
-            action.enabled = word_practice or self.answer_correct or rating == 1
+            action = ui.button(text, lambda w, r=rating, question=self.question, **kw: self.save_rating(r) if self.question is question else None, primary=word_practice or rating == (3 if kana_attempt.correct(self) else 1))
+            action.enabled = word_practice or kana_attempt.correct(self) or rating == 1
             children.append(action)
         self.screen("feedback", "拼写反馈" if word_practice else "作答结果", *children)
         self._checkpoint()
@@ -4438,12 +4430,12 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
     def save_rating(self, rating):
         if self.page != "feedback":
             return
-        self.answer_revealed = self.answer_revealed or self._attempt_key() in self._assisted_attempts
+        kana_attempt.set_revealed(self, kana_attempt.revealed(self) or self._attempt_key() in kana_attempt.assisted(self))
         if KanaMemory._go_on_after_practice(self):
             return
         if self.question.kind in WORD_PRACTICE_KINDS:
             rating = None
-        if self.answer_revealed and rating != 1 and self.question.kind not in WORD_PRACTICE_KINDS:
+        if kana_attempt.revealed(self) and rating != 1 and self.question.kind not in WORD_PRACTICE_KINDS:
             self.alert("已查看学习提示，本题只能选择再学一次。")
             return
         try:
@@ -4452,19 +4444,19 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             from .session_content import fingerprint
             finalized_at = utc_now()
             if self.question.kind in WORD_PRACTICE_KINDS:
-                rows, _, corrections = KanaMemory._word_spelling_plan(self, self.answered_text)
+                rows, _, corrections = KanaMemory._word_spelling_plan(self, kana_attempt.answered_text(self))
                 if corrections:
                     KanaMemory._set_queue_kind_policy(self, self.session_id,
                         corrections[0].metadata["practice_config"]["kinds"])
                 extra = {"kana_rows": rows, "spelling_corrections": corrections,
-                         **KanaMemory._word_romaji_submission(self, self.answered_text)}
+                         **KanaMemory._word_romaji_submission(self, kana_attempt.answered_text(self))}
             result = self.store.record_review(self.question.content_id, self.question.kind, self.question.script, rating,
-                                     session_id=self.session_id, question_index=self.question_index, answered_text=self.answered_text,
-                                     outcome="correct" if self.answer_correct else "incorrect", audio_ok=self.question_audio_ok,
-                                     content_version=self.question.metadata["content_version"], assisted=self.answer_revealed,
-                                     duration_ms=getattr(self, "_answer_duration_ms", 0),
+                                     session_id=self.session_id, question_index=self.question_index, answered_text=kana_attempt.answered_text(self),
+                                     outcome="correct" if kana_attempt.correct(self) else "incorrect", audio_ok=kana_attempt.audio_ok(self),
+                                     content_version=self.question.metadata["content_version"], assisted=kana_attempt.revealed(self),
+                                     duration_ms=kana_attempt.attempt(self).get("duration_ms", 0),
                                      now=(finalized_at if self.question.kind in WORD_PRACTICE_KINDS else
-                                          datetime.fromisoformat(self._answer_submitted_at) if getattr(self, "_answer_submitted_at", None) else None),
+                                          datetime.fromisoformat(kana_attempt.submitted_at(self)) if kana_attempt.attempt(self).get("submitted_at") else None),
                                      finalized_at=finalized_at, fair_new=KanaMemory._lazy_practice_questions(self),
                                      question_fingerprint=fingerprint(self.question),
                                      **extra)
@@ -4480,7 +4472,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 return
             self.alert(f"复习记录尚未保存：{exc}")
             return
-        if self.answer_correct and not self.question.metadata.get("spelling_correction_of"):
+        if kana_attempt.correct(self) and not self.question.metadata.get("spelling_correction_of"):
             self.session_right += 1
         self.question_index += 1
         if (self.question.metadata.get("practice_config", {}).get("schedule_mode") == "spaced"
@@ -4523,7 +4515,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         return StudyPathRuntimeMixin.study_arrangement(self).practice
 
     def _session_assisted(self):
-        return [index for sid, index in self._assisted_attempts if sid == self.session_id]
+        return [index for sid, index in kana_attempt.assisted(self) if sid == self.session_id]
 
     def _practice_only_rows(self):
         """A kana answer that is practice only (design 12 E3, E4, UI8): its result rows instead of ratings.
@@ -4544,9 +4536,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         practice = None
         try:
             practice = KanaMemory._queue_practice(self)
-            effect = practice.answer(self.session_id, self.question_index, question, bool(self.answer_correct),
-                                     datetime.fromisoformat(self._answer_submitted_at),
-                                     answered_text=self.answered_text or "", assisted=bool(self.answer_revealed))
+            effect = practice.answer(self.session_id, self.question_index, question, bool(kana_attempt.correct(self)),
+                                     datetime.fromisoformat(kana_attempt.submitted_at(self)),
+                                     answered_text=kana_attempt.answered_text(self) or "", assisted=bool(kana_attempt.revealed(self)))
         except Exception as exc:
             # Not decided: formal. Decided, then the confirmed-miss write failed: practice only (RETRY).
             from .diagnostic_events import record_error
@@ -4556,7 +4548,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return []
         from .arrangement.services.deck_presenter import practice_result
         from .arrangement.ui.practice_deck_page import practice_result_rows
-        return practice_result_rows(practice_result(bool(self.answer_correct), effect, practice_only_note=True),
+        return practice_result_rows(practice_result(bool(kana_attempt.correct(self)), effect, practice_only_note=True),
                                     on_continue=lambda: self.save_rating(None) if self.question is question else None)
 
     def _go_on_after_practice(self):
