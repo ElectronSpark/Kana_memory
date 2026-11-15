@@ -1013,7 +1013,7 @@ def test_a_line_entry_failing_behind_a_sealed_round_leaves_it_sealed(app, monkey
     assert plan[:2] == (True, False) and cs.page(app) == ("learning_wait", "无法准备下一题")
     app.continue_learning = real
     app.continue_study_path()
-    assert cs.round_plan(app) == plan and app._learning_question["id"] == qid
+    assert cs.round_plan(app) == plan and course_support.course_question(app)["id"] == qid
 
 
 def test_a_take_over_failing_at_a_round_end_leaves_the_round_finished(app, monkeypatch):

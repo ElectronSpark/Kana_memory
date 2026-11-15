@@ -7,6 +7,7 @@ from support.learning_fixtures import learning_app, click
 from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app
 from support.fake_ui import text_of, descendants
+from support import course_support
 from kanamemory import intro_batch
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_ui import LEARNING_PREFS
@@ -173,7 +174,7 @@ def test_review_backlog_hint_does_not_block(learning_app):
     app.learning_store.advance_instruction(due["id"], "guide_correct", now=app._test_clock[0] - timedelta(minutes=3))
     app.continue_learning()
     # Dispatch still owns order: the due review comes first, the batch waits.
-    assert app.page == "learning_question" and app._learning_question["target_id"] == due["id"]
+    assert app.page == "learning_question" and course_support.course_question(app)["target_id"] == due["id"]
     assert app.learning_store.intro_batch()["card_index"] == 0
     # Returning to the open batch shows the hint, which never blocks it.
     app.show_intro_batch()

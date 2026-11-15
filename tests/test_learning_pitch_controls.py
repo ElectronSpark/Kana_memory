@@ -17,6 +17,7 @@ from kanamemory import pitch_practice as pitch
 
 
 from support.learning_pitch_controls_support import synthetic_item, prepare, diagrams, button
+from support import course_support
 
 
 def test_fill_updates_visible_kana_and_backspace_without_creating_review(learning_app):
@@ -39,7 +40,7 @@ def test_fill_updates_visible_kana_and_backspace_without_creating_review(learnin
     assert diagrams(app)[0]._feedback_fragment["characters"] == characters
     assert not app.learning_store.history()
     assert legacy_dump(app.store) == before
-    app.submit_learning_answer(app._learning_question_state["answer"])
+    app.submit_learning_answer(course_support.answer_draft(app)["answer"])
     assert app.page == "learning_question"
 
 

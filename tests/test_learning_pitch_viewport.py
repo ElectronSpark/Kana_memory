@@ -22,6 +22,7 @@ from support.learning_fixtures import legacy_dump
 from support.learning_pitch_controls_support import diagrams
 from support.learning_pitch_controls_support import prepare as prepare_single
 from support.fake_ui import View, ScrollView
+from support import course_support
 
 
 @pytest.fixture
@@ -223,7 +224,7 @@ def test_stale_deferred_scroll_does_not_move_the_view(retained_viewport, registr
     old_callback = jobs[-1].callback
     if change == 'page': app.page = 'home'
     elif change == 'context': app._learning_pitch_context = {}
-    elif change == 'question': app._learning_question = {}
+    elif change == 'question': course_support.set_course_question(app, {})
     elif change == 'new_edit': act(app, ['split'])
     else: ctx['locked'] = True
     viewport.vertical_position = 0

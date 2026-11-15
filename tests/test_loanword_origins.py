@@ -21,6 +21,7 @@ from kanamemory.learning_ui import LEARNING_PREFS
 from support.app_fixtures import question_app as question_app, setup_app as setup_app
 from support.fake_ui import text_of
 from support.learning_fixtures import NOW, click, learning_app as learning_app
+from support import course_support
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SPEC = importlib.util.spec_from_file_location("build_teaching_content", _ROOT / "tools/build_teaching_content.py")
@@ -325,7 +326,7 @@ def test_formal_question_and_its_hints_never_show_the_line_the_result_detail_doe
     assert app.page == "learning_prerequisite" and not shown(app)
     app.continue_learning()
     assert app.page == "learning_question" and not shown(app)
-    click(app, app._learning_question["answer"])
+    click(app, course_support.course_question(app)["answer"])
     assert app.page == "learning_feedback"
     app.learning_feedback_detail()
     assert app.page == "learning_feedback_detail" and shown(app)

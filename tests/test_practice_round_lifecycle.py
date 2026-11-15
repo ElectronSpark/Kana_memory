@@ -17,6 +17,7 @@ from support.learning_store_fixtures import START, item, question, ready
 from support.app_fixtures import setup_app, question_app
 from support.learning_fixtures import learning_app
 from support.study_path_runtime_support import path_app, home
+from support import course_support
 
 NOW = START + timedelta(minutes=10)
 
@@ -73,7 +74,7 @@ def test_controller_home_resume_keeps_initial_order_when_other_draft_priority_ch
     rounds.enable(app.store)
     app.continue_study_path()
     assert app.page == 'learning_question'
-    assert app._learning_question['id'] == first['id']
+    assert course_support.course_question(app)['id'] == first['id']
     plan = rounds.begin(app.store)
     initial = plan.course_order
     assert initial == (first['id'], second['id'])
@@ -83,7 +84,7 @@ def test_controller_home_resume_keeps_initial_order_when_other_draft_priority_ch
     app.continue_study_path()
     assert rounds.begin(app.store) is plan
     assert plan.course_order == initial
-    assert app._learning_question['id'] == first['id']
+    assert course_support.course_question(app)['id'] == first['id']
     assert rows(app.store, 'learning_question') == before
     assert rows(app.store, 'learning_event') == []
 

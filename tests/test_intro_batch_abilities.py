@@ -13,6 +13,7 @@ from support.course_support import batch_quiz_question
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of, descendants
 from support.learning_practice_policy_support import raw
+from support import course_support
 from kanamemory import intro_batch
 from kanamemory.course_planning import iter_question_plans
 from kanamemory.course_line.batch_display import CARD_BUTTON
@@ -62,7 +63,7 @@ def through_batch(app, item=None, kinds=KINDS):
 
 
 def answer_formally(app, rating="记住了"):
-    q = app._learning_question
+    q = course_support.course_question(app)
     click(app, q["answer"])
     assert app.page == "learning_feedback"
     click(app, rating)
@@ -111,7 +112,7 @@ def test_gate_order_counts_hint_and_reading_choice_before_text(learning_app):
     assert (counts["ready"], counts["instruction"], counts["disabled"]) == (1, 0, 0)
     assert store.current(KINDS)["question"]["ability"] == "understanding"
     app.continue_learning()
-    assert app.page == "learning_question" and app._learning_question["kind"] == "vocab_meaning"
+    assert app.page == "learning_question" and course_support.course_question(app)["kind"] == "vocab_meaning"
     assert CARD_BUTTON in text_of(app.body) and "新能力" not in text_of(app.body)
     answer_formally(app)
     assert gate(app)["closed"] == {"use", "listening"}
@@ -119,7 +120,7 @@ def test_gate_order_counts_hint_and_reading_choice_before_text(learning_app):
     app.continue_learning()
     # Reading opens without an intro page or familiarity picker.
     assert app.page == "learning_question", app.page
-    q = app._learning_question
+    q = course_support.course_question(app)
     assert q["ability"] == "reading" and q["kind"] == "vocab_reading_choice"
     body = text_of(app.body)
     assert "新能力：读法 — 先选读音" in body and CARD_BUTTON in body and "初学" not in body
@@ -183,12 +184,12 @@ def test_card_lookup_marks_the_answer_assisted_and_does_not_open_the_next_abilit
     through_batch(app)
     later(app)
     app.continue_learning()
-    q = app._learning_question
+    q = course_support.course_question(app)
     click(app, CARD_BUTTON)
     assert app.page == "learning_prerequisite" and "語一" in text_of(app.body)
     assert app.learning_store.get_question(q["id"])["draft"]["assisted"] is True
     click(app, "返回题目")
-    assert app.page == "learning_question" and app._learning_question["id"] == q["id"]
+    assert app.page == "learning_question" and course_support.course_question(app)["id"] == q["id"]
     click(app, q["answer"])
     # Assisted correct: the ordinary rule offers no success rating.
     assert "记住了" not in text_of(app.body)

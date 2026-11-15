@@ -979,6 +979,8 @@ tests/test_home_counts.py
 tests/test_next_step_pages.py
 tests/test_continue_characterisation.py
 tests/test_course_decision_characterisation.py
+tests/test_course_result_characterisation.py
+tests/test_course_answer_characterisation.py
 tests/test_course_line_pages.py
 tests/test_course_batch_pages.py
 tests/test_course_decide.py

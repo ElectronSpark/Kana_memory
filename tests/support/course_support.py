@@ -522,3 +522,272 @@ def record_known_reads(monkeypatch, *, log=None):
         return call.result
     monkeypatch.setattr(course_planning, "known_ids", read)
     return log
+
+
+# --- the question being answered (答题) -----------------------------------------------------------------------
+
+def course_question(app):
+    """The course question on the page: the one being answered or, on its result page, the one just answered
+    (None when the line holds none)."""
+    return getattr(app, "_learning_question", None)
+
+
+def set_course_question(app, question):
+    """As if ``question`` were the course question on the page (None: the line holds none)."""
+    app._learning_question = question
+
+
+def answer_draft(app):
+    """The draft the line holds for the question on the page: what was typed or chosen so far and the aids
+    used. It is the line's own dict — changing it changes the draft the line goes on with."""
+    return app._learning_question_state
+
+
+def set_answer_draft(app, draft):
+    """As if the line held ``draft`` for the question on the page."""
+    app._learning_question_state = draft
+
+
+def typed_answer(app):
+    """The text the page's answer field started with (the draft's answer when the page was drawn)."""
+    return app._learning_answer
+
+
+def chosen_blocks(app):
+    """The blocks chosen so far for a question answered by putting blocks together, in their order."""
+    return app._learning_parts
+
+
+def set_chosen_blocks(app, parts):
+    """As if these blocks were the ones chosen so far."""
+    app._learning_parts = parts
+
+
+def used_blocks(app):
+    """The positions of the offered blocks that the chosen ones use."""
+    return app._learning_used
+
+
+def set_used_blocks(app, used):
+    """As if the chosen blocks used these positions of the offered ones."""
+    app._learning_used = used
+
+
+def audio_heard(app):
+    """Whether the audio of the question on the page has played successfully (a heard question can be
+    answered only then)."""
+    return app._learning_audio_ok
+
+
+def set_audio_heard(app, heard):
+    """As if the audio of the question on the page had (or had not) played successfully."""
+    app._learning_audio_ok = heard
+
+
+def result_view(app):
+    """(question id, result) of the result page drawn last."""
+    return app._learning_feedback_view_result
+
+
+# --- answering a question, up to the submit: the answer field, the status line, what one drawing reads ------
+
+def answer_field(app):
+    """The text field of the question page drawn last (None when that page has none)."""
+    return getattr(app, "_learning_input", None)
+
+
+def type_into(field, text):
+    """Type ``text`` into an answer field as the keyboard does: the value changes, then its change handler runs
+    with the field itself."""
+    field.value = text
+    field.on_change(field)
+
+
+def status_text(app):
+    """The status line under the answer controls of the question page drawn last ("" when it says nothing)."""
+    status = getattr(app, "_learning_status", None)
+    return None if status is None else status.text
+
+
+ANSWER_WRITES = ("save_draft", "submit", "finalize")
+
+
+def record_answer_writes(app, monkeypatch, *, log=None, before=None):
+    """Record each write of the learner store that answering makes (save_draft, submit, finalize) with its
+    arguments AS THEY WERE AT THE CALL (copied: the line passes its live draft, which changes later). The
+    writes still happen. ``before``: {name: callable(*args, **kwargs)} run first at each such call; it may
+    look at the app at that moment or raise to make that write fail (nothing is then written)."""
+    from copy import deepcopy
+    log = [] if log is None else log
+    before = {} if before is None else before
+    store = app.learning_store
+    originals = {name: getattr(store, name) for name in ANSWER_WRITES}
+
+    def answer(name):
+        def write(*args, **kwargs):
+            call = log[-1]
+            call.args, call.kwargs = deepcopy(args), deepcopy(kwargs)
+            if name in before:
+                before[name](*args, **kwargs)
+            return originals[name](*args, **kwargs)
+        return write
+    return record_store_calls(app, monkeypatch, *ANSWER_WRITES, log=log,
+                              answers={name: answer(name) for name in ANSWER_WRITES})
+
+
+def record_question_page_reads(app, monkeypatch, *, log=None):
+    """Record each read of the prompt display preferences ("prompt_preferences": the setting the prompt and the
+    submit are drawn with), each computation of the learner's known ids ("known_ids") and each read of the
+    kinds this device can present ("enabled_kinds"), without changing them."""
+    from kanamemory import course_planning
+    from kanamemory.learning_ui import PROMPT_PREFS
+    log = [] if log is None else log
+    get_setting = app.store.get_setting
+
+    def setting(key, *args, **kwargs):
+        if key == PROMPT_PREFS:
+            log.append(Asked("prompt_preferences", (key, *args), dict(kwargs), page=getattr(app, "page", None)))
+        return get_setting(key, *args, **kwargs)
+    monkeypatch.setattr(app.store, "get_setting", setting)
+    known = course_planning.known_ids
+
+    def known_ids(*args, **kwargs):
+        log.append(Asked("known_ids", args, dict(kwargs), page=getattr(app, "page", None)))
+        return known(*args, **kwargs)
+    monkeypatch.setattr(course_planning, "known_ids", known_ids)
+    preferences = app.learning_preferences
+
+    def enabled(*args, **kwargs):
+        log.append(Asked("enabled_kinds", args, dict(kwargs), page=getattr(app, "page", None)))
+        return preferences(*args, **kwargs)
+    monkeypatch.setattr(app, "learning_preferences", enabled)
+    return log
+
+
+def record_diagnostic_errors(monkeypatch, *, log=None):
+    """Record each error the course line reports to the app's diagnostics (area, action, the exception), without
+    changing what is reported."""
+    from kanamemory import diagnostic_events
+    log = [] if log is None else log
+    real = diagnostic_events.record_error
+
+    def record(area, action, error, *args, **kwargs):
+        log.append(Asked("record_error", (area, action, error, *args), dict(kwargs)))
+        return real(area, action, error, *args, **kwargs)
+    monkeypatch.setattr(diagnostic_events, "record_error", record)
+    return log
+
+
+# --- the submit, the result page and the rating (提交、作答结果、评级) --------------------------------------------
+
+def record_prompt_plans(monkeypatch, *, log=None, plan=None):
+    """Record each display plan of the prompt that a submit asks for to fill in what the learner was shown
+    (furigana, accent marks), with the question, the prompt preferences and the known ids it is asked with.
+    ``plan``: None answers with the real plan; a dict answers the real plan updated with these fields."""
+    from kanamemory import learning_ui
+    log = [] if log is None else log
+    real = learning_ui.prompt_support
+
+    def support(question, preferences=None, known_ids=None):
+        call = Asked("prompt_plan", (question, preferences, known_ids), {})
+        log.append(call)
+        call.result = real(question, preferences, known_ids)
+        if plan is not None:
+            call.result = {**call.result, **plan}
+        return call.result
+    monkeypatch.setattr(learning_ui, "prompt_support", support)
+    return log
+
+
+def permit_early_answers(monkeypatch, *question_ids):
+    """Extra practice has handed out these course questions to be answered before they are due (their
+    submit carries the early permit, and the rating queues the unit's next question as an early one)."""
+    from kanamemory import extra_practice_runtime
+    permitted = set(question_ids)
+    monkeypatch.setattr(extra_practice_runtime, "early_submit",
+                        lambda app, question_id: {"early": True} if question_id in permitted else {})
+
+
+def record_answer_autoplay(monkeypatch, *, log=None):
+    """Record each request to play the answer aloud after a result page is drawn (its text and its key),
+    without changing what it does."""
+    from kanamemory import learning_ui
+    log = [] if log is None else log
+    real = learning_ui.autoplay_answer
+
+    def autoplay(app, text, key):
+        call = Asked("autoplay", (text, key), {}, page=getattr(app, "page", None))
+        log.append(call)
+        call.result = real(app, text, key)
+        return call.result
+    monkeypatch.setattr(learning_ui, "autoplay_answer", autoplay)
+    return log
+
+
+def replace_settlement(monkeypatch, answer, *, log=None):
+    """How a result is settled (formal review or not) becomes ``answer(real, item, question, submitted,
+    **kwargs)``, ``real`` being the settlement as it was; each question is logged with its arguments."""
+    from kanamemory import assessment_policy
+    log = [] if log is None else log
+    real = assessment_policy.settlement_decision
+
+    def decide(item, question, submitted, **kwargs):
+        call = Asked("settlement", (item, question, submitted), dict(kwargs))
+        log.append(call)
+        call.result = answer(real, item, question, submitted, **kwargs)
+        return call.result
+    monkeypatch.setattr(assessment_policy, "settlement_decision", decide)
+    return log
+
+
+def replace_error_details(monkeypatch, builder, *, log=None):
+    """The error details of the result's detail page become ``builder(question, result)``; each build is
+    logged with the question and the result it was given."""
+    from kanamemory import semantic_errors
+    log = [] if log is None else log
+
+    def nodes(u, question, result):
+        log.append(Asked("error_details", (question, result), {}))
+        return builder(question, result)
+    monkeypatch.setattr(semantic_errors, "feedback_nodes", nodes)
+    return log
+
+
+def replace_teaching_allowed(monkeypatch, answer):
+    """Whether a course item's teaching material may be shown (it has been checked) is ``answer(item)``."""
+    from kanamemory import assessment_policy
+    monkeypatch.setattr(assessment_policy, "teaching_allowed", lambda item, *, store=None: answer(item))
+
+
+def record_errors(monkeypatch, *, log=None):
+    """Record each error the app notes for its diagnostics as (operation, stage, error), noting nothing."""
+    from kanamemory import diagnostic_events
+    log = [] if log is None else log
+    monkeypatch.setattr(diagnostic_events, "record_error",
+                        lambda operation, stage, error: log.append((operation, stage, error)))
+    return log
+
+
+def record_speech_stops(app, monkeypatch, *, log=None):
+    """Log each time the app stops any speech that is playing (as "stop"), into ``log``."""
+    log = [] if log is None else log
+    real = app.platform.stop
+
+    def stop(*args, **kwargs):
+        log.append(Call("stop", args, dict(kwargs), page=getattr(app, "page", None)))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(app.platform, "stop", stop)
+    return log
+
+
+def record_setting_reads(app, monkeypatch, *keys, log=None):
+    """Record each read of these learner settings (logged under the key), without changing the answer."""
+    log = [] if log is None else log
+    real = app.store.get_setting
+
+    def get_setting(key, *args, **kwargs):
+        if key in keys:
+            log.append(Call(key, args, dict(kwargs), page=getattr(app, "page", None)))
+        return real(key, *args, **kwargs)
+    monkeypatch.setattr(app.store, "get_setting", get_setting)
+    return log
