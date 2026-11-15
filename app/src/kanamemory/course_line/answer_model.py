@@ -5,6 +5,7 @@ Pure: no Toga, no store, no app object; store-side values are typed ``dict`` or 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 
 @dataclass(eq=False)
@@ -76,3 +77,68 @@ class Edited:
     """The change is saved."""
 
     draft: dict   # the draft as the store holds it now
+
+
+# --- the submit (CourseAnswering.grade, CourseAnswering.record) ----------------------------------------------
+
+@dataclass(frozen=True)
+class Refused:
+    """The answer is not taken; nothing was written."""
+
+    message: str   # what the learner is told under the answer controls
+
+
+@dataclass(frozen=True)
+class Graded:
+    """The answer is judged and ready to be recorded."""
+
+    result: dict   # what the judge says
+    outcome: str   # what the record calls it: the judge's status, "revealed" or "device_failure"
+
+
+@dataclass(frozen=True)
+class Busy:
+    """The database was locked: nothing was written (the error is noted) and the same press can be repeated."""
+
+
+@dataclass(frozen=True)
+class Recorded:
+    """The answer is the question's first answer now."""
+
+    result: dict   # the result as the store saved it
+
+
+# --- the rating (CourseAnswering.rate) -------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Rated:
+    """The question is finished with its rating."""
+
+    item: object   # the lesson of the question as stored now, for the queueing that follows
+
+
+# --- the result pages' buttons -----------------------------------------------------------------------------------
+
+class AnswerActionKind(Enum):
+    """What a button of the result page or its detail page does; AnswerAction's docstring names each call."""
+
+    RATE = "rate"
+    TUTOR = "tutor"
+    DETAIL = "detail"
+    BACK = "back"
+
+
+@dataclass(frozen=True)
+class AnswerAction:
+    """What one button of the result pages does, with the values of its drawing.
+
+    The outer layer makes the call when the button is pressed; "button" is the pressed control:
+    RATE    finish_learning_question(rating, question_id=question_id)
+    TUTOR   open_tutor_question(source="learning", question_id=question_id, after_answer=True)
+    DETAIL  learning_feedback_detail()
+    BACK    go_back(button)
+    """
+
+    kind: AnswerActionKind
+    rating: str | None = None        # RATE: "again", "hard", "good" or "easy"
+    question_id: str | None = None   # RATE, TUTOR: the question of the drawing

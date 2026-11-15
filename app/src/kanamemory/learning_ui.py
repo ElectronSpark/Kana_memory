@@ -37,6 +37,7 @@ from .content_library_ui import ContentLibraryUIMixin
 from . import course_answer_runtime
 from .course_answer_runtime import answer_session
 from .course_line.answer import PROMPT_PREFS
+from .course_line.answer_display import ANSWER_COMPARISON, ANSWER_PITCH, ANSWER_SEQUENCE, detail_model
 from .course_line.answer_model import EditFailed, EditKept, EditLeft
 from . import ui_components as u
 
@@ -75,24 +76,6 @@ KIND_GROUPS = {
 
 
 ALL_LIBRARIES = "全部库"
-
-
-_SELF_GLOSS = re.compile(r"(?P<word>[^（）：:]+)（(?P<reading>[^（）]+)）[：:]\s*(?P<gloss>.+?)[。．.]?")
-
-
-def without_self_gloss(text):
-    """'X（读音）：X' whose gloss only repeats the headword -> 'X（读音）'.
-
-    A display rule for the feedback explanation: other lines, and a gloss
-    that differs from the headword, are returned unchanged.
-    """
-    lines = []
-    for line in str(text or "").splitlines():
-        match = _SELF_GLOSS.fullmatch(line.strip())
-        if match and match["gloss"].strip() == match["word"].strip():
-            line = f"{match['word'].strip()}（{match['reading']}）"
-        lines.append(line)
-    return "\n".join(lines)
 
 
 class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, ExampleUIMixin,
@@ -2055,40 +2038,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             field=getattr(self, "_learning_input", None))
         if not ready:
             return
-        if q.get("audio_text") and not answer_session(self).audio_ok and not revealed:
-            self._learning_status.text = "请先成功播放题目。"
-            return
-        if not str(answer).strip() and not revealed:
-            self._learning_status.text = "请先作答。"
-            return
-        result = grade_learning_answer(q, answer)
-        if is_pitch_question(q) and result.get("status") in {"empty", "invalid"} and not revealed:
-            self._learning_status.text = result.get("message", "请完成作答。")
-            return
-        self.platform.stop()
-        outcome = "revealed" if revealed else result["status"]
-        if q.get("audio_text") and not answer_session(self).audio_ok:
-            outcome = "device_failure"
-        shown, known = answer_session(self).prompt_known
-        plan = prompt_support(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})),
-                              known if shown is q else None)
-        # Design 12 K13: only the course question extra practice handed out is submitted with the early permit.
-        from .extra_practice_runtime import early_submit
-        try:
-            saved = self.learning_store.submit(q["id"], str(answer), None if outcome in {"unresolved", "device_failure"} else result["status"] == "correct",
-                assisted=bool(answer_session(self).state.get("assisted")), outcome=outcome,
-                presentation={"prompt_furigana_visible": plan["furigana_visible"], "prompt_accent_visible": plan["accent_visible"], "audio_used": answer_session(self).audio_ok},
-                **early_submit(self, q["id"]))
-        except Exception as exc:
-            from .draft_debounce import is_database_locked
-            if not is_database_locked(exc):
-                raise
-            # Rolled back: nothing was graded. The same press can be retried.
-            from .diagnostic_events import record_error
-            record_error("learning_submit", "save", exc)
-            self._learning_status.text = "数据库正忙，答案尚未提交，请稍后再点提交。"
-            return
-        self.show_learning_feedback(saved)
+        refusal = course_answer_runtime.submit(self, answer, revealed=revealed)
+        if refusal is not None:
+            self._learning_status.text = refusal
 
     def _reveal_learning_guide_result(self):
         """Bring new inline feedback into view after native layout settles."""
@@ -2114,83 +2066,29 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         create_task_awake(self.loop, reveal())  # Started from a native button callback.
 
     def show_learning_feedback(self, result):
-        from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import asked_text, entered_answer_row, distinct_explanation
-        q = answer_session(self).question
-        originally_unresolved = result.get("outcome") == "unresolved"
-        from .assessment_policy import settlement_decision
-        decision = settlement_decision(self.learning_store.get_item(q["target_id"]), q, result.get("assessment"), store=self.store)
-        if decision["settlement_channel"] != "formal":
-            # An old saved feedback may predate eligibility metadata. This is
-            # a view only; its original first answer remains frozen in storage.
-            result = {**result, "correct": None, "outcome": "unresolved", "assessment": decision}
-        course_answer_runtime.assign(self, feedback_view=(q['id'], deepcopy(result)))
-        correct = result.get("correct", False)
-        assisted = result.get("assisted", False)
-        speaker = self._learning_answer_speaker(q)
-        entered = result.get("answered_text", result.get("answer", ""))
-        from .word_blocks import structure_diagnostic
-        structure_error = (structure_diagnostic(q, entered)
-            if originally_unresolved and decision["assessment_eligible"]
-            and not assisted and not result.get("revealed")
-            and not result.get("diagnostic_needs_teaching") else None)
-        # An accepted sentence contour/segmentation is the learner's correct
-        # answer. Do not replace it with a different canonical alternative.
-        accepted_sequence = bool(correct and entered and q.get("pitch_practice", {}).get("version") in (2, 3))
-        compare_reading = (q.get("kind") == "vocab_reading" and correct is False
-                           and bool(entered) and not assisted and entered != q["answer"])
-        # After the answer every Japanese word shown here carries its kana (design 11 section 7, rule 9);
-        # the comparisons below keep using the plain strings.
-        answer = (answer_diagram(self, q, answer=entered) if accepted_sequence else
-                  answer_diagram(self, q, reveal=True) if is_pitch_question(q) else
-                  u.label(shown_answer(q), size=20, flex=1 if speaker else 0,
-                          text_role=learning_text_role(q, "answer")))
-        if compare_reading:
+        course_answer_runtime.show_feedback(self, result)
+
+    def _learning_answer_control(self, model, speaker):
+        """The answer of a result page as a control: the right spelling against the entered one, the learner's
+        accepted pitch contour, the pitch diagram revealed, or the answer as text (which makes room for the
+        speaker beside it)."""
+        q = model.question
+        if model.answer_kind == ANSWER_COMPARISON:
             from .spelling_display import build_spelling_comparison
-            answer = build_spelling_comparison(self, q["answer"], entered,
-                text_role=learning_text_role(q, "answer"), size=20, reserved_width=48 if speaker else 0)
-        children = [build_answer_feedback(result, structure_error=structure_error),
-                    u.row(answer, speaker) if speaker else answer]
-        explanation = without_self_gloss(distinct_explanation(q.get("feedback"), answer_text(q)))
-        asked = None if is_pitch_question(q) else asked_text(q, explanation)
-        if asked:
-            children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, "prompt")))
-        if result.get("diagnostic_needs_teaching"):
-            children.append(u.label("先补学这项内容，再安排独立练习。", size=14, color=u.MUTED))
-        entered = result.get("answered_text", result.get("answer", ""))
-        if entered and not correct and entered != q["answer"] and not compare_reading:
-            if is_pitch_question(q):
-                entered = pitch_answer_label(q, entered)
-            else:
-                entered = shown_answer(q, entered)
-            children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, "answer")))
-        if is_pitch_question(q) and not correct and entered:
-            diagnosis = grade_learning_answer(q, result.get("answered_text", result.get("answer", ""))).get("message", "")
-            if diagnosis and diagnosis != explanation:
-                children.append(u.label(diagnosis, size=13, color=u.MUTED))
-        if explanation and explanation != str(q["answer"]).strip():
-            children.append(u.label(shown_explanation(q, explanation)))
+            return build_spelling_comparison(self, q["answer"], model.entered,
+                text_role=model.answer_role, size=20, reserved_width=48 if speaker else 0)
+        if model.answer_kind == ANSWER_SEQUENCE:
+            return answer_diagram(self, q, answer=model.entered)
+        if model.answer_kind == ANSWER_PITCH:
+            return answer_diagram(self, q, reveal=True)
+        return u.label(model.answer_text, size=20, flex=1 if speaker else 0, text_role=model.answer_role)
+
+    def _learning_feedback_notes(self, question):
+        """The learner's own notes on this question, as rows of its result page."""
         from .personal_content_notes_ui import append_notes
-        append_notes(self, u, children, 'question', q, page='learning_feedback')
-        children.append(u.row(u.col(flex=1), u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(
-            source="learning", question_id=qid, after_answer=True), compact=True, width=72, font_size=12),
-            u.button("详细", lambda w: self.learning_feedback_detail(), compact=True, width=72, font_size=12)))
-        if result.get("outcome") in {"unresolved", "device_failure", "invalid"}:
-            from .assessment_policy import unresolved_message
-            message = ("句末词块后还有内容；本次不调整单词复习。" if q.get("family") == "word"
-                       else "句末词块后还有内容；本次不调整复习。") if structure_error else (
-                "本次不调整读音复习。" if result.get("error_category") == "spelling"
-                else unresolved_message(result))
-            children.append(u.label(message, size=13, color=u.MUTED))
-        if correct and not assisted and result.get("outcome") == "correct":
-            children.extend([u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
-                for title, rating in [("再学一次", "again"), ("有些困难", "hard")]]),
-                u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
-                for title, rating in [("记住了", "good"), ("很轻松", "easy")]])])
-        else:
-            children.append(u.button("保存并继续", lambda w, qid=q["id"]: self.finish_learning_question("again", question_id=qid), primary=True))
-        self.screen("learning_feedback", "作答结果", *children)
-        autoplay_answer(self, self._learning_answer_audio_text(q), ("learning", q["id"]))
+        rows = []
+        append_notes(self, u, rows, 'question', question, page='learning_feedback')
+        return rows
 
     def _learning_answer_speaker(self, question, *, guided=False):
         """One post-answer control; never changes attempts or listening credit."""
@@ -2225,7 +2123,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             return clean_utterance(answer)
         if question.get("family") == "word" and kind in {
                 "vocab_meaning", "vocab_recall", "vocab_orthography", "vocab_zh_ja_contrast"}:
-            item = self.learning_store.get_item(question.get("target_id")) or {}
+            item = course_answer_runtime.service(self).item(question.get("target_id")) or {}
             if item.get('personal_reading', {}).get('pending'):
                 return ''
             if item.get("reading"):
@@ -2264,7 +2162,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         q = answer_session(self).question
         identity, result = answer_session(self).feedback_view
         error_details = feedback_nodes(u, q, result) if identity == q['id'] else []
-        item = self.learning_store.get_item(q["target_id"])
+        item = course_answer_runtime.service(self).item(q["target_id"])
         if self._unverified_learning_reference(item, "返回结果",
                 page="learning_feedback_detail", on_return=self.go_back):
             return
@@ -2281,39 +2179,23 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             question_reference = self.order_translation_rows(source, '',
                 explicit=reference,
                 title='本题语序参考译文（实验）', show_source=True)
-        self.screen("learning_feedback_detail", "详细", u.label(item["title"], size=22,
-            text_role="study" if item["family"] == "word" else "ui"),
+        from .course_line.ui import answer_pages
+        model = detail_model(item)
+        self.screen(model.page, model.title, *answer_pages.feedback_detail_page(model, rows=[
             *origin_labels(item),
             *error_details,
             *question_reference,
             teaching_block(u, item, speak=self.speak_text),
             self._learning_instruction_example(instruction),
             self.natural_translation_label(instruction.get('example', ''), instruction.get('translation', '')),
-            *teaching_reference,
-            u.button("返回结果", self.go_back, primary=True))
+            *teaching_reference],
+            on_action=lambda action, widget=None: course_answer_runtime.run_answer_action(self, action, widget)))
 
     def finish_learning_question(self, rating, *, question_id=None):
         q = answer_session(self).question
         if self.page != "learning_feedback" or (question_id is not None and question_id != q["id"]):
             return
-        from .new_dispatch import enabled
-        try:
-            self.learning_store.finalize(q["id"], {"again": 1, "hard": 2, "good": 3, "easy": 4}[rating], fair_new=enabled(self))
-        except Exception as exc:
-            from .draft_debounce import is_database_locked
-            if not is_database_locked(exc):
-                raise
-            # The busy timeout aborted the write transaction; the rating can be retried.
-            from .diagnostic_events import record_error
-            record_error("learning_submit", "commit", exc)
-            self.alert("数据库正忙，评级尚未保存。请稍后再点一次。")
-            return
-        from .extra_practice_runtime import early_queue
-        self._queue_learning_questions(self.learning_store.get_item(q["target_id"]), **early_queue(self, q))
-        if study_path_available(self):
-            self.continue_study_path(_checkpoint_saved=True)
-        else:
-            self.continue_learning()
+        course_answer_runtime.rate(self, rating)
 
     def leave_learning(self, widget=None, **kwargs):
         self.platform.stop()

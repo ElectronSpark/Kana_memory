@@ -8,8 +8,10 @@ inside are changed in place where the line always changed them. A page kept
 for Back therefore holds the session of its own moment.
 
 service(app) builds the answering service (course_line.answer) for one call
-from the app's stores. The functions below it are the moments of a question
-being answered that do not draw: opening it, an aid, the audio mark.
+from the app's stores. The functions below it are the moments of a question:
+opening it, an aid, the audio mark, the submit, its result page (drawn by
+course_line.ui.answer_pages from the service's model, with the rows the app's
+shared builders make), the rating, and a pressed button of the result pages.
 
 This module reads the app object and imports neither Toga nor the control
 components nor the app module; every page method and line entry is looked up
@@ -19,8 +21,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .answer_autoplay import autoplay_answer
+from .course_line import answer_display
 from .course_line.answer import CourseAnswering
-from .course_line.answer_model import AnswerSession, OpenAnswered, OpenCancelled
+from .course_line.answer_model import AnswerActionKind, AnswerSession, Busy, OpenAnswered, OpenCancelled, Refused
+from .new_dispatch import study_path_available
 
 
 def answer_session(app) -> AnswerSession:
@@ -108,3 +113,70 @@ def keep_draft(app, question_id, draft) -> None:
     """Save ``draft`` for the question and go on with it (the pitch editor's own draft)."""
     service(app).save_draft(question_id, draft)
     set_draft(app, draft)
+
+
+def _on_action(app):
+    def on_action(action, widget=None):
+        return run_answer_action(app, action, widget)
+    return on_action
+
+
+def submit(app, answer, *, revealed):
+    """Submit ``answer`` (as the answer field prepared it) for the question on the page. Returns the text to
+    show under the answer controls when the answer was not taken or could not be saved; None once it is
+    recorded and its result page is shown. Playing speech stops between the judgment and the record."""
+    answering = service(app)
+    graded = answering.grade(answer_session(app), answer, revealed=revealed)
+    if isinstance(graded, Refused):
+        return graded.message
+    app.platform.stop()
+    recorded = answering.record(answer_session(app), answer, graded)
+    if isinstance(recorded, Busy):
+        return answer_display.BUSY_SUBMIT
+    app.show_learning_feedback(recorded.result)
+    return None
+
+
+def show_feedback(app, result):
+    """The result page of ``result`` for the question on the page; afterwards the answer is played once."""
+    from .course_line.ui import answer_pages
+    session, model = service(app).feedback(answer_session(app), result)
+    set_session(app, session)
+    question = model.question
+    speaker = app._learning_answer_speaker(question)
+    answer = app._learning_answer_control(model, speaker)
+    notes = app._learning_feedback_notes(question)
+    app.screen(model.page, model.title,
+               *answer_pages.feedback_page(model, answer=answer, speaker=speaker, notes=notes,
+                                           on_action=_on_action(app)))
+    autoplay_answer(app, app._learning_answer_audio_text(question), ("learning", question["id"]))
+
+
+def rate(app, rating):
+    """Finish the question on the result page with ``rating``, queue what its lesson needs next and hand the
+    line back; a locked database only says so."""
+    session = answer_session(app)
+    rated = service(app).rate(session, rating)
+    if isinstance(rated, Busy):
+        app.alert(answer_display.BUSY_RATING)
+        return
+    from .extra_practice_runtime import early_queue
+    app._queue_learning_questions(rated.item, **early_queue(app, session.question))
+    if study_path_available(app):
+        app.continue_study_path(_checkpoint_saved=True)
+    else:
+        app.continue_learning()
+
+
+def run_answer_action(app, action, widget=None):
+    """Make the call a button of the result pages stands for (AnswerAction's docstring)."""
+    kind = action.kind
+    if kind is AnswerActionKind.RATE:
+        return app.finish_learning_question(action.rating, question_id=action.question_id)
+    if kind is AnswerActionKind.TUTOR:
+        return app.open_tutor_question(source="learning", question_id=action.question_id, after_answer=True)
+    if kind is AnswerActionKind.DETAIL:
+        return app.learning_feedback_detail()
+    if kind is AnswerActionKind.BACK:
+        return app.go_back(widget)
+    raise ValueError(f"unknown answer action {action!r}")

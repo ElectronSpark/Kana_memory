@@ -689,9 +689,9 @@ def record_prompt_plans(monkeypatch, *, log=None, plan=None):
     """Record each display plan of the prompt that a submit asks for to fill in what the learner was shown
     (furigana, accent marks), with the question, the prompt preferences and the known ids it is asked with.
     ``plan``: None answers with the real plan; a dict answers the real plan updated with these fields."""
-    from kanamemory import learning_ui
+    from kanamemory.course_line import answer as home
     log = [] if log is None else log
-    real = learning_ui.prompt_support
+    real = home.prompt_support
 
     def support(question, preferences=None, known_ids=None):
         call = Asked("prompt_plan", (question, preferences, known_ids), {})
@@ -700,7 +700,7 @@ def record_prompt_plans(monkeypatch, *, log=None, plan=None):
         if plan is not None:
             call.result = {**call.result, **plan}
         return call.result
-    monkeypatch.setattr(learning_ui, "prompt_support", support)
+    monkeypatch.setattr(home, "prompt_support", support)
     return log
 
 
@@ -716,16 +716,16 @@ def permit_early_answers(monkeypatch, *question_ids):
 def record_answer_autoplay(monkeypatch, *, log=None):
     """Record each request to play the answer aloud after a result page is drawn (its text and its key),
     without changing what it does."""
-    from kanamemory import learning_ui
+    from kanamemory import course_answer_runtime as home
     log = [] if log is None else log
-    real = learning_ui.autoplay_answer
+    real = home.autoplay_answer
 
     def autoplay(app, text, key):
         call = Asked("autoplay", (text, key), {}, page=getattr(app, "page", None))
         log.append(call)
         call.result = real(app, text, key)
         return call.result
-    monkeypatch.setattr(learning_ui, "autoplay_answer", autoplay)
+    monkeypatch.setattr(home, "autoplay_answer", autoplay)
     return log
 
 

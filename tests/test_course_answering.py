@@ -9,7 +9,8 @@ Then the session object: it is replaced when a field is assigned and never edite
 assigns before it writes.
 """
 import ast
-from dataclasses import fields
+import sqlite3
+from dataclasses import fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,8 +19,9 @@ import pytest
 from kanamemory import answer_input, course_answer_runtime, course_planning
 from kanamemory.course_line import answer as answer_module
 from kanamemory.course_line.answer import PROMPT_PREFS, CourseAnswering
-from kanamemory.course_line.answer_model import (AnswerSession, EditFailed, EditKept, EditLeft, Edited, OpenAnswered,
-                                                 OpenAsk, OpenCancelled)
+from kanamemory.course_line.answer_model import (AnswerAction, AnswerActionKind, AnswerSession, Busy, EditFailed,
+                                                 EditKept, EditLeft, Edited, Graded, OpenAnswered, OpenAsk,
+                                                 OpenCancelled, Rated, Recorded, Refused)
 from kanamemory.question_support import clean_prompt_preferences
 from support.learning_store_fixtures import START, item, question, ready, stores  # noqa: F401
 
@@ -416,6 +418,266 @@ def test_an_aid_assigns_then_saves_and_the_pitch_editors_draft_is_saved_then_kep
     assert course_answer_runtime.answer_session(app).audio_ok is True and editor["audio_ok"] is True
 
 
+# --- the submit ---------------------------------------------------------------------------------------------------
+
+PLAIN = {"prompt_furigana_visible": False, "prompt_accent_visible": False, "audio_used": False}
+
+
+def opened(stores, **question_fields):
+    """The service, its noted errors and the session of a fresh synthetic question."""
+    current, due = head(stores, **question_fields)
+    service, noted = answering(stores)
+    session = service.settle_open(service.begin(AnswerSession(), current), current).session
+    return service, noted, session, due
+
+
+def test_a_submit_is_refused_before_anything_is_judged_or_written(stores, monkeypatch):
+    service, _, session, _ = opened(stores, audio_text="今、本を読んでいます。")
+    writes = record(stores[1], *WRITES)
+    judged = []
+    monkeypatch.setattr(answer_module, "grade_learning_answer",
+                        lambda question, answer: judged.append(answer) or {"status": "correct"})
+    assert service.grade(session, RIGHT, revealed=False) == Refused("请先成功播放题目。")
+    heard = replace(session, audio_ok=True)
+    assert service.grade(heard, "   ", revealed=False) == Refused("请先作答。")
+    assert judged == [] and writes == []
+    assert service.grade(heard, RIGHT, revealed=False) == Graded({"status": "correct"}, "correct")
+    # The learner asked for the answer: neither refusal applies; a question never heard is a device failure.
+    assert service.grade(heard, "", revealed=True) == Graded({"status": "correct"}, "revealed")
+    assert service.grade(session, "", revealed=True) == Graded({"status": "correct"}, "device_failure")
+    assert writes == []
+
+
+def test_an_unfinished_pitch_answer_is_refused_with_the_judges_words(stores, monkeypatch):
+    service, _, session, _ = opened(stores)
+    monkeypatch.setattr(answer_module, "is_pitch_question", lambda question: True)
+    verdicts = iter([{"status": "empty", "message": "请完成这道题再检查。"}, {"status": "invalid"},
+                     {"status": "invalid", "message": "无法读取"}])
+    monkeypatch.setattr(answer_module, "grade_learning_answer", lambda question, answer: next(verdicts))
+    assert service.grade(session, "x", revealed=False) == Refused("请完成这道题再检查。")
+    assert service.grade(session, "x", revealed=False) == Refused("请完成作答。")
+    assert service.grade(session, "x", revealed=True) == Graded({"status": "invalid", "message": "无法读取"}, "revealed")
+
+
+def test_the_real_judge_calls_a_right_choice_correct(stores):
+    service, _, session, _ = opened(stores)
+    graded = service.grade(session, RIGHT, revealed=False)
+    assert isinstance(graded, Graded) and graded.outcome == "correct" and graded.result["status"] == "correct"
+    assert service.grade(session, WRONG, revealed=False).outcome == service.grade(session, WRONG, revealed=False).result["status"]
+
+
+@pytest.mark.parametrize("outcome, status, correct", [
+    ("correct", "correct", True), ("incorrect", "incorrect", False), ("unresolved", "unresolved", None),
+    ("revealed", "correct", True), ("revealed", "incorrect", False), ("device_failure", "correct", None)])
+def test_the_record_of_an_answer(stores, monkeypatch, outcome, status, correct):
+    service, _, session, _ = opened(stores)
+    session.state["assisted"] = outcome == "revealed"
+    plans = []
+    monkeypatch.setattr(answer_module, "prompt_support", lambda question, preferences, known: plans.append(
+        (question, preferences, known)) or {"furigana_visible": True, "accent_visible": False})
+    writes = record(stores[1], *WRITES)
+    recorded = service.record(session, RIGHT, Graded({"status": status}, outcome))
+    assert isinstance(recorded, Recorded) and recorded.result["outcome"] == outcome
+    assert writes == [("submit", ("q1", RIGHT, correct), {
+        "assisted": outcome == "revealed", "outcome": outcome,
+        "presentation": {"prompt_furigana_visible": True, "prompt_accent_visible": False, "audio_used": False}})]
+    assert plans == [(session.question, service.prompt_preferences(), None)]
+
+
+def test_the_record_uses_the_plan_of_the_prompt_that_was_drawn_for_this_very_question(stores, monkeypatch):
+    service, _, session, _ = opened(stores, qid="q1")
+    asked = []
+    monkeypatch.setattr(answer_module, "prompt_support", lambda question, preferences, known: asked.append(known) or {
+        "furigana_visible": False, "accent_visible": True})
+    known = {"word:known"}
+    drawn = replace(session, prompt_known=(session.question, known), audio_ok=True)
+    stores[1].submit = lambda *args, **kwargs: {"args": args, "kwargs": kwargs}
+    recorded = service.record(drawn, 12, Graded({"status": "correct"}, "correct"))
+    assert asked == [known]
+    assert recorded.result["args"] == ("q1", "12", True)             # the answer is recorded as text
+    assert recorded.result["kwargs"]["presentation"] == {
+        "prompt_furigana_visible": False, "prompt_accent_visible": True, "audio_used": True}
+    other = replace(session, prompt_known=(dict(session.question), known))      # an equal question, another object
+    service.record(other, RIGHT, Graded({"status": "correct"}, "correct"))
+    assert asked == [known, None]
+
+
+def test_a_question_handed_out_early_is_recorded_with_its_permit(stores):
+    current, _ = head(stores)
+    store, learning = stores
+    asked = []
+    service = CourseAnswering(learning, store, fair_new=lambda: False,
+                              early_submit=lambda question_id: asked.append(question_id) or {"early": True},
+                              record_error=lambda *args: None)
+    session = service.settle_open(service.begin(AnswerSession(), current), current).session
+    seen = {}
+    learning.submit = lambda *args, **kwargs: seen.update(kwargs) or {"outcome": "correct"}
+    service.record(session, RIGHT, Graded({"status": "correct"}, "correct"))
+    assert asked == ["q1"] and seen["early"] is True
+
+
+def test_a_locked_database_records_nothing_and_any_other_error_is_raised(stores):
+    service, noted, session, _ = opened(stores)
+    locked = sqlite3.OperationalError("database is locked")
+
+    def submit(*args, **kwargs):
+        raise locked
+    stores[1].submit = submit
+    assert service.record(session, RIGHT, Graded({"status": "correct"}, "correct")) == Busy()
+    assert noted == [("learning_submit", "save", locked)]
+    assert stores[1].get_question("q1")["result"] is None
+
+    def broken(*args, **kwargs):
+        raise ValueError("another failure")
+    stores[1].submit = broken
+    with pytest.raises(ValueError):
+        service.record(session, RIGHT, Graded({"status": "correct"}, "correct"))
+    assert len(noted) == 1
+
+
+# --- the result and the rating ---------------------------------------------------------------------------------------
+
+def answered(stores, answer=RIGHT):
+    service, noted, session, due = opened(stores)
+    recorded = service.record(session, answer, service.grade(session, answer, revealed=False))
+    return service, noted, session, recorded.result, due
+
+
+def test_the_result_of_a_right_answer_offers_the_four_ratings(stores):
+    service, _, session, result, _ = answered(stores)
+    reads = record(stores[1], "get_item", *WRITES)
+    shown, page = service.feedback(session, result)
+    assert reads == [("get_item", (CID,), {})]                         # the lesson is read once; nothing is written
+    assert shown is not session and shown.feedback_view == ("q1", result) and shown.feedback_view[1] is not result
+    assert session.feedback_view == (None, {})
+    assert (page.page, page.title, page.question, page.result) == ("learning_feedback", "作答结果", session.question, result)
+    assert (page.answer_kind, page.answer_text, page.entered) == ("label", RIGHT, RIGHT)
+    assert (page.structure_error, page.needs_teaching, page.entered_shown, page.diagnosis, page.unresolved) == (
+        None, None, None, None, None)
+    assert page.explanation == "说明" and page.save is None
+    assert [(button.caption, button.action.rating, button.action.question_id) for button in page.ratings] == [
+        ("再学一次", "again", "q1"), ("有些困难", "hard", "q1"), ("记住了", "good", "q1"), ("很轻松", "easy", "q1")]
+    assert all(button.action.kind is AnswerActionKind.RATE for button in page.ratings)
+    assert (page.tutor.caption, page.tutor.action) == ("问 AI", AnswerAction(AnswerActionKind.TUTOR, question_id="q1"))
+    assert (page.detail.caption, page.detail.action) == ("详细", AnswerAction(AnswerActionKind.DETAIL))
+
+
+def test_the_result_of_an_answer_that_does_not_count_offers_only_save(stores):
+    service, _, session, result, _ = answered(stores, WRONG)
+    _, page = service.feedback(session, result)
+    assert page.ratings is None
+    assert (page.save.caption, page.save.action) == (
+        "保存并继续", AnswerAction(AnswerActionKind.RATE, rating="again", question_id="q1"))
+    assert page.entered_shown == WRONG and page.entered == WRONG
+    assert (page.unresolved is not None) == (result["outcome"] in {"unresolved", "device_failure", "invalid"})
+
+
+def test_an_old_result_that_no_longer_settles_formally_is_shown_as_unresolved_and_stays_as_stored(stores, monkeypatch):
+    from kanamemory import assessment_policy
+    service, _, session, result, _ = answered(stores)
+    stored = dict(result)
+    decision = {"settlement_channel": "observation", "assessment_eligible": False, "reason": "合成原因"}
+    asked = []
+    monkeypatch.setattr(assessment_policy, "settlement_decision", lambda item, question, submitted, **kwargs:
+                        asked.append((item["id"], question["id"], submitted, kwargs)) or decision)
+    shown, page = service.feedback(session, result)
+    assert asked == [(CID, "q1", result.get("assessment"), {"store": stores[0]})]
+    assert (page.result["correct"], page.result["outcome"], page.result["assessment"]) == (None, "unresolved", decision)
+    assert shown.feedback_view == ("q1", page.result) and page.ratings is None and page.unresolved is not None
+    assert result == stored and stores[1].get_question("q1")["result"]["outcome"] == "correct"
+
+
+@pytest.mark.parametrize("rating, number", [("again", 1), ("hard", 2), ("good", 3), ("easy", 4)])
+def test_a_rating_finishes_the_question_and_reads_its_lesson(stores, rating, number):
+    current, _ = head(stores)
+    store, learning = stores
+    service = CourseAnswering(learning, store, fair_new=lambda: True, early_submit=lambda question_id: {},
+                              record_error=lambda *args: None)
+    session = service.settle_open(service.begin(AnswerSession(), current), current).session
+    service.record(session, RIGHT, service.grade(session, RIGHT, revealed=False))
+    calls = record(learning, "finalize", "get_item")
+    rated = service.rate(session, rating)
+    assert calls == [("finalize", ("q1", number), {"fair_new": True}), ("get_item", (CID,), {})]
+    assert rated == Rated(learning.get_item(CID))
+
+
+def test_a_locked_database_keeps_the_rating_for_another_press(stores):
+    service, noted, session, _, _ = answered(stores)
+    locked = sqlite3.OperationalError("database is locked")
+    original = stores[1].finalize
+
+    def finalize(*args, **kwargs):
+        raise locked
+    stores[1].finalize = finalize
+    assert service.rate(session, "good") == Busy() and noted == [("learning_submit", "commit", locked)]
+    stores[1].finalize = original
+    assert isinstance(service.rate(session, "good"), Rated)
+    with pytest.raises(KeyError):
+        service.rate(session, "splendid")
+
+
+# --- the app side of the submit, the result and the rating -------------------------------------------------------------
+
+def result_app(stores, log):
+    store, learning = stores
+    app = SimpleNamespace(store=store, learning_store=learning, page="learning_question", _learning_input=None)
+    app.platform = SimpleNamespace(stop=lambda: log.append("stop"))
+    app.show_learning_feedback = lambda result: log.append(("feedback", result["outcome"]))
+    app.alert = lambda text: log.append(("alert", text))
+    app._queue_learning_questions = lambda item, **kwargs: log.append(("queue", item["id"], kwargs))
+    app.continue_learning = lambda: log.append("continue_learning")
+    return app
+
+
+def test_the_app_side_stops_speech_between_the_judgment_and_the_record_and_then_shows_the_result(stores):
+    current, _ = head(stores)
+    log = []
+    app = result_app(stores, log)
+    course_answer_runtime.open_question(app, current)
+    assert course_answer_runtime.submit(app, "  ", revealed=False) == "请先作答。" and log == []
+    original = stores[1].submit
+    stores[1].submit = lambda *args, **kwargs: log.append("submit") or original(*args, **kwargs)
+    assert course_answer_runtime.submit(app, RIGHT, revealed=False) is None
+    assert log == ["stop", "submit", ("feedback", "correct")]
+
+
+def test_the_app_side_says_when_the_database_is_busy(stores):
+    current, _ = head(stores)
+    log = []
+    app = result_app(stores, log)
+    course_answer_runtime.open_question(app, current)
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    original_submit, stores[1].submit = stores[1].submit, locked
+    assert course_answer_runtime.submit(app, RIGHT, revealed=False) == "数据库正忙，答案尚未提交，请稍后再点提交。"
+    assert log == ["stop"]
+    stores[1].submit = original_submit
+    assert course_answer_runtime.submit(app, RIGHT, revealed=False) is None
+    original_finalize, stores[1].finalize = stores[1].finalize, locked
+    course_answer_runtime.rate(app, "good")
+    assert log[-1] == ("alert", "数据库正忙，评级尚未保存。请稍后再点一次。")
+    stores[1].finalize = original_finalize
+    course_answer_runtime.rate(app, "good")
+    assert log[-2:] == [("queue", CID, {}), "continue_learning"]
+
+
+def test_a_pressed_button_of_the_result_pages_makes_its_call():
+    log = []
+    app = SimpleNamespace(
+        finish_learning_question=lambda rating, *, question_id=None: log.append(("finish", rating, question_id)),
+        open_tutor_question=lambda **kwargs: log.append(("tutor", kwargs)),
+        learning_feedback_detail=lambda: log.append("detail"),
+        go_back=lambda widget: log.append(("back", widget)))
+    for action in (AnswerAction(AnswerActionKind.RATE, rating="hard", question_id="q1"),
+                   AnswerAction(AnswerActionKind.TUTOR, question_id="q1"), AnswerAction(AnswerActionKind.DETAIL),
+                   AnswerAction(AnswerActionKind.BACK)):
+        course_answer_runtime.run_answer_action(app, action, "the button")
+    assert log == [("finish", "hard", "q1"),
+                   ("tutor", {"source": "learning", "question_id": "q1", "after_answer": True}),
+                   "detail", ("back", "the button")]
+
+
 # --- the imports -----------------------------------------------------------------------------------------------
 
 SOURCE_DIR = Path(course_answer_runtime.__file__).parent
@@ -439,9 +701,15 @@ def _within(module, names):
 
 def test_the_session_module_is_pure_and_the_service_and_the_app_side_module_import_no_controls_or_app():
     assert _imports(SOURCE_DIR / "course_line/answer_model.py", "kanamemory.course_line") == {
-        "__future__", "dataclasses"}
-    for path, package in ((SOURCE_DIR / "course_line/answer.py", "kanamemory.course_line"),
-                          (SOURCE_DIR / "course_answer_runtime.py", "kanamemory")):
-        found = _imports(path, package)
-        assert not [module for module in found if _within(module, (*OUTER, "kanamemory.course_line.ui"))]
-        assert not [module for module in found if module.endswith("_ui")]
+        "__future__", "dataclasses", "enum"}
+    service_imports = _imports(SOURCE_DIR / "course_line/answer.py", "kanamemory.course_line")
+    assert not [module for module in service_imports if _within(module, (*OUTER, "kanamemory.course_line.ui"))]
+    # answer_result_ui holds the shared result typography only (pure); no other page module is imported.
+    assert [module for module in service_imports if module.endswith("_ui")] == ["kanamemory.answer_result_ui"]
+    path = SOURCE_DIR / "course_answer_runtime.py"
+    assert not [module for module in _imports(path, "kanamemory") if _within(module, OUTER) or module.endswith("_ui")]
+    module_level = set()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.ImportFrom):
+            module_level.add(node.module)
+    assert "course_line.ui" not in module_level      # the page module is imported only when a page is drawn
