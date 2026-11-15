@@ -206,6 +206,18 @@ def patch_promotion(monkeypatch, replacement):
     monkeypatch.setattr(practice_round, "promote", replacement)
 
 
+def wrap_protected_choice(monkeypatch, wrapper):
+    """The thorough decision's choice of a protected first-teaching head (first_teaching_dispatch's
+    choose_protected, as the decision looks it up) becomes ``wrapper(real, *args, **kwargs)``; ``real`` is the
+    choice as it was."""
+    from kanamemory import first_teaching_dispatch
+    real = first_teaching_dispatch.choose_protected
+
+    def choose(*args, **kwargs):
+        return wrapper(real, *args, **kwargs)
+    monkeypatch.setattr(first_teaching_dispatch, "choose_protected", choose)
+
+
 @dataclass
 class Call:
     """One call the continue action made: a line entry, the reference page, the take-over or screen."""

@@ -49,7 +49,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from kanamemory import diagnostic_events, explicit_learning_start, practice_round
+from kanamemory import crash_events, diagnostic_events, explicit_learning_start, practice_round
 from kanamemory import ui_components as u
 from kanamemory.app import KanaMemory
 from kanamemory.arrangement import display
@@ -62,7 +62,7 @@ from support.app_fixtures import question_app, setup_app  # noqa: F401
 from support.fake_ui import ScrollView, View
 from support.learning_fixtures import learning_app  # noqa: F401
 from support.learning_store_fixtures import item, question, ready
-from support.study_home_support import orientation_seen, stub_can_continue
+from support.study_home_support import orientation_seen, patch_other_routes, stub_can_continue
 from support.study_path_runtime_support import kana_id, path_app, seed_main  # noqa: F401
 
 PREFS = "learning_preferences_v1"
@@ -1164,3 +1164,398 @@ def test_without_the_switch_a_running_loop_starts_no_wait(app):
     seen, tasks = cs.in_loop(app, app.continue_study_path)
     assert tasks == [] and seen[0] == "question"
     assert not cs.background_enabled(app) and asyncio.iscoroutinefunction(cs.settle)
+
+
+# --- h. what each step hands on, one rule at a time ------------------------------------------------------------
+
+def test_d2_passes_the_teaching_targets_the_protected_kana_head_carries(app, monkeypatch):
+    """D2: resume_practice gets the protected kana head's own teaching_targets, whatever they are (a head for an
+    unassessed direction carries (content id, kind, script) triples), not the default {(content id, script)}."""
+    reviewed(app, "う")
+    seed_main(app, symbol="う")
+    app.study_path_service().add_sections([first_kana_section(app)["id"]], start_learning=True)
+    carried = {}
+
+    def with_triples(real, *args, **kwargs):
+        found = real(*args, **kwargs)
+        assert found and found[0] == "kana"
+        q = found[1]["question"]
+        carried["targets"] = {(q.content_id, q.kind, q.script)}
+        return "kana", {**found[1], "teaching_targets": carried["targets"]}
+    cs.wrap_protected_choice(monkeypatch, with_triples)
+    log = cs.watch(app, monkeypatch, real=False, take_over=False)
+    app.continue_study_path()
+    (call,) = lines(log)
+    assert call.name == "resume_practice" and call.kwargs["_first_teaching"] is True
+    assert call.kwargs["_first_teaching_targets"] == carried["targets"]
+
+
+def test_route_end_page_on_the_core_route_without_a_next_section_lists_the_other_routes(app, monkeypatch):
+    """D14 on the core route when it has no next section: the other routes' next sections are listed on
+    本次学习已保存 (the core route's rows are drawn with them)."""
+    patch_other_routes(monkeypatch, [{"route_id": "route:s4-synthetic", "title": "合成路线", "in_progress_sections": 0,
+                                      "next_section": {"id": "route:s4-synthetic#next", "title": "合成一"}}])
+    service = app.study_path_service()
+    real = service.overview
+    monkeypatch.setattr(service, "overview", lambda *args, **kwargs: {**real(*args, **kwargs), "next_section": None})
+    app.continue_study_path()
+    assert cs.page(app) == ("learning_done", "本次学习已保存")
+    assert "其他路线的下一小节" in cs.texts(app) and "合成路线 · 合成一" in cs.captions(app)
+
+
+def test_p2_is_skipped_when_the_caller_already_saved(app, monkeypatch):
+    """P2 is for a press only: with _checkpoint_saved the checkpoint is not asked again, so one that would fail
+    does not stop the action; the kana line (D3) is reached."""
+    reviewed(app, "あ")
+    seed_main(app)
+    app._checkpoint = Mock(return_value=False)
+    log = cs.watch(app, monkeypatch, real=False, take_over=False)
+    app.continue_study_path(_checkpoint_saved=True)
+    assert cs.names(log) == ["resume_practice"]
+    app._checkpoint.assert_not_called()
+
+
+def test_w1_the_resumed_action_asks_no_second_checkpoint(app, monkeypatch):
+    """W1: the action resumed after the wait counts as already saved: the checkpoint is asked once, by the
+    press, and the kana line is reached."""
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    app._checkpoint = Mock(return_value=None)
+    log = cs.record_entries(app, monkeypatch, real=False)
+    cs.in_loop(app, app.continue_study_path)
+    assert cs.names(log) == ["resume_practice"]
+    app._checkpoint.assert_called_once_with()
+
+
+def test_the_action_appends_missing_prerequisites_before_it_decides(app, monkeypatch):
+    """Before the decision the action asks the learner store, once and with no arguments (the bundled
+    catalogue), to append missing prerequisites of the enrolled lessons; the course line comes after."""
+    course(app, "pre")
+    log = cs.watch(app, monkeypatch, real=False, take_over=False)
+    real = app.learning_store.ensure_prerequisites
+
+    def appended(*args, **kwargs):
+        log.append(cs.Call("ensure_prerequisites", args, dict(kwargs)))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(app.learning_store, "ensure_prerequisites", appended)
+    app.continue_study_path()
+    assert cs.names(log) == ["ensure_prerequisites", "continue_learning"]
+    assert (log[0].args, log[0].kwargs) == ((), {})
+
+
+def test_w1_the_resumed_action_queues_with_the_workers_plan(app, monkeypatch):
+    """W1: the kana queue is assembled once, after the wait, from the plan the worker made (plan is not None);
+    the question page follows."""
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    service = app.study_path_service()
+    real, plans = service.ensure_kana_queue, []
+
+    def ensure(*args, **kwargs):
+        plans.append(kwargs.get("plan"))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(service, "ensure_kana_queue", ensure)
+    cs.in_loop(app, app.continue_study_path)
+    assert len(plans) == 1 and plans[0] is not None and app.page == "question"
+
+
+def test_a_new_kana_queue_gets_the_kind_policy_of_its_session(app):
+    """A kana queue the action creates gets its kind policy (the setting practice_queue_kinds names its
+    session)."""
+    reviewed(app, "あ")
+    assert app.store.load_session_progress(lane="main", lazy_questions=True) is None
+    app.continue_study_path()
+    pending = app.store.load_session_progress(lane="main", lazy_questions=True)
+    assert pending and app.page == "question"
+    assert app.store.get_setting("practice_queue_kinds", {}).get("session_id") == pending["session_id"]
+
+
+def test_p8_a_failure_inside_the_take_overs_own_continue_draws_the_error_page_once(app, monkeypatch):
+    """P8 nested: the take-over (D13) runs a continue of its own, whose decision fails: that inner action draws
+    无法准备下一题 and records the error; the outer action raises the same error without drawing it again."""
+    error = RuntimeError("合成")
+
+    def nested(app):
+        cs.make_dispatch_raise(monkeypatch, error)
+        app.continue_study_path()
+        return True
+    cs.spy_take_over(monkeypatch, nested)
+    log = cs.record_screens(app, monkeypatch)
+    before = errors("kana_queue_assembly", "read")
+    with pytest.raises(RuntimeError) as raised:
+        app.continue_study_path()
+    assert raised.value is error and cs.error_shown(error)
+    assert drawn(log) == [("learning_wait", "无法准备下一题")]
+    assert errors("kana_queue_assembly", "read") == before + 1
+
+
+def test_error_page_has_no_title_line_for_a_course_item_set_before_the_action(app, monkeypatch):
+    """P8: a course item that was already set before the action is not named on 无法准备下一题; only one the
+    action itself reached is."""
+    app._learning_item = {"content": {"title": "旧课程标题"}}
+    cs.make_dispatch_raise(monkeypatch, RuntimeError("合成"))
+    with pytest.raises(RuntimeError):
+        app.continue_study_path()
+    assert cs.texts(app)[:1] == [ERROR_TEXT] and "旧课程标题" not in cs.texts(app)
+
+
+def test_w1_starts_no_wait_when_the_waiting_page_is_not_shown(app, monkeypatch):
+    """W1 when the screen does not switch to the waiting page (screen draws nothing while a backup runs): no
+    wait starts, no waiting page is recorded, and the action goes on inline to the question page."""
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    original = app.screen
+
+    def refusing(name, *args, **kwargs):
+        if name == cs.WAIT_PAGE:
+            return None
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(app, "screen", refusing)
+    seen, tasks = cs.in_loop(app, app.continue_study_path)
+    assert seen[0] == "question" and tasks == [] and cs.kana_wait_task(app) is None
+    assert cs.wait_view(app) is None and cs.wait_timer(app) is None
+
+
+def test_the_waiting_pages_delay_is_the_one_set(app, monkeypatch):
+    """The waiting page arms its "takes longer" timer with the delay currently set, not a fixed 20 s."""
+    cs.set_wait_seconds(monkeypatch, 0.05)
+    clock = cs.ControlledLoop()
+    assert cs.show_wait_page(app, clock)
+    assert [handle.delay for handle in clock.handles] == [0.05] and cs.wait_timer(app) is clock.handles[0]
+
+
+def test_the_error_page_cancels_a_waiting_pages_timer(app, monkeypatch):
+    """P8 after a waiting page: drawing 无法准备下一题 cancels the waiting page's armed timer, so its late rows
+    never appear."""
+    clock = cs.ControlledLoop()
+    assert cs.show_wait_page(app, clock)
+    (timer,) = cs.wait_timers(clock)
+    cs.make_dispatch_raise(monkeypatch, RuntimeError("合成"))
+    with pytest.raises(RuntimeError):
+        app.continue_study_path()
+    assert timer.cancelled and cs.wait_timer(app) is None
+
+
+def unhandled(source):
+    return sum(entry["count"] for entry in crash_events.unhandled_errors() if entry["source"] == source)
+
+
+def test_w1_a_failure_after_the_wait_is_recorded_as_unhandled_from_the_task(app, monkeypatch):
+    """W1: the resumed decision fails: the error is recorded as unhandled from the async task (source
+    async_task) once; the page was drawn by the action, so no callback error is recorded."""
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    cs.make_dispatch_raise(monkeypatch, RuntimeError("合成 W1"))
+    before = unhandled("async_task"), errors("kana_queue_assembly", "callback")
+    cs.in_loop(app, app.continue_study_path)
+    assert (unhandled("async_task"), errors("kana_queue_assembly", "callback")) == (before[0] + 1, before[1])
+    assert cs.page(app) == ("learning_wait", "无法准备下一题")
+
+
+def test_w1_a_failure_the_resumed_action_did_not_show_is_recorded_and_shown(app, monkeypatch):
+    """W1: the continue the wait resumes (looked up on the app) raises an error no action drew: it is recorded as
+    a callback error and as unhandled from the async task, and 无法准备下一题 is drawn once; the task ends
+    cleanly."""
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    error = RuntimeError("合成 未显示")
+
+    def failing(*args, **kwargs):
+        raise error
+    log = cs.record_screens(app, monkeypatch)
+    before = errors("kana_queue_assembly", "callback"), unhandled("async_task")
+    cs.in_loop(app, app.continue_study_path,
+               while_waiting=lambda: monkeypatch.setattr(app, "continue_study_path", failing))
+    assert (errors("kana_queue_assembly", "callback"), unhandled("async_task")) == (before[0] + 1, before[1] + 1)
+    assert drawn(log) == [(cs.WAIT_PAGE, "继续学习"), ("learning_wait", "无法准备下一题")] and cs.error_shown(error)
+    assert cs.kana_wait_task(app).exception() is None
+
+
+def test_w1_does_not_start_when_no_kana_kind_is_usable(app, monkeypatch):
+    """W1 with the switch on, under a running loop, when no kana kind can be planned (D12's state): no wait
+    starts; 暂时没有可进行的假名题型 is drawn inline."""
+    no_usable_kind(app)
+    cs.background_on(app)
+    seen, tasks = cs.in_loop(app, app.continue_study_path)
+    assert tasks == [] and cs.kana_wait_task(app) is None
+    assert seen == ("learning_wait", "暂时没有可进行的假名题型")
+
+
+def test_w2_does_not_start_outside_app_run_rounds(app, monkeypatch):
+    """W2 needs an app-run round: with due course items, the switch on and a running loop but no round, no
+    course-head wait starts and the course line is reached inline."""
+    course(app, "w2none")
+    cs.background_on(app)
+    cs.in_loop(app, lambda: app.continue_study_path(_checkpoint_saved=True))
+    assert cs.course_wait_task(app) is None and app.page == "learning_question"
+
+
+def test_w2_does_not_start_with_an_example_store_bound_to_the_ui_store(app, monkeypatch):
+    """W2 needs no UI-bound example store (the worker's material checks would differ): with one bound, no
+    course-head wait starts and the course line is reached inline."""
+    from types import SimpleNamespace
+    from kanamemory.material_qualification import bind_resources
+    sealed_course_round(app)
+    cs.background_on(app)
+    bind_resources(app.store, examples=SimpleNamespace())
+    seen, tasks = cs.in_loop(app, lambda: app.continue_study_path(_checkpoint_saved=True))
+    assert tasks == [] and cs.course_wait_task(app) is None and seen[0] == "learning_question"
+
+
+def test_w2_does_not_start_inside_an_open_transaction(app, monkeypatch):
+    """W2 never starts while the UI store has a transaction open: no course-head wait; the course line is
+    reached inline."""
+    sealed_course_round(app)
+    cs.background_on(app)
+    app.store._db.execute("BEGIN")
+    try:
+        seen, tasks = cs.in_loop(app, lambda: app.continue_study_path(_checkpoint_saved=True))
+    finally:
+        app.store._db.rollback()
+    assert tasks == [] and cs.course_wait_task(app) is None and seen[0] == "learning_question"
+
+
+def test_w1_does_not_start_inside_an_open_transaction(app, monkeypatch):
+    """W1 never starts while the UI store has a transaction open: the queue is assembled inline, whose write
+    cannot start its own transaction, so the action ends on 无法准备下一题 and raises; no wait page, no task."""
+    import sqlite3
+    due_unqueued_kana(app)
+    cs.background_on(app)
+    log = cs.record_screens(app, monkeypatch)
+
+    def press():
+        with pytest.raises(sqlite3.OperationalError):
+            app.continue_study_path()
+    app.store._db.execute("BEGIN")
+    try:
+        seen, tasks = cs.in_loop(app, press)
+    finally:
+        app.store._db.rollback()
+    assert tasks == [] and cs.kana_wait_task(app) is None
+    assert drawn(log) == [("learning_wait", "无法准备下一题")]
+
+
+def test_w2_resumed_on_the_kana_lane_passes_the_prepared_token(app, monkeypatch):
+    """W2 then D3: in a sealed round whose head is a due kana review, the decision resumed after the course-head
+    wait resumes the kana line with the token prepared before the wait (its session)."""
+    practice_round.enable(app.store)
+    reviewed(app, "あ")
+    sid, _ = seed_main(app)
+    app.continue_study_path()
+    assert practice_round.sealed(app.store) and app.page == "question"
+    app.page = "home"
+    cs.background_on(app)
+    log = cs.record_entries(app, monkeypatch, real=False)
+    seen, tasks = cs.in_loop(app, lambda: app.continue_study_path(_checkpoint_saved=True))
+    assert seen[0] == cs.WAIT_PAGE and tasks == [cs.course_wait_task(app)]
+    (call,) = log
+    assert call.name == "resume_practice" and set(call.kwargs) == {"preserve_audio", "_prepared"}
+    assert call.kwargs["_prepared"].session_id == sid
+
+
+def test_breadth_an_explicit_start_armed_in_a_sealed_round_is_not_protected(app, monkeypatch):
+    """No D1 under breadth once the round is sealed: a course item explicitly started after the round was
+    collected gets no _selected_current; the round's kana review goes on."""
+    ArrangementPreferences(app.store).set_orientation(Orientation.BREADTH)
+    practice_round.enable(app.store)
+    reviewed(app, "あ")
+    seed_main(app)
+    cid, _ = course(app, "sealed", taught=False)
+    log = cs.record_entries(app, monkeypatch, real=False)
+    app.continue_study_path()
+    assert practice_round.sealed(app.store)
+    arm_course(app, cid)
+    app.continue_study_path()
+    assert [call.name for call in log] == ["resume_practice", "resume_practice"]
+    assert all("_selected_current" not in call.kwargs for call in log)
+
+
+def test_breadth_a_skipped_explicit_course_head_is_not_protected(app, monkeypatch):
+    """No D1 under breadth either: the explicitly started course item's teaching passed over this run gets no
+    _selected_current; the kana line is resumed instead."""
+    ArrangementPreferences(app.store).set_orientation(Orientation.BREADTH)
+    reviewed(app, "あ")
+    seed_main(app)
+    cid, _ = course(app, "skipped", taught=False)
+    arm_course(app, cid)
+    cs.set_skipped_teaching(app, {cid})
+    log = cs.watch(app, monkeypatch, real=False, take_over=False)
+    app.continue_study_path()
+    assert [call.name for call in lines(log)] == ["resume_practice"]
+    assert "_selected_current" not in lines(log)[0].kwargs
+
+
+def test_a_protected_kana_head_stays_first_in_its_sealed_round(app, monkeypatch):
+    """D2 in a collecting round, then D3: the protected kana head is moved to the front of the round's kana order,
+    so the next continue in the sealed round prepares that same kana (あ), not the due review (う) queued
+    before it."""
+    practice_round.enable(app.store)
+    reviewed(app, "う")
+    seed_main(app, symbol="う")
+    app.study_path_service().add_sections([first_kana_section(app)["id"]], start_learning=True)
+    log = cs.record_entries(app, monkeypatch, real=False)
+    app.continue_study_path()
+    app.continue_study_path()
+    first, second = log
+    assert first.kwargs["_first_teaching_targets"] == {(kana_id(app, "あ"), "hiragana")}
+    token = second.kwargs["_prepared"]
+    assert token.prepared["questions"][token.prepared["question_index"]].content_id == kana_id(app, "あ")
+
+
+def test_a_context_kana_word_does_not_interrupt_an_opened_course_block(app, monkeypatch):
+    """A kana question marked as a short contextual word (its own tier before ordinary reviews) does not
+    interrupt a course teaching block the learner has already opened: the course line goes on."""
+    from support.study_path_runtime_support import source_question
+    q = source_question(app, "い")
+    q.metadata["kana_rule_probe_v1"] = {"rule_id": "s4-synthetic"}
+    q.metadata["kana_context_v1"] = {"periodic": True}
+    sid = app.store.start_session([q], now=app._test_clock[0])
+    app.store.save_session_progress(sid, 0, state={})
+    cid, _ = course(app, "opened", taught=False)
+    app.learning_store.mark_instruction_exposed(cid, now=app._test_clock[0] - timedelta(minutes=5))
+    log = cs.watch(app, monkeypatch, real=False, take_over=False)
+    app.continue_study_path()
+    assert cs.names(log) == ["continue_learning"]
+
+
+def test_a_course_heads_priority_stays_frozen_in_its_sealed_round(app, monkeypatch):
+    """D1 in a collecting round, then D4: the protected course head (its first check) is promoted when the round
+    is collected; in the sealed round that frozen priority still puts it before the due kana review, although
+    its own priority now ranks it after (a first check is tier 4, the review tier 3)."""
+    practice_round.enable(app.store)
+    reviewed(app, "あ")
+    seed_main(app)
+    course(app, "frozen")
+    log = cs.record_entries(app, monkeypatch, real=False)
+    app.continue_study_path()
+    app.continue_study_path()
+    assert [call.name for call in log] == ["continue_learning", "continue_learning"]
+    assert "_selected_current" in log[0].kwargs and set(log[1].kwargs) == {"_projection"}
+
+
+def test_an_add_restarts_the_round(app, monkeypatch):
+    """Adding sections (_add_study_sections) restarts the app-run round before it continues: the next round has
+    a new identity."""
+    practice_round.enable(app.store)
+    course(app, "add")
+    app.continue_study_path()
+    before = cs.round_plan(app)
+    assert before[0]
+    app._add_study_sections([first_kana_section(app)["id"]])
+    after = cs.round_plan(app)
+    assert after[3][2] != before[3][2]
+
+
+def test_the_enrollment_notice_names_only_the_requested_sections(app, monkeypatch):
+    """The notice an add arms names only the sections asked for, though it counts the entries of every section
+    the add brought in (here one more, added with it)."""
+    production_slot(app, monkeypatch)
+    reviewed(app, "あ")
+    seed_main(app, draft={"romaji_answer": "a"})
+    result = {"added_sections": ["s4:a", "s4:b"], "added_learning": [],
+              "sections": [{"id": "s4:a", "title": "甲节", "entries": [{"content_id": "grammar:s4-none-a"}]},
+                           {"id": "s4:b", "title": "乙节", "entries": [{"content_id": "grammar:s4-none-b"}]}]}
+    monkeypatch.setattr(app.study_path_service(), "add_sections", lambda *args, **kwargs: result)
+    app._add_study_sections(["s4:a"])
+    assert app.page == "question"
+    assert cs.texts(app)[0] == "已加入「甲节」（2 项）。先完成当前到期复习，新课会接着开始。"
