@@ -84,11 +84,16 @@ def _fair_new(app):
     return enabled(app)
 
 
+def _record_error(*args):
+    from .diagnostic_events import record_error
+    return record_error(*args)
+
+
 def service(app) -> CourseTeaching:
     """The teaching service over this app's stores, built for one call (nothing is kept)."""
     return CourseTeaching(app.learning_store, app.store,
                           enabled_kinds=lambda: app.learning_preferences()["enabled"],
-                          fair_new=lambda: _fair_new(app))
+                          fair_new=lambda: _fair_new(app), record_error=_record_error)
 
 
 # --- what a teaching head becomes ---------------------------------------------------------------------------------

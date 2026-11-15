@@ -998,6 +998,7 @@ tests/test_course_answering.py
 tests/test_course_line_pages.py
 tests/test_course_teaching_pages.py
 tests/test_course_teaching.py
+tests/test_course_guide_service.py
 tests/test_course_batch_pages.py
 tests/test_course_decide.py
 tests/test_continue_decide.py

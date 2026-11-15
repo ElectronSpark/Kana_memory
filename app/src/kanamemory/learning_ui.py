@@ -40,6 +40,7 @@ from .course_answer_runtime import answer_session
 from .course_line.answer import PROMPT_PREFS
 from .course_line.answer_display import ANSWER_COMPARISON, ANSWER_PITCH, ANSWER_SEQUENCE, detail_model
 from .course_line.answer_model import EditFailed, EditKept, EditLeft
+from .course_line.teaching_model import GuideEmpty, GuideNext, GuideSaveFailed
 from . import ui_components as u
 
 LEARNING_BUSY_STATUS = "草稿暂未保存（数据库正忙），继续输入或提交时会重试。"
@@ -1113,9 +1114,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 return False
             value = {**context["draft"], **value}
             try:
-                self.learning_store.advance_instruction(teaching.item(self)["id"], "guide", state={
+                teaching.service(self).checkpoint_guide(teaching.item(self), {
                     "guide_question": deepcopy(question), "guide_draft": deepcopy(value),
-                    "guide_answer": None, "guide_correct": False}, instruction_scope=teaching.item(self).get("instruction_scope"))
+                    "guide_answer": None, "guide_correct": False})
             except (ValueError, KeyError) as exc:
                 status.text = "暂未保存：" + str(exc)
                 return False
@@ -1133,7 +1134,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if mode == 'multi_cloze':
             from .multi_cloze_ui import controls as cloze_controls, prompt_view
             context['prompt'] = prompt_view(self, u, question, context['draft'],
-                clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), known_ids=known_ids)
+                course_answer_runtime.service(self).prompt_preferences(), known_ids=known_ids)
 
             def submit_cloze_guide(answer):
                 self.answer_learning_guide(answer, draft=context['draft'], question_id=question['id'])
@@ -1176,14 +1177,14 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 if active() and "input" in context:
                     save({"answer": context["input"].value})
             from .answer_input_ui import answer_controls
-            from .answer_input import available, system_japanese_enabled
+            from .answer_input import available
             context["input"], controls = answer_controls(u, question,
                 context["draft"].get("answer", ""), changed, active,
-                system_japanese=system_japanese_enabled(self.store))
+                system_japanese=course_answer_runtime.service(self).system_japanese())
             context["submit"] = u.button("提交", submit, primary=True)
             controls.append(context["submit"])
             context["buttons"] = [context["input"], context["submit"]]
-            if not available(question, system_japanese=system_japanese_enabled(self.store)):
+            if not available(question, system_japanese=course_answer_runtime.service(self).system_japanese()):
                 def demonstrate(widget=None):
                     if active():
                         original = context["draft"].get("input_unavailable_draft", deepcopy(context["draft"]))
@@ -1216,8 +1217,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 return
             value = {**context.get("draft", {}), "demonstration_open": True}
             try:
-                self.learning_store.advance_instruction(teaching.item(self)["id"], "guide", state={
-                    "guide_question": deepcopy(question), "guide_draft": value}, instruction_scope=teaching.item(self).get("instruction_scope"))
+                teaching.service(self).checkpoint_guide(teaching.item(self), {
+                    "guide_question": deepcopy(question), "guide_draft": value})
             except (ValueError, KeyError) as exc:
                 context["status"].text = "暂未保存：" + str(exc)
                 return
@@ -1355,9 +1356,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         return [*primer, u.button('讲解', toggle, compact=True, width=100, font_size=12), body]
 
     def _learning_guide_archive(self, checkpoint):
-        from .learning_replacement import PREFIX
-        identity = checkpoint.get('guide_replacement_id')
-        event = self.store.get_setting(PREFIX + 'guide:' + identity, None) if identity else None
+        event = teaching.service(self).guide_archive(checkpoint)
         if not event:
             return []
         old = event['before']
@@ -1371,48 +1370,34 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             u.button("返回讲解", lambda w: self.show_learning_instruction(teaching.item(self)), primary=True))
 
     def start_learning_guide(self, widget=None, **kwargs):
-        content_id = teaching.item(self)["id"]
-        self.learning_store.advance_instruction(content_id, "intro_done", instruction_scope=teaching.item(self).get("instruction_scope"))
         # A review can become due while the introduction is being read. Finish
         # the guide the user explicitly opened before interleaving other work.
-        self.show_learning_instruction(self.learning_store.instruction_item(content_id, teaching.item(self).get("instruction_scope")))
+        self.show_learning_instruction(teaching.service(self).start_guide(teaching.item(self)))
 
     def answer_learning_guide(self, answer, *, draft=None, question_id=None, expected_question=None):
-        if (self.page != "learning_guide" or (question_id is not None and teaching.guide(self)["id"] != question_id)
-                or expected_question is not None and teaching.guide(self) is not expected_question):
+        guide = teaching.guide(self)
+        if (self.page != "learning_guide" or (question_id is not None and guide["id"] != question_id)
+                or expected_question is not None and guide is not expected_question):
             return
         from .answer_input_ui import prepare_submission
-        ready, answer = prepare_submission(teaching.guide(self), answer,
+        ready, answer = prepare_submission(guide, answer,
             getattr(self, "_learning_guide_context", {}).get("status"),
             field=getattr(self, "_learning_guide_context", {}).get("input"))
         if not ready:
             return
-        result = grade_learning_answer(teaching.guide(self), answer)
-        if result.get("status") in {"empty", "invalid"}:
-            context = getattr(self, "_learning_guide_context", {})
-            if context.get("question") is teaching.guide(self):
-                context["status"].text = result.get("message", "请先完成这一题。")
+        answered = teaching.service(self).answer_guide(teaching.item(self), guide, answer, draft)
+        context = getattr(self, "_learning_guide_context", {})
+        if isinstance(answered, GuideEmpty):
+            if context.get("question") is guide:
+                context["status"].text = answered.message
             return
-        state = {"guide_answer": answer, "guide_correct": result["status"] == "correct",
-                 "guide_question": deepcopy(teaching.guide(self))}
-        if draft is not None and (is_pitch_question(teaching.guide(self)) or teaching.guide(self).get("practice")):
-            state["guide_draft"] = deepcopy(draft)
-            if teaching.guide(self).get("input_mode") == "text":
-                state["guide_draft"]["answer"] = answer
-        try:
-            self.learning_store.advance_instruction(teaching.item(self)["id"], "guide" if result["status"] == "correct" else "guide_failed",
-                state=state, instruction_scope=teaching.item(self).get("instruction_scope"))
-        except Exception as exc:
-            from .diagnostic_events import record_error
-            record_error("learning_guide", "submit", exc)
-            context = getattr(self, "_learning_guide_context", {})
-            if context.get("question") is teaching.guide(self):
+        if isinstance(answered, GuideSaveFailed):
+            if context.get("question") is guide:
                 context["status"].text = "未能保存本次作答，请重试。"
             return
-        context = getattr(self, "_learning_guide_context", {})
-        if context.get("question") is teaching.guide(self) and "guide_draft" in state:
-            context["draft"] = deepcopy(state["guide_draft"])
-        self.render_learning_guide_result(result["status"] == "correct")
+        if context.get("question") is guide and answered.draft is not None:
+            context["draft"] = deepcopy(answered.draft)
+        self.render_learning_guide_result(answered.correct)
 
     def render_learning_guide_result(self, correct):
         from .answer_feedback import build_answer_feedback
@@ -1424,8 +1409,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 self._learning_guide_result.add(answer_diagram(self, teaching.guide(self), reveal=True))
                 entered = context.get("draft", {}).get("answer")
                 if not entered:
-                    saved = self.learning_store.instruction_item(teaching.item(self)["id"], teaching.item(self).get("instruction_scope")) or {}
-                    entered = saved.get("checkpoint", {}).get("guide_answer")
+                    entered = teaching.service(self).saved_guide_answer(teaching.item(self))
                 diagnosis = grade_learning_answer(teaching.guide(self), entered).get("message", "")
                 if diagnosis and diagnosis != teaching.guide(self).get("feedback", ""):
                     self._learning_guide_result.add(u.label(diagnosis, size=13, color=u.MUTED))
@@ -1470,23 +1454,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             self._reveal_learning_guide_result()
 
     def _learning_guide_pass_caption(self):
-        """Design 12 Q1: the "seen, go on" caption after a recorded wrong answer, or None.
-
-        gates.guide_may_continue decides (breadth first only); the store checks
-        again for a replaced guide and for each step of a guided sequence.
-        """
-        from .arrangement.rules.gates import guide_may_continue
-        if not guide_may_continue(self.learning_store.arrangement_orientation(), answered_wrong=True):
-            return None
-        saved = self.learning_store.instruction_item(teaching.item(self)["id"], teaching.item(self).get("instruction_scope")) or {}
-        checkpoint = saved.get("checkpoint", {})
-        if (saved.get("stage") != "guide" or checkpoint.get("guide_answer") is None or checkpoint.get("guide_correct") is True
-                or (checkpoint.get("guide_question") or {}).get("id") != teaching.guide(self).get("id")):
-            return None
-        sequence = checkpoint.get("guide_sequence") or []
-        if sequence and checkpoint.get("guide_index", 0) < len(sequence) - 1:
-            return "这一步看过了，下一步"
-        return "看过了，继续"
+        """Design 12 Q1: the "seen, go on" caption after a recorded wrong answer, or None."""
+        return teaching.service(self).pass_caption(teaching.item(self), teaching.guide(self))
 
     def _learning_guide_pass_controls(self):
         caption = self._learning_guide_pass_caption()
@@ -1501,25 +1470,19 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             return
         if self._learning_guide_pass_caption() is None:
             # The answer or the orientation changed since the result was drawn.
-            self.show_learning_instruction(self.learning_store.instruction_item(
-                teaching.item(self)["id"], teaching.item(self).get("instruction_scope")))
+            self.show_learning_instruction(teaching.service(self).lesson(teaching.item(self)))
             return
         self.finish_learning_guide(expected_question=expected_question, passed=True)
 
     def finish_learning_guide(self, widget=None, *, question_id=None, expected_question=None, passed=False, **kwargs):
-        from .new_dispatch import enabled
-        if (self.page != "learning_guide" or (question_id is not None and teaching.guide(self)["id"] != question_id)
-                or expected_question is not None and teaching.guide(self) is not expected_question):
+        guide = teaching.guide(self)
+        if (self.page != "learning_guide" or (question_id is not None and guide["id"] != question_id)
+                or expected_question is not None and guide is not expected_question):
             return
-        saved = self.learning_store.instruction_item(teaching.item(self)["id"], teaching.item(self).get("instruction_scope"))
-        if saved.get("checkpoint", {}).get("guide_sequence"):
-            advanced = self.learning_store.advance_guided_sequence(saved["id"], question_id=teaching.guide(self)["id"], instruction_scope=teaching.item(self).get("instruction_scope"))
-            if not advanced["finished"]:
-                self.show_learning_instruction(advanced["item"])
-                return
-        # A passed guide moves on like a correct one; its checkpoint keeps guide_correct false.
-        self.learning_store.advance_instruction(teaching.item(self)["id"], "bridge" if passed else "guide_correct",
-                                                fair_new=enabled(self), instruction_scope=teaching.item(self).get("instruction_scope"))
+        finished = teaching.service(self).finish_guide(teaching.item(self), guide, passed)
+        if isinstance(finished, GuideNext):
+            self.show_learning_instruction(finished.item)
+            return
         if study_path_available(self):
             self.continue_study_path(_checkpoint_saved=True)
         else:

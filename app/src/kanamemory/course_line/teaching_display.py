@@ -33,6 +33,10 @@ GUIDE_UNAVAILABLE_NOTE = "直接开始练习不会记为已掌握，之后仍按
 START_PRACTICE = "直接开始练习"
 SKIP_ITEM = "跳到下一项"
 NOT_SAVED = "暂未保存："
+# 跟着做 (the guide)
+GUIDE_EMPTY = "请先完成这一题。"
+PASS_STEP = "这一步看过了，下一步"
+PASS_GUIDE = "看过了，继续"
 # 开始前
 FAMILIARITY_TITLE = "开始前"
 ABILITY_LABELS = {"reading": "读音", "use": "提取与使用", "listening": "听辨理解", "application": "应用规则"}

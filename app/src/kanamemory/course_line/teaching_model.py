@@ -107,6 +107,40 @@ class FamiliarityOpened:
     ability: str       # the ability asked now
 
 
+# --- the guide (CourseTeaching.answer_guide, CourseTeaching.finish_guide) --------------------------------------
+
+@dataclass(frozen=True)
+class GuideEmpty:
+    """The guide answer is empty or cannot be read: nothing was written."""
+
+    message: str   # what the learner is told beside the controls
+
+
+@dataclass(frozen=True)
+class GuideSaveFailed:
+    """The guide answer could not be saved (the error is noted for diagnostics)."""
+
+
+@dataclass(frozen=True)
+class GuideAnswered:
+    """The guide answer is judged and saved."""
+
+    correct: bool
+    draft: object   # the draft saved with it (a pitch or practice question), else None
+
+
+@dataclass(frozen=True)
+class GuideNext:
+    """The guide's sequence goes on with its next question."""
+
+    item: dict   # the lesson as stored now
+
+
+@dataclass(frozen=True)
+class GuideFinished:
+    """The guide is over: the lesson moved on and the line goes on."""
+
+
 # --- the stop pages' buttons ------------------------------------------------------------------------------------
 
 class TeachingActionKind(Enum):

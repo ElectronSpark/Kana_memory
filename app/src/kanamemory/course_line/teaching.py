@@ -1,5 +1,5 @@
 """The teaching steps of the course line (讲解与引导) as a service (design 13 C1, C3): what a teaching head
-becomes, and the familiarity question.
+becomes, the familiarity question, and the guide — its checkpoints, its judgment, "seen, go on" and its end.
 
 step() decides which of ten things a teaching head becomes and makes the writes that decision has always
 made on its way — the shared introduction passed over, the guide sequence and the guide question frozen
@@ -14,9 +14,12 @@ from __future__ import annotations
 from copy import deepcopy
 
 from .. import intro_batch
-from ..learning_questions import KIND_ABILITIES, LISTENING_KINDS, question_kinds
-from .teaching_model import (AskFamiliarity, BatchOwns, FamiliarityOpened, Guide, GuideBlocked, GuidePaused,
-                             GuideUnavailable, Introduce, MaterialNotReady, OpenAbility)
+from ..learning_questions import KIND_ABILITIES, LISTENING_KINDS, grade_learning_answer, question_kinds
+from ..pitch_practice import is_pitch_question
+from .teaching_display import GUIDE_EMPTY, PASS_GUIDE, PASS_STEP
+from .teaching_model import (AskFamiliarity, BatchOwns, FamiliarityOpened, Guide, GuideAnswered, GuideBlocked,
+                             GuideEmpty, GuideFinished, GuideNext, GuidePaused, GuideSaveFailed, GuideUnavailable,
+                             Introduce, MaterialNotReady, OpenAbility)
 
 
 class CourseTeaching:
@@ -25,14 +28,16 @@ class CourseTeaching:
     ``learning_store``: the learner store (public methods only); ``store``: the
     study store (the known ids, the material checks); ``enabled_kinds()``: the
     kinds this device can present now — asked each time it is needed, never
-    kept; ``fair_new()``: whether new items are shared out fairly (design 12).
+    kept; ``fair_new()``: whether new items are shared out fairly (design 12);
+    ``record_error(area, action, error)``: notes an error for diagnostics.
     """
 
-    def __init__(self, learning_store, store, *, enabled_kinds, fair_new):
+    def __init__(self, learning_store, store, *, enabled_kinds, fair_new, record_error=None):
         self.learning_store = learning_store
         self.store = store
         self._enabled_kinds = enabled_kinds
         self._fair_new = fair_new
+        self._record_error = record_error or (lambda *args: None)
 
     def step(self, item, keep):
         """What the teaching head ``item`` becomes.
@@ -206,3 +211,86 @@ class CourseTeaching:
         rating, no review event; independent practice follows after its delay."""
         self.learning_store.advance_instruction(content_id, "bridge", fair_new=self._fair_new(),
                                                 instruction_scope=instruction_scope)
+
+    # --- the guide ---------------------------------------------------------------------------------------------------
+
+    def lesson(self, item):
+        """The lesson ``item`` as stored now."""
+        return self.learning_store.instruction_item(item["id"], item.get("instruction_scope"))
+
+    def start_guide(self, item):
+        """The learner opens the guide from the introduction: the lesson moves on to its guide; the lesson as
+        stored afterwards."""
+        self.learning_store.advance_instruction(item["id"], "intro_done", instruction_scope=item.get("instruction_scope"))
+        return self.learning_store.instruction_item(item["id"], item.get("instruction_scope"))
+
+    def checkpoint_guide(self, item, state):
+        """Save ``state`` (the frozen question with its draft; an open demonstration) into the lesson's guide
+        checkpoint, before the page shows the change. The store's refusal is raised."""
+        return self.learning_store.advance_instruction(item["id"], "guide", state=state,
+                                                       instruction_scope=item.get("instruction_scope"))
+
+    def guide_archive(self, checkpoint):
+        """What a replaced guide question looked like before it was replaced (the saved record), or None."""
+        from ..learning_replacement import PREFIX
+        identity = checkpoint.get('guide_replacement_id')
+        return self.store.get_setting(PREFIX + 'guide:' + identity, None) if identity else None
+
+    def answer_guide(self, item, question, answer, draft):
+        """Judge and save one answer to the guide question. GuideEmpty: nothing to judge, nothing written;
+        GuideSaveFailed: it could not be saved; GuideAnswered: the lesson's guide holds the answer (a right one
+        stays in the guide stage, a wrong one is marked failed), with the draft of a pitch or practice question."""
+        result = grade_learning_answer(question, answer)
+        if result.get("status") in {"empty", "invalid"}:
+            return GuideEmpty(result.get("message", GUIDE_EMPTY))
+        state = {"guide_answer": answer, "guide_correct": result["status"] == "correct",
+                 "guide_question": deepcopy(question)}
+        if draft is not None and (is_pitch_question(question) or question.get("practice")):
+            state["guide_draft"] = deepcopy(draft)
+            if question.get("input_mode") == "text":
+                state["guide_draft"]["answer"] = answer
+        try:
+            self.learning_store.advance_instruction(item["id"], "guide" if result["status"] == "correct" else "guide_failed",
+                state=state, instruction_scope=item.get("instruction_scope"))
+        except Exception as exc:
+            self._record_error("learning_guide", "submit", exc)
+            return GuideSaveFailed()
+        return GuideAnswered(result["status"] == "correct", state.get("guide_draft"))
+
+    def saved_guide_answer(self, item):
+        """The answer saved in the lesson's guide (what a pitch guide's remark is drawn from after a restart)."""
+        saved = self.learning_store.instruction_item(item["id"], item.get("instruction_scope")) or {}
+        return saved.get("checkpoint", {}).get("guide_answer")
+
+    def pass_caption(self, item, question):
+        """Design 12 Q1: the caption of "seen, go on" after a recorded wrong answer, or None.
+
+        gates.guide_may_continue decides (breadth first only); the store checks
+        again for a replaced guide and for each step of a guided sequence.
+        """
+        from ..arrangement.rules.gates import guide_may_continue
+        if not guide_may_continue(self.learning_store.arrangement_orientation(), answered_wrong=True):
+            return None
+        saved = self.learning_store.instruction_item(item["id"], item.get("instruction_scope")) or {}
+        checkpoint = saved.get("checkpoint", {})
+        if (saved.get("stage") != "guide" or checkpoint.get("guide_answer") is None or checkpoint.get("guide_correct") is True
+                or (checkpoint.get("guide_question") or {}).get("id") != question.get("id")):
+            return None
+        sequence = checkpoint.get("guide_sequence") or []
+        if sequence and checkpoint.get("guide_index", 0) < len(sequence) - 1:
+            return PASS_STEP
+        return PASS_GUIDE
+
+    def finish_guide(self, item, question, passed):
+        """Go on after the guide question: the next question of a guided sequence (GuideNext), or the end of the
+        guide — the lesson moves on ("bridge" for a guide passed after a wrong answer, whose checkpoint keeps
+        guide_correct false) and the line goes on (GuideFinished)."""
+        saved = self.learning_store.instruction_item(item["id"], item.get("instruction_scope"))
+        if saved.get("checkpoint", {}).get("guide_sequence"):
+            advanced = self.learning_store.advance_guided_sequence(saved["id"], question_id=question["id"],
+                                                                   instruction_scope=item.get("instruction_scope"))
+            if not advanced["finished"]:
+                return GuideNext(advanced["item"])
+        self.learning_store.advance_instruction(item["id"], "bridge" if passed else "guide_correct",
+                                                fair_new=self._fair_new(), instruction_scope=item.get("instruction_scope"))
+        return GuideFinished()
