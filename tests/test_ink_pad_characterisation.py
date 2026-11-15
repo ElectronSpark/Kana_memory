@@ -8,7 +8,7 @@ read and set the pad through ``support.kana_support`` only, so they run on the d
 """
 import asyncio
 from types import MethodType, SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -110,6 +110,15 @@ def test_a_resize_is_ignored_while_the_app_has_no_strokes_at_all(pad_app):
     app._schedule_ink_draw.assert_not_called()
 
 
+def test_a_resize_is_taken_once_the_app_holds_strokes_even_when_they_are_none(pad_app):
+    app = pad_app
+    kana_support.set_strokes(app, None)
+    drawn = app._schedule_ink_draw.call_count
+    app.ink_resize(app.canvas, 720, 420)
+    assert (app._ink_view_width, app._ink_view_height) == (720, 420)
+    assert app._schedule_ink_draw.call_count == drawn + 1
+
+
 def test_undo_takes_the_last_stroke_from_the_same_list_and_clear_starts_a_new_one(pad_app):
     app = pad_app
     app.show_ink_page(True, "手写")
@@ -148,6 +157,21 @@ def test_recognition_is_given_a_copy_of_the_strokes_and_the_size_of_the_pad(pad_
     given, width, height = app.platform.recognize.call_args.args
     assert given == [[(12.0, 18.0, 1), (20.0, 30.0, 2)]] and given is not strokes and given[0] is not strokes[0]
     assert (width, height) == (300, 200)
+
+
+@pytest.mark.parametrize("size", [{"ink_width": 300, "ink_height": 200}, {"ink_height": 0}, {}])
+def test_deleting_the_learning_data_starts_a_new_list_of_strokes_and_leaves_the_size_of_the_pad(size):
+    strokes = [[(1.0, 2.0, 3)]]
+    app = kana_support.with_state(SimpleNamespace(
+        page="settings", _page_token=1, store=Mock(), alert=Mock(), platform=Mock(),
+        main_window=SimpleNamespace(dialog=AsyncMock(return_value=True)), back_stack=BackStack(),
+        show_settings=Mock(), _ink_revision=0, _audio_serial=0, _active_stroke=strokes[0]),
+        assisted_attempts=set(), answered_attempts=set(), session_id="s", questions=[], question_index=0,
+        session_right=0, question=None, script="hiragana", strokes=strokes, **size)
+    asyncio.run(KanaMemory.delete_learning_data(app))
+    app.store.clear_learning_data.assert_called_once_with()
+    assert kana_support.ink(app) == {"strokes": [], **size}
+    assert kana_support.strokes(app) is not strokes and len(strokes) == 1 and app._active_stroke is None
 
 
 # --- what a page kept for Back holds, and what Back gives back --------------------------------------------------------
@@ -220,6 +244,14 @@ def test_back_gives_back_exactly_the_values_of_the_pad_the_kept_page_holds(name,
         assert kana_support.strokes(value) is held["strokes"]
 
 
+@pytest.mark.parametrize("held", [{"strokes": [["then"]]}, {"ink_width": 300, "ink_height": 0}])
+def test_back_over_an_app_that_holds_nothing_of_the_pad_gives_only_the_kept_values(held):
+    value = away_from("ink_question", **held)
+    kana_support.forget_ink(value, "strokes", "ink_width", "ink_height")
+    KanaMemory.go_back(value)
+    assert value.page == "ink_question" and kana_support.ink(value) == held
+
+
 # --- the saved checkpoint ---------------------------------------------------------------------------------------------
 
 INK_KEYS = {"strokes", "ink_width", "ink_height"}
@@ -256,6 +288,16 @@ def test_the_checkpoint_of_a_handwriting_question_saves_an_empty_standard_pad_fo
     assert saved_ink(checkpoint_app("kana_handwriting")) == PAD
 
 
+@pytest.mark.parametrize("ink,saved", [
+    ({"strokes": [[(1.0, 2.0, 3)]]}, {"strokes": [[(1.0, 2.0, 3)]], "ink_width": 360, "ink_height": 210}),
+    ({"ink_width": 300}, {"strokes": [], "ink_width": 300, "ink_height": 210}),
+    ({"strokes": [], "ink_height": 0}, {"strokes": [], "ink_width": 360, "ink_height": 0}),
+    ({"strokes": None, "ink_width": None}, {"strokes": None, "ink_width": None, "ink_height": 210}),
+])
+def test_the_checkpoint_saves_the_standard_value_only_for_a_part_of_the_pad_that_was_never_set(ink, saved):
+    assert saved_ink(checkpoint_app("kana_handwriting", **ink)) == saved
+
+
 def test_the_checkpoint_of_another_question_saves_nothing_of_the_pad():
     assert saved_ink(checkpoint_app("kana_choice", strokes=[[(1.0, 2.0, 3)]], ink_width=300, ink_height=200)) == {}
 
@@ -289,6 +331,16 @@ def test_a_problem_report_of_an_ink_page_carries_a_copy_of_the_strokes_and_the_s
 def test_a_problem_report_of_an_ink_page_names_what_the_app_never_held_as_none():
     result = report_of(report_app(), "ink_question")["ink"]
     assert (result["strokes"], result["ink_width"], result["ink_height"]) == (None, None, None)
+
+
+@pytest.mark.parametrize("ink,reported", [
+    ({"strokes": [[(1.0, 2.0, 3)]]}, ([[[1.0, 2.0, 3]]], None, None)),
+    ({"ink_width": 300}, (None, 300, None)),
+    ({"strokes": [], "ink_height": 0}, ([], None, 0)),
+])
+def test_a_problem_report_of_an_ink_page_carries_each_part_of_the_pad_the_app_holds(ink, reported):
+    result = report_of(report_app(**ink), "free_ink")["ink"]
+    assert (result["strokes"], result["ink_width"], result["ink_height"]) == reported
 
 
 def test_a_problem_report_of_another_page_carries_no_ink():

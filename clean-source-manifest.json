@@ -830,7 +830,7 @@
     "tests/test_index_preview_platform.py": "c40a603a6844be00c050e87206e9efdf7dc0b3de3d98baea4d20af73865b6071",
     "tests/test_initial_familiarity.py": "2f42105d4f18c29a6a80fc578fd36360844279d288186e79bbc613e09fbb9d84",
     "tests/test_ink_candidates.py": "75206537b6fdc2a943836462937b081ed9e6ba337dade0cdbfbd88b616f1bfeb",
-    "tests/test_ink_pad_characterisation.py": "493e7590f1c7b4134b76e138d1e56e82895a8a9af788f4cc3c04d54d4018105f",
+    "tests/test_ink_pad_characterisation.py": "80beda3fa0d2a9b29a24e66171bcdf0e7d8fc19263940e9fb36c3d64677e9312",
     "tests/test_ink_renderer.py": "9a10e78d0b576f9d1dd5ef6a64e08d347d073ea25a09fdc20b5dfe99ae3ea811",
     "tests/test_ink_touch_batch.py": "447a6b4a7b1c543b919421e9ed46a445aec00a34e5ae5140c47468c61bfd711f",
     "tests/test_ink_touch_platform.py": "8aa52acda1908908a28ea5c5c2ea3675eecfe73faed2d05bf87f494574715aa8",
