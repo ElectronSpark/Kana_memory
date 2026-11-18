@@ -59,9 +59,12 @@ def read_identity_file(path):
 
 
 def applied_pyproject(text, identity):
-    """The pyproject text with the identity's bundle and formal name (exactly one declaration of each)."""
+    """The pyproject text with the identity's bundle and formal name (exactly one declaration of each).
+
+    Only the declaration is replaced, up to but not including its line ending: a checkout with CRLF line endings
+    keeps them, and a text that already carries the identity comes back unchanged."""
     for key, value in (("bundle", identity["bundle"]), ("formal_name", identity["formal_name"])):
-        text, count = re.subn(rf"(?m)^{key}\s*=.*$", lambda _match: f'{key} = "{value}"', text)
+        text, count = re.subn(rf"(?m)^{key}[ \t]*=[^\r\n]*", lambda _match: f'{key} = "{value}"', text)
         if count != 1:
             raise ValueError(f"Expected one Briefcase {key} declaration")
     return text

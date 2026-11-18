@@ -115,6 +115,20 @@ def test_only_the_demo_edition_of_the_app_configuration_is_accepted(tmp_path):
         identity_tool.require_demo_edition(DEMO_PYPROJECT + 'bundle = "org.example.demo"\n')
 
 
+def test_a_checkout_with_crlf_line_endings_is_the_same_edition(tmp_path):
+    """A Windows checkout may hold the file with CRLF line endings (git's autocrlf): the demo edition is still the
+    demo edition, and applying an identity changes the two declarations only, never a line ending."""
+    assert "\r" not in DEMO_PYPROJECT
+    windows = DEMO_PYPROJECT.replace("\n", "\r\n")
+    assert identity_tool.require_demo_edition(windows) == windows
+    personal = identity_tool.applied_pyproject(windows, identity_tool.read_identity_file(identity_file(tmp_path)))
+    assert personal.count("\r\n") == windows.count("\r\n") and "\n" not in personal.replace("\r\n", "")
+    assert personal.replace("\r\n", "\n") == identity_tool.applied_pyproject(
+        DEMO_PYPROJECT, identity_tool.read_identity_file(identity_file(tmp_path)))
+    with pytest.raises(ValueError, match="demo identity"):
+        identity_tool.require_demo_edition(personal)
+
+
 def test_the_command_line_reads_with_the_identity_file(tmp_path):
     app = app_tree(tmp_path / "public/app")
     result = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "tools/app_build_identity.py"), "read", str(app),
