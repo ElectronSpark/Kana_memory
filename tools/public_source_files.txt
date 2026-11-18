@@ -1002,3 +1002,6 @@ tests/test_route_mix_service.py
 app/src/kanamemory/content_caches.py
 tests/test_content_caches.py
 tests/support/content_cache_fixtures.py
+app/src/kanamemory/process_restart.py
+app/native/java/org/example/kanamemory/KanaRestart.java
+tests/test_process_restart.py

@@ -178,7 +178,8 @@
   "app/src/kanamemory/route_mix/placement.py": ["__future__", "bisect", "collections.abc", "dataclasses", ".params", ".readiness"],
   "app/src/kanamemory/route_mix/plan.py": ["__future__", "collections.abc", "dataclasses", "hashlib", "json", ".params", ".placement", ".readiness"],
   "app/src/kanamemory/loanword_origins.py": ["__future__", "collections.abc", "functools", "re", "types", ".content_pack", ".content_caches"],
-  "app/src/kanamemory/content_caches.py": ["__future__", "threading"]
+  "app/src/kanamemory/content_caches.py": ["__future__", "threading"],
+  "app/src/kanamemory/process_restart.py": ["__future__"]
 },
   "page_coupling": {
     "note": "Design 13 G1-G3 (docs/design_current/13_frontend_backend_separation.txt; docs/design_current/07_engineering_structure.txt restates the rule), frozen at stage S0b (2026-11-13). Per file that creates controls: store_access counts every store reference (<any expression>.store or .learning_store; a chain counts once), except a reference that is directly an argument of an owner_calls entry (never in a page package: arrangement/ui, admission/ui, home/ui, next_step/ui) or of id/isinstance/type; app_state counts distinct attribute names set on the app object (assignment, loop, with-as and setattr targets). Ceilings only fall: lower or remove an entry in the change that lowers the number. A file without an entry has ceiling zero; a page package (arrangement/ui, admission/ui, home/ui, next_step/ui) never has an entry.",

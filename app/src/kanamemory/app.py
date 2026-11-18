@@ -250,6 +250,9 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self._practice_preferences = self._clean_preferences(self.store.get_setting("practice_preferences", {}))
         self._restoring_practice = False
         self.platform = create_platform()
+        # Android re-created the window in a process that still serves the old content while a library
+        # change is pending: restart the process before any page is built (process_restart; once).
+        KanaMemory.restart_for_pending_library_change(self)
         self.kana_links = KanaLinkIndex(self.repo.kana_list())
         self.source_map = {s["id"]: s for s in self.repo.sources()}
         self.origin_images = OriginImageCatalog(Path(__file__).parent / "resources" / "glyph_origins")

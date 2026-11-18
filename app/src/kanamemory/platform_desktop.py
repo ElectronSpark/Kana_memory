@@ -293,6 +293,12 @@ class DesktopPlatform:
         self._closed = True
         self.remove_back_handler()
 
+    # Closing the window ends the desktop process; the app offers no restart of its own here.
+    can_restart = False
+
+    def restart_app(self):
+        return False
+
     def open_url(self, url):
         if urlsplit(url).scheme not in {"http", "https"}:
             raise PlatformError("仅支持打开网页来源链接。")

@@ -1462,6 +1462,22 @@ class AndroidPlatform:
                 future.cancel()
         self._listeners.clear()
 
+    # A content library change takes effect in a new process (process_restart); leaving the app and
+    # coming back keeps this one.
+    can_restart = True
+
+    def restart_app(self):
+        """Start the launcher activity as a new task and end this process (KanaRestart), on the UI thread.
+
+        Works after close(): the App closes its stores and services first. Never returns after a
+        successful restart; False when Android refused it (the process lives on).
+        """
+        c = self._jclass
+        activity = c("org.beeware.android.MainActivity").singletonThis
+        if activity is None:
+            return False
+        return bool(c("org.example.kanamemory.KanaRestart").restart(activity))
+
 
 def create_platform(context=None):
     return AndroidPlatform(context)

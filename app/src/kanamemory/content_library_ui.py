@@ -48,6 +48,9 @@ CONTENT_LIBRARY_PAGES = frozenset({"content_libraries", "content_library_prechec
 # The process keeps the content it started with (content_pack). On Android leaving the app and coming
 # back does not end that process (the system keeps it; a new window reuses it), so say what a restart is.
 RESTART_HOW = "重启指完全关闭应用再打开：电脑上关闭窗口；手机上在最近任务中划掉本应用。只切到后台再回来不算重启。"
+# Where the platform can restart the process itself (process_restart): the libraries page offers it.
+RESTART_NOW = "立即重启"
+RESTART_NOW_HINT = "可在内容库页点「立即重启」。"
 FAMILY_TITLES = {"word": "词汇", "grammar": "语法", "pronunciation": "读音规则", "kana": "假名", "other": "其他"}
 LISTED = 10
 REGISTRY_SIGNATURE_TEXT = {"unsigned": "未签名", "unverified": "签名未验证", "verified": "签名已验证",
@@ -126,6 +129,70 @@ class ContentLibraryUIMixin:
                                                                         availability=availability))
         return self._content_library_service[1]
 
+    # ------------------------------------------------------------ restart (process_restart)
+
+    def _can_restart(self):
+        return getattr(getattr(self, "platform", None), "can_restart", False) is True
+
+    def _restart_hint(self):
+        """What an alert adds after 重启应用后生效: the page's 立即重启, or how to restart by hand."""
+        return RESTART_NOW_HINT if self._can_restart() else RESTART_HOW
+
+    def _close_for_restart(self):
+        """The App's normal close (KanaMemory.on_exit): True when everything is saved and closed."""
+        close = getattr(type(self), "on_exit", None)
+        return callable(close) and close(self) is True
+
+    def _restart_process(self):
+        """The platform's restart; returns only when it did not happen. Tried at most once per process."""
+        from . import process_restart
+        process_restart.mark_attempt()
+        try:
+            return bool(self.platform.restart_app())
+        except Exception as error:  # noqa: BLE001 - a refused restart leaves the app running
+            from .diagnostic_events import record_error
+            record_error("content_library", "restart", error)
+            return False
+
+    async def restart_for_library_change(self, widget=None, **kwargs):
+        """立即重启: close as on a normal exit, then a new process loads the saved libraries."""
+        reason = self._content_library_blocked()
+        if reason:
+            self.alert(reason)
+            return
+        if not self._can_restart():
+            self.alert(RESTART_HOW)
+            return
+        if not self._close_for_restart():
+            return  # the close said why (an unsaved draft, a running backup, ...); nothing was closed
+        if self._restart_process():
+            return  # a real restart never returns
+        # The platform refused: the stores are closed, so the app ends here.
+        try:
+            await self.main_window.dialog(u.toga.InfoDialog("未能重启", "未能自动重启。" + RESTART_HOW))
+        finally:
+            self.exit()
+
+    def restart_for_pending_library_change(self):
+        """At start-up, before any page: the App started again in this process (Android re-created
+        its window) while a library change is pending, so this process still serves the old content.
+        Restart once; when that returns, go on as before (the libraries page notes the change)."""
+        from . import process_restart
+        started_before = process_restart.note_start()
+        if not started_before:
+            return False
+        try:
+            pending = self.content_library_service().pending_restart()
+        except Exception:  # noqa: BLE001 - no registry: nothing is pending
+            pending = False
+        action = process_restart.decide(started_before=started_before, change_pending=pending,
+                                        can_restart=self._can_restart(),
+                                        already_attempted=process_restart.attempted())
+        if action != process_restart.RESTART:
+            return False
+        # Nothing to save yet: this start has written only committed rows (registry sync, round archive).
+        return self._restart_process()
+
     def _content_library_blocked(self):
         from .practice_round import planned_round_running
         return rules.change_blocked_reason(backup_busy=getattr(self, "_backup_busy", False),
@@ -200,7 +267,12 @@ class ContentLibraryUIMixin:
                         u.button("返回", self.go_back))
             return
         if pending:
-            children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。" + RESTART_HOW))
+            if self._can_restart():
+                children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。"))
+                children.append(u.button(RESTART_NOW, lambda w: self.loop.create_task(self.restart_for_library_change()),
+                                         primary=True))
+            else:
+                children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。" + RESTART_HOW))
         if mismatch:
             children.append(self.note("内容库目录与本次启动载入的目录不一致，导入的库暂未载入；请重启应用。"))
         imported = [row for row in rows if row["source_kind"] == "file"]
@@ -432,7 +504,7 @@ class ContentLibraryUIMixin:
             self.show_content_libraries()
             return
         title = entry["summary"].get("title", entry["library_id"])
-        self.alert(f"已安装 {title}，重启应用后生效。" + RESTART_HOW if entry["enabled"]
+        self.alert(f"已安装 {title}，重启应用后生效。" + self._restart_hint() if entry["enabled"]
                    else f"已安装 {title}；这个内容库仍保持停用，启用并重启应用后才会载入。")
         self.show_content_libraries()
 
@@ -452,7 +524,7 @@ class ContentLibraryUIMixin:
                 self._content_library_reverting = False
             self.alert(_message(error))
             return
-        self.alert(("已启用，重启应用后载入。" + RESTART_HOW if control.value
+        self.alert(("已启用，重启应用后载入。" + self._restart_hint() if control.value
                     else "已停用：" + LIBRARY_CHANGE_NOTE + "。"))
         self.show_content_libraries()
 
@@ -472,5 +544,5 @@ class ContentLibraryUIMixin:
         except Exception as error:
             self.alert("未能移除内容库：" + _message(error))
             return
-        self.alert("已移除，重启应用后生效。进度记录已保留。" + RESTART_HOW)
+        self.alert("已移除，重启应用后生效。进度记录已保留。" + self._restart_hint())
         self.show_content_libraries()

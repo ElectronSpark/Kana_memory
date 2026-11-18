@@ -19,6 +19,13 @@ question_presentation把已知的中文译文提示移入folded_hint并给日文
 每个选项词与句中语法都在background_ids里，全部已学才出题。tools/compile_reviewed_question_batch.py
 的审阅者与批次名改为参数（默认值不变）。旧设置按KINDS_ADDED_AT逐版补新题型，设置页写入PREFERENCE_VERSION。
 PRACTICE_ONLY_KINDS（两种读音题和读句选词）不进记忆检查与材料预测试。
+内容缓存与重启（2026-11-18，未单独发版）：由课程内容派生的缓存（lru_cache 函数与模块级表）都在定义处
+登记到纯模块 content_caches（content_cache 装饰器 / register），content_pack.clear_cache 与令牌不同的
+有效目录构建会 clear_all；tests/test_content_caches.py 要求每个缓存要么登记、要么写明豁免理由，导入期
+读入的命名空间是进程常量，clear_all 不重载。打入合成课程的测试用 tests/support/content_cache_fixtures.py。
+库变更仍是“重启生效”；process_restart（纯）判定何时重启，platform.restart_app 执行（Android：
+app/native/java/.../KanaRestart.java；桌面不能），内容库页“立即重启”复用 KanaMemory.on_exit 的关闭路径，
+同一进程再次启动且有待生效变更时在建页前自动重启一次（见设计 08 第 5.2 节第 5 步）。
 0.30.0：practice_round拥有当前App运行期的题单、顺序与调度选择缓存，不能授予答题或评分资格；
 页面/流程通过具名接口接续，Store仍在展示与提交时校验实时到期、前置与材料安全。
 practice_archive是本地轮次归档事务所有者，以精确回执结束checkpoint/普通课程pending所有权，

@@ -233,3 +233,57 @@ def test_same_revision_different_content_is_a_package_error(library_app):
     app.install_content_library()
     assert "包错误" in app.alert.call_args[0][0]
     assert [e["library_id"] for e in app.store.get_setting(rules.REGISTRY_SETTING)["libraries"]] == [rules.CORE_LIBRARY_ID]
+
+
+def _install(app):
+    app.show_content_libraries()
+    asyncio.run(app.add_content_library())
+    click(app, "安装")
+    assert app.page == "content_libraries"
+
+
+def test_without_a_platform_restart_the_note_says_how_and_offers_no_button(library_app):
+    app = library_app
+    app.platform.can_restart = False
+    _install(app)
+    assert "立即重启" not in _buttons(app) and "只切到后台再回来不算重启" in text_of(app.body)
+    assert "只切到后台再回来不算重启" in app.alert.call_args[0][0]
+
+
+def test_restart_now_closes_like_an_exit_then_restarts_the_process(library_app, monkeypatch):
+    from kanamemory import process_restart
+    monkeypatch.setitem(process_restart._STATE, "attempted", False)
+    app = library_app
+    app.platform.can_restart = True
+    app.platform.restart_app = Mock(return_value=True)  # the fake returns; a real restart never does
+    _install(app)
+    assert "可在内容库页点「立即重启」" in app.alert.call_args[0][0]
+    assert "立即重启" in _buttons(app) and "只切到后台再回来不算重启" not in text_of(app.body)
+    app._close_for_restart = Mock(return_value=False)  # e.g. an unsaved draft: the close refuses
+    asyncio.run(app.restart_for_library_change())
+    app.platform.restart_app.assert_not_called()
+    app._close_for_restart = Mock(return_value=True)
+    asyncio.run(app.restart_for_library_change())
+    app._close_for_restart.assert_called_once_with()
+    app.platform.restart_app.assert_called_once_with()
+    assert process_restart.attempted()
+
+
+def test_a_refused_restart_says_how_and_ends_the_closed_app(library_app, monkeypatch):
+    from kanamemory import process_restart
+    monkeypatch.setitem(process_restart._STATE, "attempted", False)
+    app = library_app
+    app.platform.can_restart = True
+    app.platform.restart_app = Mock(return_value=False)
+    app._close_for_restart = Mock(return_value=True)
+    app.main_window = Mock(dialog=AsyncMock(return_value=None))
+    app.exit = Mock()
+    from kanamemory import ui_components
+    info = Mock(name="InfoDialog")
+    monkeypatch.setattr(ui_components.toga, "InfoDialog", info)
+    _install(app)
+    asyncio.run(app.restart_for_library_change())
+    app.platform.restart_app.assert_called_once_with()
+    assert "只切到后台再回来不算重启" in info.call_args[0][1]
+    app.main_window.dialog.assert_awaited_once_with(info.return_value)
+    app.exit.assert_called_once_with()
