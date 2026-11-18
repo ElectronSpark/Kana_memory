@@ -8,8 +8,9 @@ a clean public tree produces instead of the demo:
 
 The package id is bundle + ".kanamemory"; formal_name gives the APK file name and the launcher label. It is never
 written into the repository: environment/run_app.ps1 applies it (``apply``) to the build copy of
-app/pyproject.toml in the toolchain, as the export applies the demo identity, and every later check reads the
-identity through the same file (``--identity-file``).
+app/pyproject.toml in the toolchain, and every later check reads the identity through the same file
+(``--identity-file``). app/pyproject.toml itself exists in one edition, the demo (``require_demo_edition``; the
+export refuses any other).
 """
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ import zipfile
 
 IDENTITY_FORMAT = "kanamemory-build-identity-v1"
 IDENTITY_KEYS = frozenset({"format", "profile", "bundle", "formal_name"})
-DEMO_PACKAGE = "org.example.demo.kanamemory"
+DEMO_IDENTITY = {"bundle": "org.example.demo", "formal_name": "KanaMemoryDemo"}
+DEMO_PACKAGE = DEMO_IDENTITY["bundle"] + ".kanamemory"
 QA_PACKAGE = "org.example.qa.kanamemory"
 _BUNDLE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+")
 _FORMAL_NAME = re.compile(r"[A-Za-z0-9 _-]+")
@@ -62,6 +64,14 @@ def applied_pyproject(text, identity):
         text, count = re.subn(rf"(?m)^{key}\s*=.*$", lambda _match: f'{key} = "{value}"', text)
         if count != 1:
             raise ValueError(f"Expected one Briefcase {key} declaration")
+    return text
+
+
+def require_demo_edition(text):
+    """Refuse an app/pyproject.toml that is not the public demo edition (one declaration of each, demo values)."""
+    if applied_pyproject(text, DEMO_IDENTITY) != text:
+        raise ValueError("app/pyproject.toml must carry the demo identity (bundle org.example.demo, formal_name "
+                         "KanaMemoryDemo); a personal identity is a build identity file, QA has its own project")
     return text
 
 

@@ -31,7 +31,11 @@ with -IdentityFile (a build identity file outside the tree; format in
 tools/app_build_identity.py) and -ContentRoot (a resources directory outside the
 tree); both are applied to the build copy (app within ToolchainRoot) only, and
 the generated project there must be created with the same identity (create
-stage) before build and package. See docs/public-build.txt. create uses the pinned template Git URL, commit and template_hash in
+stage) before build and package. app/pyproject.toml exists in one edition (the
+demo identity). A development tree (no clean-source-manifest.json) builds no
+package; its desktop stage applies config/personal_identity.json to the build
+copy, and uncommitted work is built from a fresh export of it. See
+docs/public-build.txt. create uses the pinned template Git URL, commit and template_hash in
 app/pyproject.toml. The canonical template is the clean commit
 32244ad8bd608cc451f05718d07f2e3429541333 (format 0.3.27). An observed existing
 cache lacks the template's empty pip-options.txt; this is not a required patch

@@ -432,6 +432,7 @@ tools/build_environment.py
 tests/test_build_environment.py
 tests/test_apk_launcher_class.py
 tests/test_build_identity_file.py
+tests/test_app_build_identity.py
 docs/build-environment.txt
 tools/run_evidence.py
 tests/test_run_evidence.py

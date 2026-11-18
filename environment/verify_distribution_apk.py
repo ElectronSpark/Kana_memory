@@ -19,8 +19,8 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from app_build_identity import load_identity, read_identity_file, verify_apk
 from inspect_app_apk import inspect_python_module
 
-PACKAGES = {'personal': 'org.example.kanamemory', 'demo': 'org.example.demo.kanamemory',
-            'qa': 'org.example.qa.kanamemory'}
+# The personal profile has no fixed package: it is the one of its build identity file (--identity-file).
+PACKAGES = {'personal': None, 'demo': 'org.example.demo.kanamemory', 'qa': 'org.example.qa.kanamemory'}
 
 
 def sha(path):

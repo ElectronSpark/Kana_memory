@@ -336,15 +336,15 @@ ZIP 带 JSON/说明及截图；剪贴板为完整保存的文字上下文与截�
 公开出口：tools/export_clean_source.py::export_source，显式文件白名单
 tools/public_source_files.txt；拒绝越界/链接、私有路径和明显凭据模式，验证后复制
 到新/空目录；不复制 .git、私用 data/resources/research、用户状态或历史。
-它把 app/pyproject.toml 改为 demo bundle，输出 clean-source-manifest.json 和
+app/pyproject.toml 只有 demo 身份一个版本，原样复制（别的身份拒绝导出），输出 clean-source-manifest.json 和
 独立 ZIP；README.txt 内容来自 docs/public-build.txt，而不是发布内部维护 README。
 新增模块只有纳入并审查白名单才随干净源码导出；目录存在不代表自动发布。
 
 独立构建入口 docs/public-build.txt、environment/build_public_app.ps1：
 tools/build_demo_content.py 仅用 demo/content.json 生成原创最小内容，
 tools/check_public_content.py 严格检查，再用 tests/test_public_distribution.py
-检验独立读取/出题边界。demo 包名 org.example.demo.kanamemory，与个人包
-org.example.kanamemory 分开，不覆盖个人学习数据。此 demo 不是完整课程。
+检验独立读取/出题边界。demo 包名 org.example.demo.kanamemory，与个人包（包名由树外的
+构建身份文件给出）分开，不覆盖个人学习数据。此 demo 不是完整课程。
 
 私用内容出口 tools/package_content_bundle.py::package，
 format=kanamemory-content-bundle/version=1：要求 content.sqlite3、

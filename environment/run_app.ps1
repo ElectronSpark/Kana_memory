@@ -309,7 +309,7 @@ if ($PersonalOverlay) {
         throw 'A personal build of a public tree needs both -IdentityFile and -ContentRoot.'
     }
     if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'clean-source-manifest.json'))) {
-        throw 'IdentityFile and ContentRoot are for a clean public tree; this tree carries its own identity and content.'
+        throw 'IdentityFile and ContentRoot are for a clean public tree; export one first (tools/export_clean_source.py <new directory>).'
     }
     if ($PSBoundParameters.ContainsKey('PublicBuild')) {
         throw 'The public demo build takes no IdentityFile or ContentRoot.'
@@ -393,6 +393,33 @@ function Set-KanaAndroidManifest {
 }
 if (-not (Test-Path -LiteralPath $projectPython)) { throw 'Project Python missing. Run the desktop bootstrap first.' }
 if (-not (Test-Path -LiteralPath (Join-Path $appSource 'pyproject.toml'))) { throw 'App pyproject.toml missing.' }
+# A development tree (no clean-source-manifest.json) holds the one, demo, edition of app/pyproject.toml and builds
+# no package: the personal package is built from a clean export (build_personal_app.ps1), the demo likewise
+# (build_public_app.ps1). Its desktop run applies the personal identity, config/personal_identity.json (a private
+# file), to the build copy: Toga derives the learner data directory from formal_name, which must not change.
+# A QA project (a separate tree with the QA identity) builds as before.
+$developmentIdentity = ''
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'clean-source-manifest.json'))) {
+    $treeIdentity = & $projectPython -X utf8 $identityTool read $appSource
+    if ($LASTEXITCODE -ne 0) { throw 'App build identity is inconsistent.' }
+    $treePackage = ($treeIdentity | ConvertFrom-Json).package_id
+    if ($treePackage -ne 'org.example.qa.kanamemory') {
+        $exportHint = 'Export a clean tree first (tools/export_clean_source.py <new directory>) and build there: ' +
+            'environment/build_personal_app.ps1 -IdentityFile <file> -ContentRoot <dir> for the personal package, ' +
+            'environment/build_public_app.ps1 for the demo.'
+        if ($treePackage -ne 'org.example.demo.kanamemory') {
+            throw "app/pyproject.toml must be the public edition (the demo identity); a personal identity is a build identity file. $exportHint"
+        }
+        if ($Stage -ne 'desktop' -or $PublicBuild) {
+            throw "A development tree builds no package and no demo. $exportHint"
+        }
+        $developmentIdentity = Join-Path $projectRoot 'config\personal_identity.json'
+        if (-not (Test-Path -LiteralPath $developmentIdentity -PathType Leaf)) {
+            throw 'The desktop run of a development tree needs config/personal_identity.json: the learner data directory follows its formal_name.'
+        }
+        $identityArgs = @('--identity-file', $developmentIdentity)
+    }
+}
 & $projectPython -X utf8 $environmentTool --host
 if ($LASTEXITCODE -ne 0) { throw 'Build environment differs from the declared lock; see docs/build-environment.txt.' }
 Assert-PublicContent
@@ -410,6 +437,8 @@ if ($PublicBuild -and $buildIdentity.package_id -ne 'org.example.demo.kanamemory
 if ($PersonalOverlay) {
     Write-Host ('PERSONAL build of the public tree {0}: package {1}, file {2}; identity {3}; content {4}' -f
         $projectRoot, $buildIdentity.package_id, $buildIdentity.apk_name, $IdentityFile, $ContentRoot)
+} elseif ($developmentIdentity) {
+    Write-Host ('DEVELOPMENT desktop run of {0}: identity {1} ({2})' -f $projectRoot, $developmentIdentity, $buildIdentity.package_id)
 }
 $packagedName = $buildIdentity.apk_name
 $sdkRoot = Join-Path $ToolchainRoot 'briefcase\tools\android_sdk'
@@ -427,6 +456,11 @@ if ([IO.Path]::GetFullPath($appBuild) -eq [IO.Path]::GetFullPath($appSource)) {
 New-Item -ItemType Directory -Force -Path $appBuild | Out-Null
 Copy-Item -LiteralPath (Join-Path $appSource 'pyproject.toml') -Destination $appBuild -Force
 Copy-Item -LiteralPath (Join-Path $appSource 'src') -Destination $appBuild -Recurse -Force
+if ($developmentIdentity) {
+    # The development run: the personal identity goes into the build copy only, as for a personal build.
+    & $projectPython -X utf8 $identityTool apply $appBuild --identity-file $developmentIdentity | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not apply the build identity to the build copy.' }
+}
 if ($PersonalOverlay) {
     # The identity goes into the build copy only (as the export writes the demo identity), then the content.
     & $projectPython -X utf8 $identityTool apply $appBuild --identity-file $IdentityFile | Out-Null

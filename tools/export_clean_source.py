@@ -8,7 +8,9 @@ from pathlib import Path, PurePosixPath
 import re
 import zipfile
 
-ROOT = Path(__file__).resolve().parents[1]
+from app_build_identity import DEMO_PACKAGE, require_demo_edition
+
+ROOT =Path(__file__).resolve().parents[1]
 ALLOWLIST = Path(__file__).with_name("public_source_files.txt")
 FORBIDDEN_PARTS = {".git", ".venv", "__pycache__", ".codex", ".agents", ".claude", "data", "resources", "research", "user-data", "artifacts"}
 SECRET = re.compile(rb"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{30,}")
@@ -76,14 +78,9 @@ def selected_files(root, allowlist=None):
 
 def _public_file(name, raw):
     if name == "app/pyproject.toml":
-        text = raw.decode("utf-8")
-        text, count = re.subn(r'(?m)^bundle\s*=.*$', 'bundle = "org.example.demo"', text)
-        if count != 1:
-            raise ValueError("Expected one Briefcase bundle")
-        text, count = re.subn(r'(?m)^formal_name\s*=.*$', 'formal_name = "KanaMemoryDemo"', text)
-        if count != 1:
-            raise ValueError("Expected one Briefcase formal name")
-        return text.encode("utf-8")
+        # One edition, the demo: copied as it is; any other identity stops the export.
+        require_demo_edition(raw.decode("utf-8"))
+        return raw
     if PurePosixPath(name).suffix in DOC_SUFFIXES:
         text = strip_private_blocks(name, raw.decode("utf-8"))
         trace = PROCESS_TRACE.search(text)
@@ -122,7 +119,7 @@ def export_source(destination, *, root=ROOT, allowlist=None, archive=None):
     files["README.txt"] = files["docs/public-build.txt"]
     files[".gitignore"] = b".venv/\n__pycache__/\n.pytest_cache/\n.ruff_cache/\n.test_runs/\n*.pyc\napp/src/kanamemory/resources/\nenvironment/artifacts/\n*.apk\n*.aab\n.env*\n*.keystore\n*.jks\n"
     manifest = {"format": "kanamemory-clean-source-v1", "profile": "demo",
-                "package_id": "org.example.demo.kanamemory", "contains_git_history": False,
+                "package_id": DEMO_PACKAGE, "contains_git_history": False,
                 "files": {name: sha256(raw) for name, raw in sorted(files.items())}}
     files["clean-source-manifest.json"] = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     destination.mkdir(parents=True, exist_ok=True)

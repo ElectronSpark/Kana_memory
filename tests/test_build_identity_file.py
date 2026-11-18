@@ -104,6 +104,17 @@ def test_apply_writes_the_build_copy_once_and_never_a_source_tree(tmp_path):
         assert (source / "pyproject.toml").read_bytes() == before
 
 
+def test_only_the_demo_edition_of_the_app_configuration_is_accepted(tmp_path):
+    assert identity_tool.require_demo_edition(DEMO_PYPROJECT) == DEMO_PYPROJECT
+    personal = identity_tool.applied_pyproject(DEMO_PYPROJECT, identity_tool.read_identity_file(identity_file(tmp_path)))
+    qa = DEMO_PYPROJECT.replace('"org.example.demo"', '"org.example.qa"').replace('"KanaMemoryDemo"', '"KanaMemoryQA"')
+    for text in (personal, qa, DEMO_PYPROJECT.replace('"KanaMemoryDemo"', '"Other"')):
+        with pytest.raises(ValueError, match="demo identity"):
+            identity_tool.require_demo_edition(text)
+    with pytest.raises(ValueError, match="one Briefcase bundle"):
+        identity_tool.require_demo_edition(DEMO_PYPROJECT + 'bundle = "org.example.demo"\n')
+
+
 def test_the_command_line_reads_with_the_identity_file(tmp_path):
     app = app_tree(tmp_path / "public/app")
     result = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "tools/app_build_identity.py"), "read", str(app),
@@ -117,8 +128,13 @@ def test_every_identity_check_of_the_runner_reads_through_the_identity_file():
     calls = re.findall(r"\$[Ii]dentityTool (read|sync-gradle|verify-apk|apply) [^\n]*", runner)
     assert sorted({call for call in calls}) == ["apply", "read", "sync-gradle", "verify-apk"]
     for line in runner.splitlines():
-        if re.search(r"\$[Ii]dentityTool (read|sync-gradle|verify-apk) ", line):
+        # The one bare read only tells a development tree from a QA project; no check uses its result.
+        if re.search(r"\$[Ii]dentityTool (read|sync-gradle|verify-apk) ", line) and "$treeIdentity = " not in line:
             assert "@identityArgs" in line, line
+    assert runner.count("$treeIdentity = ") == 1
+    # A development run reads and applies the private identity file (the learner data directory follows it).
+    assert "$identityArgs = @('--identity-file', $developmentIdentity)" in runner
+    assert "$identityTool apply $appBuild --identity-file $developmentIdentity" in runner
     # The identity goes into the build copy, after it was copied and before any Briefcase stage.
     apply = runner.index("$identityTool apply $appBuild")
     assert runner.index("Copy-Item -LiteralPath (Join-Path $appSource 'pyproject.toml')") < apply
@@ -182,3 +198,45 @@ def test_the_runner_refuses_a_half_given_or_misplaced_personal_build_before_any_
         result = run_script(script, "-Stage", "create", *arguments)
         assert result.returncode != 0, arguments
         assert message in result.stderr, (arguments, result.stderr[-600:])
+
+
+def development_tree(root, *, identity=None, personal_file=None):
+    """A tree without clean-source-manifest.json: the runner, the identity tool and an app of the given identity."""
+    root = project(root, public=False)
+    (root / "tools").mkdir()
+    (root / "tools/app_build_identity.py").write_bytes((ROOT / "tools/app_build_identity.py").read_bytes())
+    app = app_tree(root / "app")
+    if identity is not None:
+        (app / "pyproject.toml").write_text(identity_tool.applied_pyproject(DEMO_PYPROJECT, identity), encoding="utf-8")
+    if personal_file is not None:
+        (root / "config").mkdir()
+        (root / "config/personal_identity.json").write_bytes(personal_file.read_bytes())
+    return root / "environment/run_app.ps1"
+
+
+@pytest.mark.skipif(not shutil.which("powershell"), reason="Windows build entry point")
+def test_a_development_tree_builds_no_package_and_its_desktop_run_keeps_the_personal_identity(tmp_path):
+    path = identity_file(tmp_path)
+    python = ["-Python", sys.executable]
+    refused = [
+        (development_tree(tmp_path / "a", personal_file=path), ["-Stage", "create"], "builds no package"),
+        (development_tree(tmp_path / "b", personal_file=path), ["-Stage", "package"], "builds no package"),
+        (development_tree(tmp_path / "c", personal_file=path), ["-Stage", "desktop", "-PublicBuild"], "builds no package"),
+        (development_tree(tmp_path / "d"), ["-Stage", "desktop"], "needs config/personal_identity.json"),
+        (development_tree(tmp_path / "e", identity=identity_tool.read_identity_file(path), personal_file=path),
+         ["-Stage", "desktop"], "must be the public edition"),
+    ]
+    for script, arguments, message in refused:
+        result = run_script(script, *arguments, *python)
+        assert result.returncode != 0, arguments
+        assert message in result.stderr, (arguments, result.stderr[-600:])
+        if not message.startswith("needs"):
+            assert "export_clean_source.py" in result.stderr, result.stderr[-600:]
+    # Past the tree check (and stopped by the missing environment check of this fake tree, before any build): the
+    # desktop run with the identity file, and a QA project with its own identity.
+    qa = {"bundle": "org.example.qa", "formal_name": "KanaMemoryQA"}
+    for script, stage in ((development_tree(tmp_path / "f", personal_file=path), "desktop"),
+                          (development_tree(tmp_path / "g", identity=qa), "create")):
+        result = run_script(script, "-Stage", stage, *python)
+        assert result.returncode != 0
+        assert "Build environment differs" in result.stderr, result.stderr[-600:]

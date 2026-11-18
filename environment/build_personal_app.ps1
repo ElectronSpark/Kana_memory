@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'clean-source-manifest.json'))) {
-    throw 'Build from a clean public tree (the public checkout or a fresh clean-source export).'
+    throw 'Build from a clean public tree: the public checkout, or a fresh export of a development tree (tools/export_clean_source.py <new directory>).'
 }
 & (Join-Path $PSScriptRoot 'run_app.ps1') -Stage $Stage -ToolchainRoot $ToolchainRoot -Serial $Serial -Python $Python `
     -IdentityFile $IdentityFile -ContentRoot $ContentRoot

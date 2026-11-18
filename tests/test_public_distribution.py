@@ -101,6 +101,18 @@ def test_source_export_is_deterministic_and_has_no_private_assets_or_git(tmp_pat
         export_source(left)
 
 
+def test_the_export_copies_the_one_demo_edition_and_refuses_any_other_identity():
+    raw = (ROOT / "app/pyproject.toml").read_bytes()
+    assert _public_file("app/pyproject.toml", raw) == raw
+    text = raw.decode("utf-8")
+    for bundle, name in (("org.example.yourname", "YourAppName"), ("org.example.qa", "KanaMemoryQA"),
+                         ("org.example.demo", "YourAppName")):
+        other = text.replace('bundle = "org.example.demo"', f'bundle = "{bundle}"').replace(
+            'formal_name = "KanaMemoryDemo"', f'formal_name = "{name}"')
+        with pytest.raises(ValueError, match="demo identity"):
+            _public_file("app/pyproject.toml", other.encode("utf-8"))
+
+
 def test_source_allowlist_cannot_escape_or_silently_include_keys(tmp_path):
     allow = tmp_path / "allow.txt"
     allow.write_text("../outside.py\n", "utf-8")

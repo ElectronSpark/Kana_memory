@@ -41,8 +41,8 @@ docs/build-environment.txt). It needs the network only when the cache lacks
 that commit. create does not replace an existing generated project: remove the
 project's build\kanamemory\android directory within app-public (or app) first.
 The APK is written to environment\artifacts. The package ID is
-org.example.demo.kanamemory, so installing the demo cannot overwrite the personal
-org.example.kanamemory installation or its learning records. A demo source tree
+org.example.demo.kanamemory, so installing the demo cannot overwrite a personal
+installation (another package ID) or its learning records. A demo source tree
 automatically enables strict demo checks even if run_app.ps1 is invoked directly.
 
 PERSONAL PACKAGE FROM THIS TREE
@@ -64,7 +64,7 @@ file kept outside the tree, for example:
 The package ID is bundle + ".kanamemory"; formal_name names the APK file. The
 script prints the identity and the content it builds with; it writes the identity
 only into the build copy in the toolchain (app within ToolchainRoot, shared with
-personal builds of a development tree), never into this tree, and refuses the
+the desktop run of a development tree), never into this tree, and refuses the
 demo and QA package IDs, a file or a content directory inside the tree, and
 one of the two without the other. An APK installs over an existing installation
 only when it has the same package ID and the same signing certificate; debug
@@ -72,6 +72,22 @@ builds are signed with the build machine's debug key. Audit the result with
 environment\verify_distribution_apk.py --profile personal --identity-file <file>
 --app-source <ToolchainRoot>\app (the build copy, which holds the applied identity
 and the content), then apksigner and zipalign as for any package.
+
+app/pyproject.toml exists in one edition, this one, with the demo identity; no
+tree holds a second edition of it. A development tree (a working tree without
+clean-source-manifest.json) builds no package: run_app.ps1 refuses every stage
+there but desktop, before any build step. To build work that is not committed
+yet, export a clean tree from the development tree first and build that export:
+
+  .\.venv\Scripts\python.exe tools\export_clean_source.py <new directory>
+  <new directory>\environment\build_personal_app.ps1 -Stage create -IdentityFile <file> -ContentRoot <dir> -Python <python.exe>
+
+(-Python names the development tree's .venv\Scripts\python.exe, since an export
+has no environment of its own; then build and package as above.) The desktop
+stage of a development tree applies the private identity file
+config\personal_identity.json (same format) to the build copy: Toga derives the
+learner data directory from formal_name (and author), so a desktop run keeps
+reading the same learner record. Without that file the desktop stage refuses.
 
 The lock includes quality tools. Run python -X utf8 tools/check_python.py from
 any directory for bounded engineering checks. The same command is
@@ -114,6 +130,8 @@ tools/public_source_files.txt. It does not clone or copy any Git directory.
 The archive has stable ordering/timestamps, and clean-source-manifest.json lists
 the SHA-256 of every exported source file. Review the explicit allowlist when
 adding engine files. No private corpus restoration command is part of this build.
+app/pyproject.toml is copied unchanged; any identity other than the demo stops
+the export.
 Allowlisted .txt/.md documents may wrap development-only passages between lines
 that contain only [private] and [/private]; the export drops them, and lines that
 start with "[public-only] " appear only in the export. Unbalanced markers or a
