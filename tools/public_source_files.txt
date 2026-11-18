@@ -999,3 +999,6 @@ app/src/kanamemory/route_mix/service.py
 app/src/kanamemory/loanword_origins.py
 tests/test_route_mix_rules.py
 tests/test_route_mix_service.py
+app/src/kanamemory/content_caches.py
+tests/test_content_caches.py
+tests/support/content_cache_fixtures.py

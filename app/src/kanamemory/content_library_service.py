@@ -42,6 +42,7 @@ import zipfile
 
 from . import content_library_rules as rules
 from . import content_pack
+from .content_caches import register as register_content_cache
 from .app_clock import utc_now
 from .build_info import VERSION as APP_VERSION
 
@@ -124,6 +125,7 @@ def _learner_tables(path):
 
 
 _DEPENDENCIES = []  # [(catalogue ids, {content id: depends_on})], one per process catalogue
+register_content_cache(lambda: _DEPENDENCIES.clear(), "content_library_service._DEPENDENCIES")
 
 
 def _catalogue_dependencies(ids):
@@ -470,7 +472,21 @@ class ContentLibraryService:
         return rows
 
     def pending_restart(self):
-        return rules.pending_restart(self.registry())
+        """A saved change this process does not serve yet (it keeps the content it started with).
+
+        A library installed, enabled or disabled is marked pending_restart; a library removed, or
+        overrides accepted or withdrawn, leave no such mark, so the registry this process loaded
+        (content_pack.active_registry) is compared with the saved one for those.
+        """
+        registry = self.registry()
+        if rules.pending_restart(registry):
+            return True
+        loaded = content_pack.active_registry()
+        if loaded is None:
+            return False
+        kept = {entry["library_id"] for entry in registry["libraries"]}
+        return (any(entry["library_id"] not in kept for entry in rules.effective_entries(loaded))
+                or rules.accepted_overrides(loaded) != rules.accepted_overrides(registry))
 
     # ------------------------------------------------------------ install
 

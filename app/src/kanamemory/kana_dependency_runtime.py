@@ -14,10 +14,12 @@ from pathlib import Path
 import sqlite3
 from types import MappingProxyType
 
+from .content_caches import content_cache
 from .kana_dependencies import kana_entry_id, practice_kana_dependencies
 from .kana_question_policy import _KANA_KINDS
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def _bundled_graph():
     from .content import ContentRepository

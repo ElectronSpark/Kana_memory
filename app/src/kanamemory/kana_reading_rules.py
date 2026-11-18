@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from unicodedata import normalize
 
+from .content_caches import register as register_content_cache
+
 SMALL_KANA_RULE = "pronunciation:small_kana"
 SOKUON_RULE = "pronunciation:sokuon_stop"
 LONG_VOWEL_RULE = "pronunciation:long_duration"
@@ -49,6 +51,7 @@ def rule_for_kana(row):
 
 
 _SHARED = {}
+register_content_cache(lambda: _SHARED.clear(), "kana_reading_rules._SHARED")  # layered namespace
 
 
 def _annotations():

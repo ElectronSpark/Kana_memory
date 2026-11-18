@@ -5,9 +5,9 @@
   "app/src/kanamemory/ai_prompt_policy.py": ["__future__", "json", ".ai_question_capabilities"],
   "app/src/kanamemory/ai_question_capabilities.py": ["copy", ".question_presentation", ".learning_questions", ".multi_cloze", ".answer_input"],
   "app/src/kanamemory/question_presentation.py": ["collections.abc", "re", ".learning_questions", ".question_kind_registry", ".question_kinds", ".question_kinds.vocab_context"],
-  "app/src/kanamemory/question_readings.py": ["__future__", "collections.abc", "functools", "re", ".", ".content_pack", ".question_kinds", ".learning_questions", ".learning_content", ".question_presentation"],
+  "app/src/kanamemory/question_readings.py": ["__future__", "collections.abc", "functools", "re", ".", ".content_pack", ".question_kinds", ".learning_questions", ".learning_content", ".question_presentation", ".content_caches"],
   "app/src/kanamemory/early_rules.py": ["__future__", "collections.abc", "re", ".learning_content", ".question_readings"],
-  "app/src/kanamemory/result_readings.py": ["__future__", "collections.abc", "re", ".", ".question_readings", ".learning_content", ".learning_questions"],
+  "app/src/kanamemory/result_readings.py": ["__future__", "collections.abc", "re", ".", ".question_readings", ".learning_content", ".learning_questions", ".content_caches"],
   "app/src/kanamemory/practice_preferences.py": [],
   "app/src/kanamemory/practice_kind_policy.py": ["__future__", ".practice_preferences"],
   "app/src/kanamemory/draft_debounce.py": [],
@@ -58,7 +58,7 @@
   "app/src/kanamemory/next_step/display.py": ["__future__", "dataclasses", "..arrangement.display", ".model"],
   "app/src/kanamemory/next_step/ui/__init__.py": [],
   "app/src/kanamemory/next_step/ui/end_pages.py": ["__future__", "collections.abc", "kanamemory.ui_components", "kanamemory.arrangement.ui.section_note", "..display", "..model"],
-  "app/src/kanamemory/study_routes.py": ["__future__", "copy", "hashlib", "re", ".study_path_catalog", "json", "datetime", "uuid", ".learning_dependencies"],
+  "app/src/kanamemory/study_routes.py": ["__future__", "copy", "hashlib", "re", ".study_path_catalog", "json", "datetime", "uuid", ".learning_dependencies", ".content_caches"],
   "app/src/kanamemory/ui_theme.py": [],
   "app/src/kanamemory/request_outcome.py": [
     "typing",
@@ -177,7 +177,8 @@
   "app/src/kanamemory/route_mix/sections.py": ["__future__", "collections.abc", "hashlib", ".params"],
   "app/src/kanamemory/route_mix/placement.py": ["__future__", "bisect", "collections.abc", "dataclasses", ".params", ".readiness"],
   "app/src/kanamemory/route_mix/plan.py": ["__future__", "collections.abc", "dataclasses", "hashlib", "json", ".params", ".placement", ".readiness"],
-  "app/src/kanamemory/loanword_origins.py": ["__future__", "collections.abc", "functools", "re", "types", ".content_pack"]
+  "app/src/kanamemory/loanword_origins.py": ["__future__", "collections.abc", "functools", "re", "types", ".content_pack", ".content_caches"],
+  "app/src/kanamemory/content_caches.py": ["__future__", "threading"]
 },
   "page_coupling": {
     "note": "Design 13 G1-G3 (docs/design_current/13_frontend_backend_separation.txt; docs/design_current/07_engineering_structure.txt restates the rule), frozen at stage S0b (2026-11-13). Per file that creates controls: store_access counts every store reference (<any expression>.store or .learning_store; a chain counts once), except a reference that is directly an argument of an owner_calls entry (never in a page package: arrangement/ui, admission/ui, home/ui, next_step/ui) or of id/isinstance/type; app_state counts distinct attribute names set on the app object (assignment, loop, with-as and setattr targets). Ceilings only fall: lower or remove an entry in the change that lowers the number. A file without an entry has ceiling zero; a page package (arrangement/ui, admission/ui, home/ui, next_step/ui) never has an entry.",

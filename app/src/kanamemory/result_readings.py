@@ -30,6 +30,7 @@ from collections.abc import Mapping
 import re
 
 from . import word_sound_questions as sound
+from .content_caches import register as register_content_cache
 from .question_readings import _GAP, _KANJI, _course_words, inline_kana, question_entry
 
 _KANJI_RUN = re.compile(r"[㐀-䶿一-鿿豈-﫿々]+")
@@ -150,6 +151,13 @@ def _course_titles():
 
 
 _TITLES = [None, None]  # (the course word table it was built from, the index)
+
+
+def _clear_titles():
+    _TITLES[:] = [None, None]
+
+
+register_content_cache(_clear_titles, "result_readings._TITLES")
 
 
 def _course_word(text, start):

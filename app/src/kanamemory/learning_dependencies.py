@@ -21,6 +21,8 @@ from copy import deepcopy
 from functools import lru_cache, partial
 import json
 
+from .content_caches import content_cache
+
 
 def dependencies_of(item):
     value = item.get("depends_on", [])
@@ -82,6 +84,7 @@ def preserves_existing_route(learning, content):
     return False
 
 
+@content_cache
 @lru_cache(maxsize=8192)
 def _bundled_dependency_signature(cid):
     """(fingerprint, source ids, abilities, prerequisites) of the bundled lesson, or None.
@@ -113,6 +116,7 @@ def bundled_dependencies(content_id) -> tuple[str, ...]:
     return () if signature is None else signature[3]
 
 
+@content_cache
 @lru_cache(maxsize=1024)
 def _bundled_fingerprint(cid):
     from .learning_content import learning_item_view

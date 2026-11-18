@@ -31,6 +31,8 @@ from functools import lru_cache
 import re
 from types import MappingProxyType
 
+from .content_caches import content_cache
+
 NAMESPACE = "loanword_origins"
 SCHEMA_VERSION = 1
 
@@ -209,6 +211,7 @@ def namespace_items(value):
     return {}
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def _installed_items():
     from .content_pack import ContentPackError, load_namespace

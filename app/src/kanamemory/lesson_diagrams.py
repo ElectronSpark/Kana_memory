@@ -3,6 +3,8 @@ from copy import deepcopy
 from functools import lru_cache
 import math
 
+from .content_caches import content_cache
+
 FORMAT = 'kanamemory-lesson-diagram'
 VERSION = 1
 KINDS = {'timeline', 'space', 'route', 'flow', 'contrast', 'roles', 'scale',
@@ -75,6 +77,7 @@ def validate_diagram(value):
         raise ValueError('Highlight outside mora sequence')
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def catalogue():
     from . import lesson_diagrams_grammar_a as a, lesson_diagrams_grammar_b as b, lesson_diagrams_words_sounds as w

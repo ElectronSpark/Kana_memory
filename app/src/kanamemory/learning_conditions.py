@@ -7,7 +7,9 @@ history. Unknown/custom/model material remains unclassified.
 from functools import wraps
 from hashlib import sha256
 import json
-from threading import Lock
+from threading import RLock
+
+from .content_caches import content_cache
 
 
 def _single_flight(function):
@@ -16,8 +18,11 @@ def _single_flight(function):
     lru_cache lets a second thread recompute while the first is still running.
     Here the startup warm-up thread and an early main-thread question share a
     single run. Failures are not cached. cache_clear() matches lru_cache.
+    A clear from another thread waits for a running computation and drops it;
+    one from inside it (a catalogue rebuilt while it reads: content_caches)
+    does not wait for itself, and that computation's result is not kept.
     """
-    lock, state, missing = Lock(), {}, object()
+    lock, state, missing = RLock(), {"generation": 0}, object()
 
     @wraps(function)
     def cached():
@@ -25,13 +30,18 @@ def _single_flight(function):
         if value is not missing:
             return value
         with lock:
-            if "value" not in state:
-                state["value"] = function()
-            return state["value"]
+            if "value" in state:
+                return state["value"]
+            generation = state["generation"]
+            value = function()
+            if state["generation"] == generation:
+                state["value"] = value
+            return value
 
     def cache_clear():
         with lock:
-            state.clear()
+            state.pop("value", None)
+            state["generation"] += 1
 
     cached.cache_clear = cache_clear
     return cached
@@ -52,6 +62,7 @@ def _reviewed_targets(items):
             and is_reviewed_target(item["id"], item_fingerprint(example_source_item(item)))}
 
 
+@content_cache
 @_single_flight
 def _reviewed_index():
     from .learning_content import learning_item_views

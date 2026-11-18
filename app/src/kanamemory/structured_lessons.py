@@ -7,6 +7,8 @@ sense's diagram. Neither this module nor its renderer touches review state.
 from copy import deepcopy
 from functools import lru_cache
 
+from .content_caches import content_cache
+
 FORMAT = "kanamemory-lesson-view"
 VERSION = 1
 KINDS = {"pattern", "flow", "compare", "points", "beats", "pitch", "pitch_sequence", "prosody"}
@@ -25,6 +27,7 @@ def source_matches(item, original):
             and all(item.get(key) == original.get(key) for key in SOURCE_FIELDS if key != "revision"))
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def catalogue():
     from .learning_content import learning_item_views

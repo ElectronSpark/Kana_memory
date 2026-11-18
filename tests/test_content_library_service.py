@@ -354,6 +354,27 @@ def test_removed_library_stays_readable_in_this_process_and_is_deleted_at_next_s
     assert "libraries" not in content_pack.pack_path().parts
 
 
+def test_a_removed_library_is_a_change_pending_restart_until_the_process_restarts(world):
+    """Removal leaves no pending_restart entry, yet this process still serves the library: the page says so.
+
+    On Android leaving the app and coming back keeps the process; the App's start-up runs again in it
+    (startup_sync without a new content_pack), and the change is still pending then.
+    """
+    service = world["service"]
+    service.install(service.inspect_bytes(pack_bytes("author.n3", extension_namespaces()), "n3.zip"), now=None)
+    content_pack.clear_cache()  # restart
+    service.startup_sync()
+    assert "author.n3" in content_pack.library_status() and not service.pending_restart()
+    service.remove("author.n3")
+    assert not rules.pending_restart(service.registry())  # no entry is marked: the comparison finds it
+    assert service.pending_restart()
+    service.startup_sync()  # the same process started its App again
+    assert service.pending_restart()
+    content_pack.clear_cache()  # a real restart
+    service.startup_sync()
+    assert not service.pending_restart()
+
+
 def test_reinstall_after_remove_keeps_the_new_folder(world):
     service, root = world["service"], world["root"]
     first = service.install(service.inspect_bytes(pack_bytes("author.n3", extension_namespaces()), "n3.zip"))

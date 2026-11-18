@@ -70,6 +70,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 import re
 
+from .content_caches import content_cache, register as register_content_cache
 from .content_pack import QUESTION_READINGS, load_namespace
 from .question_kinds import (REGISTRY, grammar_cloze, grammar_production, vocab_choice, vocab_context,
                              vocab_text)
@@ -171,6 +172,7 @@ def _cue_spans(text):
     return spans or ()
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def _course_words():
     """(title, normal reading) -> ids of the course word lessons written and read so."""
@@ -192,11 +194,12 @@ def _kanji(text):
     return frozenset(_KANJI.findall(text))
 
 
+@content_cache
 @lru_cache(maxsize=1024)
 def _lesson_forms(content_id):
     """(kanji of a lesson's title and spellings, its normal readings); empty for an unknown id.
 
-    Cached for the process like the word pool: the catalogue is fixed while the app runs.
+    Cached for the process like the word pool: the catalogue is fixed while the app runs (content_caches).
     """
     from .learning_content import learning_item_view
     item = learning_item_view(content_id) or {}  # title, spellings and readings only: no copy of its templates
@@ -280,7 +283,16 @@ def _locate(question, target_id, templates):
 
 
 # (namespace, question key, located) of the last question: one display asks for it several times.
+# located is read from the catalogue lesson, which the key does not name: dropped with the content caches.
 _ENTRY_MEMO = (None, None, None)
+
+
+def _clear_entry_memo():
+    global _ENTRY_MEMO
+    _ENTRY_MEMO = (None, None, None)
+
+
+register_content_cache(_clear_entry_memo, "question_readings._ENTRY_MEMO")
 
 
 def question_entry(question):

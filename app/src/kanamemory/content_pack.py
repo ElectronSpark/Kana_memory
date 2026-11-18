@@ -56,6 +56,7 @@ import sqlite3
 import sys
 import threading
 
+from . import content_caches
 from . import content_library_index as library_index
 from . import content_library_merge as library_merge
 from . import content_library_rules as library_rules
@@ -1187,6 +1188,7 @@ def _unavailable_libraries(registry, root, loaded):
 
 _effective = []
 _effective_lock = threading.RLock()
+_built_token = []  # [token] of the last effective catalogue built in this process (kept by clear_cache)
 _catalogue_rejections = {}  # effective-catalogue token -> {library_id: reason} (learning catalogue build)
 _catalogue_bystanders = {}  # effective-catalogue token -> {library_id: reason}: not loaded, never damaged
 
@@ -1240,26 +1242,38 @@ def effective_catalogue():
     Read-only interface for availability consumers:
       library_of(content_id) -> str | None
       missing_required_references(content_id) -> tuple[str, ...]
+
+    A catalogue built with another token than the one built before drops every content cache
+    (content_caches.clear_all), after the lock is released: no cache outlives its catalogue.
     """
     if _effective:
         return _effective[0]
     with _effective_lock:
         if _effective:
             return _effective[0]
-        registry = active_registry()
-        layers = library_layers()
-        token = _catalogue_token(registry)
-        extensions = [layer for layer in layers
-                      if not layer.damaged and layer.library_id != library_rules.CORE_LIBRARY_ID]
-        loaded = {layer.library_id for layer in layers if not layer.damaged}
-        core = _core_layer()
-        unavailable = _unavailable_libraries(registry, library_root(), loaded)
-        if not extensions:
-            catalogue = library_merge.core_only(core_ids=_core_catalogue_items, unavailable=unavailable, token=token)
-        else:
-            catalogue = _merge_extensions(registry, extensions, core, unavailable, token)
+        catalogue = _build_effective_catalogue()
+        token = getattr(catalogue, "token", None)
+        changed = bool(_built_token) and _built_token[0] != token
+        _built_token[:] = [token]
         _effective.append(catalogue)
-        return catalogue
+    if changed:
+        content_caches.clear_all()
+    return catalogue
+
+
+def _build_effective_catalogue():
+    """The merge itself; effective_catalogue calls it holding _effective_lock."""
+    registry = active_registry()
+    layers = library_layers()
+    token = _catalogue_token(registry)
+    extensions = [layer for layer in layers
+                  if not layer.damaged and layer.library_id != library_rules.CORE_LIBRARY_ID]
+    loaded = {layer.library_id for layer in layers if not layer.damaged}
+    core = _core_layer()
+    unavailable = _unavailable_libraries(registry, library_root(), loaded)
+    if not extensions:
+        return library_merge.core_only(core_ids=_core_catalogue_items, unavailable=unavailable, token=token)
+    return _merge_extensions(registry, extensions, core, unavailable, token)
 
 
 def _merge_extensions(registry, extensions, core, unavailable, token):
@@ -1429,11 +1443,11 @@ def shard_index(name):
 def clear_cache():
     """Forget pack manifests, the registry mirror and checked library layers.
 
-    Built study route trees (study_routes.build_route_set, keyed by the
-    effective catalogue token) are dropped too: a rebuilt catalogue never
-    reuses a tree of the one it replaces (design 10, WP-R4b).
+    Every cache derived from the content is dropped too (content_caches.clear_all), among them the
+    built study route trees (study_routes.build_route_set, keyed by the effective catalogue token):
+    a rebuilt catalogue never reuses anything of the one it replaces (design 10, WP-R4b). The token
+    of the last catalogue is kept, so a catalogue rebuilt with another one drops them once more.
     """
-    from .study_routes import clear_route_cache
     _pack_manifest.cache_clear()
     _mirror.cache_clear()
     _layers_for.cache_clear()
@@ -1443,4 +1457,4 @@ def clear_cache():
         _effective.clear()
     with _merge_lock:
         _merge_reports.clear()
-    clear_route_cache()
+    content_caches.clear_all()

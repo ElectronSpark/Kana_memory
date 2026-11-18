@@ -14,6 +14,8 @@ import hashlib
 import json
 import re
 
+from .content_caches import register as register_content_cache
+
 CORE_LIBRARY_ID = "kanamemory.core"
 LOCAL_LIBRARY_ID = "local"
 CORE_ROUTE_ID = "route:kanamemory.core:main"
@@ -829,6 +831,9 @@ _MAX_BUILT = 256
 
 def clear_route_cache():
     _BUILT.clear()
+
+
+register_content_cache(clear_route_cache, "study_routes._BUILT")
 
 
 def _catalogue_digest(catalogue, kana_rows, extra_items):

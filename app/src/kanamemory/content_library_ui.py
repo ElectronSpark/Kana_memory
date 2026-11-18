@@ -45,6 +45,9 @@ from .content_library_service import ContentLibraryService
 from .navigation import page_view
 
 CONTENT_LIBRARY_PAGES = frozenset({"content_libraries", "content_library_precheck"})
+# The process keeps the content it started with (content_pack). On Android leaving the app and coming
+# back does not end that process (the system keeps it; a new window reuses it), so say what a restart is.
+RESTART_HOW = "重启指完全关闭应用再打开：电脑上关闭窗口；手机上在最近任务中划掉本应用。只切到后台再回来不算重启。"
 FAMILY_TITLES = {"word": "词汇", "grammar": "语法", "pronunciation": "读音规则", "kana": "假名", "other": "其他"}
 LISTED = 10
 REGISTRY_SIGNATURE_TEXT = {"unsigned": "未签名", "unverified": "签名未验证", "verified": "签名已验证",
@@ -197,7 +200,7 @@ class ContentLibraryUIMixin:
                         u.button("返回", self.go_back))
             return
         if pending:
-            children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。"))
+            children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。" + RESTART_HOW))
         if mismatch:
             children.append(self.note("内容库目录与本次启动载入的目录不一致，导入的库暂未载入；请重启应用。"))
         imported = [row for row in rows if row["source_kind"] == "file"]
@@ -429,7 +432,7 @@ class ContentLibraryUIMixin:
             self.show_content_libraries()
             return
         title = entry["summary"].get("title", entry["library_id"])
-        self.alert(f"已安装 {title}，重启应用后生效。" if entry["enabled"]
+        self.alert(f"已安装 {title}，重启应用后生效。" + RESTART_HOW if entry["enabled"]
                    else f"已安装 {title}；这个内容库仍保持停用，启用并重启应用后才会载入。")
         self.show_content_libraries()
 
@@ -449,7 +452,8 @@ class ContentLibraryUIMixin:
                 self._content_library_reverting = False
             self.alert(_message(error))
             return
-        self.alert(("已启用，重启应用后载入。" if control.value else "已停用：" + LIBRARY_CHANGE_NOTE + "。"))
+        self.alert(("已启用，重启应用后载入。" + RESTART_HOW if control.value
+                    else "已停用：" + LIBRARY_CHANGE_NOTE + "。"))
         self.show_content_libraries()
 
     async def remove_content_library(self, library_id):
@@ -468,5 +472,5 @@ class ContentLibraryUIMixin:
         except Exception as error:
             self.alert("未能移除内容库：" + _message(error))
             return
-        self.alert("已移除，重启应用后生效。进度记录已保留。")
+        self.alert("已移除，重启应用后生效。进度记录已保留。" + RESTART_HOW)
         self.show_content_libraries()

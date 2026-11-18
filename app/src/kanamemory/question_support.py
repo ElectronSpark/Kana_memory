@@ -14,6 +14,7 @@ from math import isfinite
 import re
 import unicodedata
 
+from .content_caches import content_cache
 from .pitch_accent import morae
 from .furigana_ui import (_PLAIN_PROMPT_UNIT, _POINT_TO_DP, _annotation_text,  # noqa: F401
                           _prompt_lines, _text_width, accent_caption, furigana_block)
@@ -216,6 +217,7 @@ def _legacy_learning_question_display(question):
             "background_support_version": _BACKGROUND_SUPPORT_VERSION}
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def _background_word_senses():
     """Exact curated lesson senses, not arbitrary first dictionary meanings."""

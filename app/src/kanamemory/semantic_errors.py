@@ -8,9 +8,11 @@ from datetime import datetime, timedelta
 import json
 import math
 
+from .content_caches import register as register_content_cache
 from .material_review import fingerprint
 
 _SHARED = {}
+register_content_cache(lambda: _SHARED.clear(), "semantic_errors._SHARED")  # layered namespace
 
 
 def _assessments():

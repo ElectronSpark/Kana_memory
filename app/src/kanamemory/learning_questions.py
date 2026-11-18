@@ -15,6 +15,7 @@ import re
 from typing import NamedTuple
 import unicodedata
 
+from .content_caches import content_cache, register as register_content_cache
 from .content_pack import (load_namespace, QUESTION_DEPENDENCIES, DEPENDENCY_ID_FIELDS,
                            validate_question_dependency_requirements)
 from .learning_content import get_learning_item
@@ -637,6 +638,7 @@ def _reviewed_context(question):
     return deepcopy(context) if isinstance(context, dict) else None
 
 
+@content_cache
 @lru_cache(maxsize=1)
 def _word_pool():
     """The bundled catalogue is fixed for a process; options must not rescan it."""
@@ -1169,8 +1171,10 @@ def reorder_cue(question) -> str:
 
 _KANJI_CHAR = re.compile(r"[㐀-䶿一-鿿豈-﫿々]")
 # Compiled reading forms of the questions judged last (built when an answer is judged, never before).
+# Their readings come from the course word table (result_readings): dropped with it (content_caches).
 _READING_FORMS = {}
 _READING_FORMS_SIZE = 16
+register_content_cache(lambda: _READING_FORMS.clear(), "learning_questions._READING_FORMS")
 
 
 def _reading_forms(question):
