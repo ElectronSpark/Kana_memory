@@ -233,7 +233,7 @@
     "app/src/kanamemory/learning_harness.py": "8d0f78a144f22cd630da72939d998f3a37c69327f8c2a9f8bd683f73f993a037",
     "app/src/kanamemory/learning_pitch_ui.py": "6575652902e774bdaff36686fba2979a8bdd6ea05f2081d5833441d6a889a870",
     "app/src/kanamemory/learning_practice_policy.py": "1c47f2369d1c6828d9a1220e0fb27d96a5c10a44a2bd4492d64e45671e340144",
-    "app/src/kanamemory/learning_questions.py": "46d0468e6be7afa9ff939779ed5905bb60fcf34919ed8e0bb41910082356587c",
+    "app/src/kanamemory/learning_questions.py": "46e8caf88ff0989370ede1f0abb27cd2a3137d382dd35de161ed07cf2edaa5c8",
     "app/src/kanamemory/learning_records.py": "315bea856df9c5481e435bbdefc0900eeabf5ceb3d107103a7ad165e9796c0d3",
     "app/src/kanamemory/learning_replacement.py": "94e6f2689fed455d389b4663aa63bd08f93f9ce8d8e3f955d65ced06e178addf",
     "app/src/kanamemory/learning_reset.py": "2e0fcde1bac3eeb2ca530b5825d34519d609adf9a7974bbf5e5e0d104359cfcf",
@@ -989,7 +989,7 @@
     "tools/sentence_annotation_corpus.py": "0a07ae4a9eb99f15584917cd9fafbf9f272a83dd77c03f4e4fb48703f69c9aca",
     "tools/sentence_annotation_overrides.py": "2ead11683e234521e2ac724ef7b632d3bf086019e38fdd4e45f677e332357970",
     "tools/sign_library_pack.py": "a4e069b5968eb170a0b5cc9e2fd1a0afd79cc12061818c9c8c6bd1e49d31435f",
-    "tools/validate_example_coverage.py": "4a1e114b384b430277c7639f9a043393000ef4eea1d938b306b39046baf0ef3b",
+    "tools/validate_example_coverage.py": "5e8efe04b57894fd9a3976f67053faba0b236f5502a24adadd930dd00dcda32e",
     "tools/validate_learning_curriculum.py": "993a8ba09d2db4ec140cc7a0a119ee342cf66b1e60882dcb6d52163f0b693b1e",
     "tools/validate_structured_lessons.py": "9c41cb86f49f0ef99edc226c6855e4348a18864262dd5fa14063e58f32fb77b5",
     "tools/verify_teaching_migration.py": "e91d77a40a4d89598302afb1ebdc15e2bee8fd5e96c51c46c205d73bd78cd355"

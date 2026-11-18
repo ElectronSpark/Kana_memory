@@ -1,4 +1,8 @@
-"""Audit the ten-example floor, additive identity and portable pack contract."""
+"""Audit the shared-example floor, additive identity and portable pack contract.
+
+Every lesson has at least ten shared example sentences; an expression lesson (a fixed short phrase such as a
+greeting: family grammar, domain expression) has at least three (example_floor).
+"""
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -13,6 +17,15 @@ from kanamemory import example_catalogue
 from kanamemory.example_store import BUNDLED_LIMITS, validate_pack
 from kanamemory.learning_content import learning_items
 from kanamemory.build_info import VERSION
+
+EXAMPLE_FLOOR = 10
+EXPRESSION_EXAMPLE_FLOOR = 3
+
+
+def example_floor(item):
+    """The least number of shared example sentences a lesson must have."""
+    expression = item.get('family') == 'grammar' and item.get('domain') == 'expression'
+    return EXPRESSION_EXAMPLE_FLOOR if expression else EXAMPLE_FLOOR
 
 
 def main():
@@ -29,7 +42,7 @@ def main():
     coverage = {i['id']: set() for i in items}
     for ref in refs.values():
         coverage[ref['target_id']].add(ref['example_id'])
-    assert all(len(ids) >= 10 for ids in coverage.values())
+    assert all(len(coverage[i['id']]) >= example_floor(i) for i in items)
     original_rows = example_catalogue.expansion_rows
     try:
         example_catalogue.expansion_rows = lambda item: ()

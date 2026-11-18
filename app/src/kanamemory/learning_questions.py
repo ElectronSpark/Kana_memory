@@ -742,6 +742,19 @@ def practice_templates(item):
     return result
 
 
+def practice_kind_allowed(item, kind):
+    """Whether reviewed practice of ``kind`` may be bound to ``item``.
+
+    The kind belongs to the lesson's family (or its pronunciation domain) and
+    asks for an ability the lesson has: added practice never creates a memory
+    ability. _reviewed_templates refuses a binding that breaks this; content
+    tools use the same rule to keep such a question out before it is merged.
+    """
+    allowed = (PRONUNCIATION_KINDS if item.get("domain") == "pronunciation" else
+               WORD_KINDS if item["family"] == "word" else GRAMMAR_KINDS)
+    return kind in allowed and KIND_ABILITIES[kind] in item.get("abilities", [])
+
+
 def _reviewed_templates(item):
     """Reviewed append-only tasks for an exact lesson, without changing it.
 
@@ -769,10 +782,8 @@ def _reviewed_templates(item):
     if base is None:
         return None  # No guessed template replacement for dictionary fallback.
     result = deepcopy(base)
-    allowed = (PRONUNCIATION_KINDS if item.get("domain") == "pronunciation" else
-               WORD_KINDS if item["family"] == "word" else GRAMMAR_KINDS)
     for kind, additions in extension.get("templates", {}).items():
-        if kind not in allowed or KIND_ABILITIES[kind] not in item.get("abilities", []):
+        if not practice_kind_allowed(item, kind):
             raise ValueError("Practice extension cannot create a memory ability")
         if not isinstance(additions, list):
             raise ValueError("Invalid practice extension templates")
