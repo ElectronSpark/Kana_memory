@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 
+from . import reading_form_answers
 from .answer_result_ui import answer_text
 from .result_readings import annotation_spans, answers_in_japanese, word_spans
 
@@ -75,9 +76,31 @@ def answer_form(question, answer=None, *, form=None):
         else:
             spans = []
         return display, spans
+    if japanese and own:
+        return text, checked_spans(question, text, form)
     if japanese:
         return text, annotation_spans(question, text)
     return text, []
+
+
+def checked_spans(question, text, form=None):
+    """The readings of the question's own answer without a standard spelling, checked by the content's kana.
+
+    The content's kana forms are its all-kana accepted answers and answer_reading. One that is a reading of
+    the answer (reading_form_answers.align) decides: readings it confirms stay, kanji words without a
+    reading get its reading, readings it contradicts (着いて read き) give way to it. Without one, the
+    readings are today's (result_readings.annotation_spans).
+    """
+    from .learning_questions import _reading_normal
+    spans = annotation_spans(question, text)
+    accepted = question.get("accepted_answers")
+    references = [x for x in (accepted if isinstance(accepted, list) else []) if reading_form_answers.all_kana(x)]
+    reading = (form or {}).get("answer_reading")
+    if isinstance(reading, str) and reading.strip():
+        references.append(reading.strip())
+    if not references:
+        return spans
+    return reading_form_answers.shown_readings(text, spans, references, _reading_normal)
 
 
 def answer_cells(question, answer=None, *, form=None):

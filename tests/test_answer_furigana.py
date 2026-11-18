@@ -130,3 +130,54 @@ def test_the_display_is_stripped_and_used_only_for_a_japanese_answer(monkeypatch
         meaning = {"target_id": "none", "kind": kind, "ability": ability, "answer": "学校"}
         assert furigana.answer_form(meaning, form={"answer_display": "がっこう"}) == ("学校", [])
         assert furigana.answer_form(meaning) == ("学校", [])
+
+
+# Without a standard spelling the readings above the answer are checked by the content's own kana forms
+# (its all-kana accepted answers and answer_reading): reading_form_answers.shown_readings.
+
+def accepted(answer, *others):
+    return dict(use(answer), accepted_answers=[answer, *others])
+
+
+def test_a_reading_the_content_kana_contradicts_is_replaced_by_the_content_reading(monkeypatch):
+    # 着いて read き (from 着る) above the answer; the content lists えきについて
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [(0, 1, "えき"), (2, 3, "き")])
+    question = accepted("駅に着いて", "えきについて")
+    assert furigana.answer_form(question, form={}) == ("駅に着いて", [(0, 1, "えき"), (2, 3, "つ")])
+    # answer_reading counts as the content's kana too; punctuation and katakana fold as the judge folds them
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [(0, 1, "く")])
+    assert furigana.answer_form(use("来ない。"), form={"answer_reading": "こない"}) == ("来ない。", [(0, 1, "こ")])
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [(7, 8, "ちい"), (15, 16, "つ")])
+    question = accepted("このセーターは小さいから、もう着ない", "このせーたーはちいさいからもうきない")
+    assert furigana.answer_form(question, form={})[1] == [(7, 8, "ちい"), (15, 16, "き")]
+
+
+def test_a_reading_is_added_where_none_was_shown_and_confirmed_readings_stay(monkeypatch):
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [(0, 2, "がっこう")])
+    question = accepted("学校へ行きます", "がっこうへいきます")
+    assert furigana.answer_form(question, form={}) == ("学校へ行きます", [(0, 2, "がっこう"), (3, 4, "い")])
+    # a confirmed split of one kanji run (会社 + 員) is kept as it is, nothing added inside that run
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [(0, 2, "かいしゃ"), (2, 3, "いん")])
+    question = accepted("会社員です", "かいしゃいんです")
+    assert furigana.answer_form(question, form={}) == ("会社員です", [(0, 2, "かいしゃ"), (2, 3, "いん")])
+    assert furigana.answer_cells(question, form={}) == [("会社", "かいしゃ"), ("員", "いん"), ("です", "")]
+
+
+def test_without_a_kana_form_of_the_answer_the_readings_are_todays(monkeypatch):
+    shown = [(0, 1, "き")]  # wrong, but nothing in the content says so
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: shown)
+    assert furigana.answer_form(accepted("着いて"), form={}) == ("着いて", shown)
+    # a kana form of another sentence neither confirms nor contradicts this one
+    assert furigana.answer_form(accepted("着いて", "ついた"), form={}) == ("着いて", shown)
+    # another answer than the question's own (the entered answer) is never checked
+    assert furigana.answer_form(accepted("駅に着いて", "えきについて"), "着いて") == ("着いて", shown)
+
+
+def test_the_kana_forms_align_with_the_text_or_not_at_all():
+    from kanamemory import learning_questions as questions
+    from kanamemory import reading_form_answers as rfa
+    normal = questions._reading_normal
+    assert rfa.align("学校へ行きます。", "がっこうへいきます", normal) == [(0, 2, "がっこう"), (3, 4, "い")]
+    assert rfa.align("学校へ行きます", "がっこうにいきます", normal) is None
+    assert rfa.align("がっこう", "がっこう", normal) is None  # no kanji: nothing to read
+    assert rfa.shown_readings("学校", [(0, 2, "がくこう")], [], normal) == [(0, 2, "がくこう")]

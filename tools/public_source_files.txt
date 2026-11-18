@@ -58,6 +58,7 @@ app/src/kanamemory/answer_autoplay.py
 app/src/kanamemory/answer_speech.py
 tests/test_answer_speech.py
 tests/test_answer_furigana.py
+tests/test_reading_form_answers.py
 tests/test_word_block_structure.py
 app/src/kanamemory/answer_feedback.py
 app/src/kanamemory/answer_input.py
@@ -447,6 +448,7 @@ tests/support/dex_files.py
 tests/support/learning_store_fixtures.py
 app/src/kanamemory/answer_result_ui.py
 app/src/kanamemory/answer_furigana.py
+app/src/kanamemory/reading_form_answers.py
 app/src/kanamemory/furigana_ui.py
 app/src/kanamemory/learning_dispatch_types.py
 app/src/kanamemory/adaptive_evidence.py

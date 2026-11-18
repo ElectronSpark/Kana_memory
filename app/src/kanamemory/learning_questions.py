@@ -20,6 +20,7 @@ from .content_pack import (load_namespace, QUESTION_DEPENDENCIES, DEPENDENCY_ID_
 from .learning_content import get_learning_item
 from . import pitch_practice
 from . import multi_cloze
+from . import reading_form_answers
 
 _CONTENT = load_namespace("learning_questions", {})
 _PRACTICE = load_namespace("varied_practice", {})
@@ -1144,6 +1145,32 @@ def reorder_cue(question) -> str:
     return head if head and head in choices and len(blanks) == len(choices) - 1 else ""
 
 
+def _reading_forms(question, normal=None):
+    """[(text, reading spans)] of the right answers, for reading_form_answers; only when an answer is judged.
+
+    Each accepted answer with the readings its result page shows (result_readings.annotation_spans) when
+    the content's own kana answers confirm them (reading_form_answers.agrees: the all-kana accepted answers,
+    a kana answer, answer_reading); unconfirmed spans are dropped, so that text is typed as it stands. And
+    the answer's standard spelling when the content gives one (reviewed_answer_form), read from the kana
+    answer or from answer_reading (result_readings.word_spans); without either it is typed as it stands.
+    """
+    from .result_readings import annotation_spans, word_spans
+    normal = normal or _normal
+    answer = question.get("answer")
+    texts = [x for x in question.get("accepted_answers", [answer]) if isinstance(x, str)]
+    form = reviewed_answer_form(question)
+    display = form.get("answer_display", "").strip()
+    reading = answer if reading_form_answers.all_kana(answer) else form.get("answer_reading", "").strip()
+    references = [*(x for x in texts if reading_form_answers.all_kana(x)), *([reading] if reading else [])]
+    forms = []
+    for text in dict.fromkeys(texts):
+        spans = annotation_spans(question, text)
+        forms.append((text, spans if reading_form_answers.agrees(text, spans, references, normal) else []))
+    if display and display not in texts:
+        forms.append((display, word_spans(display, reading) if reading else []))
+    return forms
+
+
 def grade_learning_answer(question: dict, answer) -> dict:
     from .material_review import reviewed_question
     question = reviewed_question(question)
@@ -1200,9 +1227,10 @@ def grade_learning_answer(question: dict, answer) -> dict:
         matched, accepted = grader.match(question, value, normal, accepted)
         if matched is not None:
             return matched
-    if value in accepted:
-        return {"status": "correct", "correct": True, "message": question.get("feedback", "正确。"), "scorable": True}
     known_wrong = {normal(x) for x in question.get("known_wrong", [])}
+    if value in accepted or (value not in known_wrong and reading_form_answers.applies(question)
+                             and reading_form_answers.matches_any(value, _reading_forms(question, normal), normal)):
+        return {"status": "correct", "correct": True, "message": question.get("feedback", "正确。"), "scorable": True}
     if question.get("strict") or value in known_wrong:
         result = {"status": "incorrect", "correct": False, "message": question.get("feedback", "请核对答案。"), "scorable": True}
         if grader is not None:
