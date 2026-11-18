@@ -552,3 +552,18 @@ def test_main_build_checks_the_answer_form_with_the_app_and_writes_nothing_on_a_
     assert bqb.main(["build", str(source)], validate=no_check) == 0
     fields = json.loads((tmp_path / "authored" / "pt.fields.json").read_text("utf8"))
     assert fields["t.recall.001"]["answer_display"] == "よろしくお願いします"
+
+
+def test_wrong_options_become_the_templates_known_wrong_and_are_checked():
+    variant, fields = build_one(entry(choices=["は", "が", "わ"], wrong=["わ"]))
+    t = variant["template"]
+    assert t["known_wrong"] == ["わ"] and "wrong" not in fields
+    assert list(t) == ["prompt", "task", "answer", "choices", "input_mode", "strict", "safe", "known_wrong",
+                       "feedback", "practice"]
+    assert "known_wrong" not in build_one(entry())[0]["template"]  # without the field: unchanged shape
+    for change, message in (({"wrong": ["で"]}, "is not one of the choices"), ({"wrong": ["は"]}, "names the answer"),
+                            ({"wrong": []}, "non-empty list"), ({"wrong": ["が", "が"]}, "non-empty list"),
+                            ({"wrong": ["が"], "choices": None}, "only a choice entry")):
+        with pytest.raises(bqb.BatchError) as caught:
+            bqb.build_batch([entry(**{"choices": ["は", "が", "を"], **change})], "x.authored.json")
+        assert message in str(caught.value)

@@ -43,6 +43,10 @@ Compact entry (one object per template):
                expression, accepted = its other spellings). Choices are always strict, reorders never.
   span         quote marked as practice.target_spans[0] (default: the gap mark if the prompt has one, else the
                whole prompt; production and reorder: the whole prompt); ``span_index`` picks the n-th occurrence
+  wrong        choice entries: the options written wrong on purpose (書って, 行いて, 帰て), a subset of choices
+               without the answer; written to the template's ``known_wrong`` (an existing App field: graded wrong,
+               which every non-answer option of a choice already is). The dependency tool reads such an option as
+               requiring nothing and as no unknown word; the other options' grammar is derived like the prompt's
   hint         folded Chinese hint (``hint_policy: fold_always``)
   readings     copied to the template
   scenario     fields ``scenario_id`` (required)
@@ -191,6 +195,21 @@ def proxy_need_problems(key, needs, proxies, target_id=None):
             if cid in proxies and cid != target_id]
 
 
+def wrong_problems(key, wrong, choices, answer):
+    """Messages for an authored ``wrong`` list (options written wrong on purpose): choice entries only, a
+    non-empty list of distinct options of the entry, never its answer."""
+    if choices is None:
+        return [f"{key}: wrong marks options written wrong on purpose; only a choice entry has options"]
+    if (not isinstance(wrong, list) or not wrong or any(not isinstance(w, str) or not w.strip() for w in wrong)
+            or len(set(wrong)) != len(wrong)):
+        return [f"{key}: wrong must be a non-empty list of distinct options (leave it out when there are none)"]
+    problems = [f"{key}: wrong option {w!r} is not one of the choices" for w in wrong
+                if not isinstance(choices, list) or w not in choices]
+    if answer in wrong:
+        problems.append(f"{key}: wrong names the answer {answer!r}")
+    return problems
+
+
 def entry_problems(entry):
     """Messages for an entry the builder cannot turn into a valid template (empty when it can)."""
     key = entry.get("key")
@@ -230,6 +249,9 @@ def entry_problems(entry):
         problems.append(f"{key}: glosses must be a list of objects")
     if "needs" in entry:
         problems += needs_problems(key, entry["needs"], entry.get("target_id"))
+    if "wrong" in entry:
+        problems += wrong_problems(key, entry["wrong"], entry.get("choices") if mode == "choice" else None,
+                                   entry.get("answer"))
     if "strict" in entry and (type(entry["strict"]) is not bool or mode != "text"):
         problems.append(f"{key}: strict must be true or false, and only on a typed answer (text input); "
                         "choices are always strict, reorders never")
@@ -278,6 +300,10 @@ def build_template(entry):
         else:
             template.update(choices=list(entry["choices"]), input_mode="choice", strict=True,
                             safe=kind in SAFE_CHOICE_KINDS)
+            if entry.get("wrong"):
+                # Options written wrong on purpose (書って, 行いて): the App's known_wrong (graded wrong, as every
+                # other option of a strict choice); the dependency tool reads them as requiring nothing.
+                template["known_wrong"] = list(entry["wrong"])
     template["feedback"] = entry["feedback"]
     if kind in TEXT_KINDS or kind in WORD_FAMILY:
         template["support"] = dict(NO_SUPPORT)
