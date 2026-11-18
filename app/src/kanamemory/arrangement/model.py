@@ -394,6 +394,9 @@ class DeckTexts:
     answer: str = ""
     explanation: str = ""
     audio_text: str = ""
+    # A callable giving the answer's (surface, kana or "") cells, called only when the answer is shown
+    # (course questions, owner 2026-11-18: kana above the standard spelling); None: the answer as text.
+    answer_cells: object = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

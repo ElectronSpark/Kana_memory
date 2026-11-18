@@ -408,7 +408,7 @@ class IntroBatchUIMixin:
             self.show_intro_batch_quiz()
             return
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import answer_text, shown_answer, shown_explanation
+        from .answer_result_ui import answer_furigana_block, answer_text, shown_explanation
         result = grade_learning_answer(expected, answer)
         if result.get("status") in {"empty", "invalid"}:
             return
@@ -425,8 +425,8 @@ class IntroBatchUIMixin:
         self._intro_quiz_result.clear()
         self._intro_quiz_result.add(build_answer_feedback({"correct": correct}))
         if not correct:
-            self._intro_quiz_result.add(u.label(shown_answer(expected), bold=True,
-                                                text_role=learning_text_role(expected, "answer")))
+            self._intro_quiz_result.add(answer_furigana_block(self, expected, bold=True,
+                                                              text_role=learning_text_role(expected, "answer")))
         if expected.get("feedback"):
             self._intro_quiz_result.add(u.label(shown_explanation(expected, expected["feedback"])))
         if not correct:

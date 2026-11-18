@@ -154,11 +154,12 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
 
     def show_retention_check_result(self,context):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import asked_text, entered_answer_row, distinct_explanation, shown_answer, shown_explanation
+        from .answer_result_ui import answer_furigana_block, asked_text, entered_answer_row, distinct_explanation, shown_answer, shown_explanation
         from .answer_autoplay import autoplay_answer
         row=context['row'];q=row['question'];result=row['result']
-        # After the answer every Japanese word of the result carries its kana (design 11 section 7, rule 9).
-        children=[build_answer_feedback(result),u.label(shown_answer(q),size=20,text_role=learning_text_role(q,'answer'))]
+        # After the answer every Japanese word of the result carries its kana (design 11 section 7, rule 9);
+        # the answer in its standard spelling with kana above (owner 2026-11-18, answer_furigana).
+        children=[build_answer_feedback(result),answer_furigana_block(self,q,size=20,text_role=learning_text_role(q,'answer'))]
         text=self._learning_answer_audio_text(q)
         if text:children[-1]=u.row(children[-1],u.speaker_button(lambda w:self.speak_text(text)))
         if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer']:

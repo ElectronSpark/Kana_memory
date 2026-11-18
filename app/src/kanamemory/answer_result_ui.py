@@ -55,6 +55,18 @@ def distinct_explanation(explanation, answer):
                      if line.strip() != str(answer).strip()).strip()
 
 
+def answer_furigana_block(app, question, answer=None, *, text_role, size=20, bold=False, **style):
+    """The answer line of a result page: the answer's standard spelling with kana above its kanji words.
+
+    Owner 2026-11-18 (answer_furigana): one format for the answer; the content's display form is looked
+    up here, when the result is shown. Drawn by furigana_ui.cells_widget (one label when nothing has kana).
+    Both imports stay inside: this module's other helpers are pure and are used without Toga.
+    """
+    from .answer_furigana import answer_cells
+    from .furigana_ui import cells_widget
+    return cells_widget(app, answer_cells(question, answer), size=size, text_role=text_role, bold=bold, **style)
+
+
 def entered_answer_row(u, text, *, text_role):
     width = (5 * 12 * 96 / 72 + 4) * u.font_scale()
     return u.row(u.label("我的回答：", size=12, color=u.MUTED, width=width),

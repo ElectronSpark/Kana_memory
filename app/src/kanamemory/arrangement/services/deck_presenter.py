@@ -42,6 +42,7 @@ class DeckPresenter:
             options=texts.options if card.mode is DeckAnswerMode.CHOICE else (),
             audio_text=texts.audio_text,
             answer=_answer_line(texts.answer) if card.mode is DeckAnswerMode.SELF_CHECK else "",
+            answer_cells=texts.answer_cells if card.mode is DeckAnswerMode.SELF_CHECK else None,
             leave_caption=self._leave)
 
     def result(self, outcome: DeckOutcome) -> DeckResultModel:
@@ -51,6 +52,7 @@ class DeckPresenter:
         return DeckResultModel(header=self._header, result=practice_result(outcome.correct, outcome.effect,
                                                                             outcome.message),
                                answer_line=_answer_line(texts.answer) if scored else "",
+                               answer_cells=texts.answer_cells if scored else None,
                                explanation=texts.explanation if scored else "",
                                scored=scored, leave_caption=self._leave,
                                **({} if scored else {"next_caption": ASK_AGAIN}))

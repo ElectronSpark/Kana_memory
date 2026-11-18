@@ -8,7 +8,7 @@ level, a section id), never by a closure.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .model import DeckAnswerMode, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, Tilt
 from .rules.depth import KanaDepth
@@ -391,6 +391,7 @@ class DeckQuestionModel:
     options: tuple[str, ...] = ()
     audio_text: str = ""
     answer: str = ""
+    answer_cells: object = field(default=None, compare=False)   # DeckTexts.answer_cells, for the shown answer
     play_caption: str = DECK_PLAY
     submit_caption: str = DECK_SUBMIT
     input_hint: str = DECK_INPUT
@@ -408,6 +409,7 @@ class DeckResultModel:
     header: str
     result: PracticeResultModel
     answer_line: str = ""
+    answer_cells: object = field(default=None, compare=False)   # DeckTexts.answer_cells, for answer_line
     explanation: str = ""
     next_caption: str = DECK_NEXT
     leave_caption: str = DECK_LEAVE

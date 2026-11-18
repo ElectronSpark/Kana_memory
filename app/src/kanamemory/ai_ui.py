@@ -1408,14 +1408,15 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
 
     def show_ai_feedback(self, result):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import entered_answer_row, distinct_explanation, shown_explanation, shown_text
+        from .answer_result_ui import (answer_furigana_block, entered_answer_row, distinct_explanation,
+                                       shown_explanation, shown_text)
         from .answer_autoplay import autoplay_answer
         question = self._ai_current["question"]
         # Like every result page (design 11 section 7, rule 9): the Japanese shown after the answer carries
         # kana. A generated question has no reading entry, so only its target word and course words that the
         # course reads one way are marked; the comparisons below keep the plain strings.
-        children = [u.label(shown_text(question, result.get("answer", question["answer"])), size=20,
-                            flex=1, text_role=learning_text_role(question, "answer"))]
+        children = [answer_furigana_block(self, question, result.get("answer", question["answer"]), size=20, flex=1,
+                                          text_role=learning_text_role(question, "answer"))]
         children[0]._feedback_fragment = {"kind": "ai_answer_result", "question": deepcopy(question), "result": deepcopy(result)}
         audio_text = self._learning_answer_audio_text(question)
         if audio_text:

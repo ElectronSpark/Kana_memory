@@ -559,8 +559,38 @@ def rebuild_practice_question(question, item):
         guided=question.get("guided") is True, apply_review=False, _practice_template=raw)
 
 
+ANSWER_FORM_KEYS = ("answer_display", "answer_reading")
+
+
 def reviewed_practice_context(question):
-    """Read verified background glosses; never trust imported display flags."""
+    """Read verified background glosses; never trust imported display flags.
+
+    The answer's display form (ANSWER_FORM_KEYS) is left out: it is for the result page only
+    (reviewed_answer_form), never for anything shown while the question is open.
+    """
+    context = _reviewed_context(question)
+    return None if context is None else {key: value for key, value in context.items()
+                                         if key not in ANSWER_FORM_KEYS}
+
+
+def reviewed_answer_form(question):
+    """{answer_display, answer_reading} the content gives the question's template, for its result page.
+
+    Owner 2026-11-18: the answer is shown in its standard spelling with kana above it. Looked up from the
+    content by the content id, kind and template fingerprint of the stored question, never copied into the
+    snapshot; {} when nothing is found (older content, a retired template, a generated question).
+    """
+    try:
+        context = _reviewed_context(question)
+    except (AttributeError, KeyError, TypeError):  # a malformed snapshot or template: no display form
+        context = None
+    if context is None:
+        return {}
+    return {key: context[key] for key in ANSWER_FORM_KEYS
+            if isinstance(context.get(key), str) and context[key].strip()}
+
+
+def _reviewed_context(question):
     source = question.get("practice_source")
     if (not isinstance(source, dict)
             or set(source) != {"schema_version", "item_fingerprint", "template_sha256"}

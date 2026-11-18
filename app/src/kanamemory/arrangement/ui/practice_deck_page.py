@@ -13,8 +13,23 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import kanamemory.ui_components as u
-from ..display import DeckEndModel, DeckQuestionModel, DeckResultModel, PracticeResultModel
+from kanamemory.furigana_ui import cells_widget
+from ..display import DECK_ANSWER_PREFIX, DeckEndModel, DeckQuestionModel, DeckResultModel, PracticeResultModel
 from ..model import DeckAnswerMode
+
+
+def _answer(line: str, cells, *, size: int):
+    """The answer line: with cells (a course answer), 答案： then the standard spelling with kana above it."""
+    if not line or not callable(cells):
+        return u.label(line, size=size, text_role="study")
+    shown = tuple(cells())
+    if not any(reading for _, reading in shown):
+        widget = u.label(DECK_ANSWER_PREFIX + "".join(surface for surface, _ in shown), size=size,
+                         text_role="study")
+        widget._answer_cells = shown
+        return widget
+    return u.col(u.label(DECK_ANSWER_PREFIX, size=14, color=u.MUTED, margin_bottom=2),
+                 cells_widget(None, shown, size=size, margin_bottom=0), margin_bottom=8)
 
 
 def practice_result_rows(model: PracticeResultModel, *, on_continue: Callable[[], object] | None = None) -> list:
@@ -70,7 +85,7 @@ class _QuestionForm:
 
     def _show_answer(self) -> None:
         self._self_check.clear()
-        self._self_check.add(u.label(self._model.answer, size=20, text_role="study"),
+        self._self_check.add(_answer(self._model.answer, self._model.answer_cells, size=20),
                              u.button(self._model.self_right_caption, lambda widget: self._on_self_check(True),
                                       primary=True),
                              u.button(self._model.self_wrong_caption, lambda widget: self._on_self_check(False)))
@@ -89,7 +104,7 @@ def deck_result_page(model: DeckResultModel, *, on_next: Callable[[], object],
     """The result of one deck answer: UI8 result, the answer and its explanation, 下一题 and 结束练习."""
     rows = practice_result_rows(model.result)
     if model.answer_line:
-        rows.append(u.label(model.answer_line, size=18, text_role="study"))
+        rows.append(_answer(model.answer_line, model.answer_cells, size=18))
     if model.explanation:
         rows.append(u.label(model.explanation, size=14, color=u.MUTED))
     rows.extend([u.button(model.next_caption, lambda widget: on_next(), primary=True),

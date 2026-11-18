@@ -15,7 +15,7 @@ import re
 from .navigation import page_view
 from .answer_autoplay import autoplay_answer
 from .answer_speech import clean_utterance, completed_cloze_utterance, pronunciation_utterance
-from .answer_result_ui import answer_text, shown_answer, shown_explanation
+from .answer_result_ui import answer_furigana_block, answer_text, shown_answer, shown_explanation
 from .learning_content import learning_items, learning_item_views, get_learning_item, learning_item_from_word
 from .learning_questions import (build_learning_question, question_kinds, grade_learning_answer, TEXT_KINDS,
                                  PRONUNCIATION_KINDS, KIND_ABILITIES, LISTENING_KINDS, OPT_IN_LISTENING_KINDS,
@@ -1819,7 +1819,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 u.button("继续", lambda w, expected=self._learning_guide:
                     self.finish_learning_guide(expected_question=expected), primary=True))
         else:
-            answer = u.label(shown_answer(self._learning_guide), bold=True, flex=1 if speaker else 0,
+            answer = answer_furigana_block(self, self._learning_guide, bold=True, flex=1 if speaker else 0,
                 text_role=learning_text_role(self._learning_guide, "answer"))
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
                 u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", ""))),
@@ -2310,12 +2310,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         accepted_sequence = bool(correct and entered and q.get("pitch_practice", {}).get("version") in (2, 3))
         compare_reading = (q.get("kind") == "vocab_reading" and correct is False
                            and bool(entered) and not assisted and entered != q["answer"])
-        # After the answer every Japanese word shown here carries its kana (design 11 section 7, rule 9);
+        # After the answer every Japanese word shown here carries its kana (design 11 section 7, rule 9):
+        # the answer line in its standard spelling with kana above (owner 2026-11-18, answer_furigana);
         # the comparisons below keep using the plain strings.
         answer = (answer_diagram(self, q, answer=entered) if accepted_sequence else
                   answer_diagram(self, q, reveal=True) if is_pitch_question(q) else
-                  u.label(shown_answer(q), size=20, flex=1 if speaker else 0,
-                          text_role=learning_text_role(q, "answer")))
+                  answer_furigana_block(self, q, size=20, flex=1 if speaker else 0,
+                                        text_role=learning_text_role(q, "answer")))
         if compare_reading:
             from .spelling_display import build_spelling_comparison
             answer = build_spelling_comparison(self, q["answer"], entered,

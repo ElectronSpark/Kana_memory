@@ -15,6 +15,8 @@ import re
 import unicodedata
 
 from .pitch_accent import morae
+from .furigana_ui import (_PLAIN_PROMPT_UNIT, _POINT_TO_DP, _annotation_text,  # noqa: F401
+                          _prompt_lines, _text_width, accent_caption, furigana_block)
 
 
 PROMPT_DISPLAY_SETTING = "prompt_display_v1"
@@ -31,9 +33,7 @@ _UNSAFE_ABILITIES = frozenset({
     "K识读", "K拼写", "K听辨", "K手写", "V读法", "V听辨理解", "P发音训练",
 })
 _GAP = re.compile(r"[_＿□■◯○]|[（(\[【]\s*[）)\]】]|（[①-⑥1-6]）|［[1-6]］|\{[^}]*\}|<[^>]*>|\.\.\.|…")
-_PLAIN_PROMPT_UNIT = re.compile(r"（(?:[^\S\r\n]*|[①-⑥1-6])）|［[1-6]］|\([^\S\r\n]*\)|\[[^\S\r\n]*\]|【[^\S\r\n]*】|[\s\S]")
 _KANA = re.compile(r"[ぁ-ゖァ-ヶー]+\Z")
-_POINT_TO_DP = 96 / 72
 _BACKGROUND_SUPPORT_VERSION = 2
 _KANJI = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff々〆]")
 
@@ -775,75 +775,6 @@ def prompt_support(question, preferences=None, known_ids=None):
     return result
 
 
-def accent_caption(number):
-    if type(number) is not int or number < 0:
-        return ""
-    return "⓪" if number == 0 else chr(0x2460 + number - 1) if number <= 20 else f"[{number}]"
-
-
-def _annotation_text(span):
-    """Format an already approved display plan, retaining accent boundaries."""
-    phrases = span.get("accent_phrases")
-    if isinstance(phrases, (list, tuple)) and 2 <= len(phrases) <= 16:
-        if all(isinstance(p, Mapping) and type(p.get("accent_number")) is int
-               and p["accent_number"] >= 0
-               and (p.get("reading") is None or isinstance(p["reading"], str)
-                    and _KANA.fullmatch(p["reading"])) for p in phrases):
-            return "｜".join((p.get("reading") or "") + accent_caption(p["accent_number"]) for p in phrases)
-    return (span.get("reading") or "") + accent_caption(span.get("accent_number"))
-
-
-def _text_width(text, size, scale):
-    # Circled accent digits are East Asian Ambiguous, but Android's Japanese
-    # fallback font renders them at a full cell. Treating them as Latin-width
-    # caused only the number to wrap underneath an otherwise fitting reading.
-    units = sum(1 if c == "⓪" or unicodedata.east_asian_width(c) in "WFA" else .6 for c in text)
-    return max(1, units * size * _POINT_TO_DP * scale)
-
-
-def _prompt_lines(segments, available, size, scale):
-    """Wrap complete words and blank markers; other plain text may wrap by character."""
-    available = max(1, available)
-    annotation_size = max(11, size * .55)
-    cells = []
-    for span in segments:
-        annotation = _annotation_text(span)
-        # Keep a visible answer slot intact at a row boundary. Splitting its
-        # brackets from the blank makes enlarged cloze questions ambiguous.
-        surfaces = (span["surface"],) if annotation else _PLAIN_PROMPT_UNIT.findall(span["surface"])
-        for surface in surfaces:
-            # Native font fallback/hinting rounds per glyph, so reserve more
-            # than one pixel at enlarged system sizes. This is internal text
-            # allowance, not reduced type size or fixed clipping height.
-            allowance = max(4, 4 * scale) if annotation else 2
-            width = min(available, max(_text_width(surface, size, scale),
-                                      _text_width(annotation, annotation_size, scale) if annotation else 0) + allowance)
-            cells.append({"surface": surface, "annotation": annotation, "width": width,
-                          "annotation_size": annotation_size})
-    lines, current, occupied = [], [], 0
-    for cell in cells:
-        if cell["surface"] == "\n":
-            if current:
-                lines.append(current)
-                current, occupied = [], 0
-            continue
-        if current and occupied + cell["width"] > available:
-            if cell["surface"] in "。、，．！？!?」』）】" and len(current) > 1 and current[-1]["width"] + cell["width"] <= available:
-                # Keep closing punctuation with its preceding cell instead of
-                # creating a line containing only a full stop.
-                previous = current.pop()
-                lines.append(current)
-                current, occupied = [previous], previous["width"]
-            else:
-                lines.append(current)
-                current, occupied = [], 0
-        current.append(cell)
-        occupied += cell["width"]
-    if current:
-        lines.append(current)
-    return lines
-
-
 def learning_text_role(question, field="prompt"):
     """Choose typography from the exercise contract, never from Hanzi shapes.
 
@@ -979,8 +910,7 @@ def _build_prompt_block(app, question, preferences=None, *, size=20, available_w
     the two text lines. Very long words retain their own wrapping cell rather
     than shrinking the user's requested type size. Works on both Toga backends.
     """
-    from .ui_components import label, col, row, INK, MUTED
-    from .text_layout import font_scale
+    from .ui_components import label, col
 
     plan = prompt_support(question, preferences, known_ids) if plan is None else plan
     if not plan["furigana_visible"] and not plan["accent_visible"]:
@@ -991,35 +921,9 @@ def _build_prompt_block(app, question, preferences=None, *, size=20, available_w
         result._feedback_fragment = {"kind": "question_prompt", "question_id": question.get("id"),
             "target_id": question.get("target_id"), "plan": deepcopy(plan), "font_size": size}
         return result
-    try:
-        scale = float(font_scale())
-    except (TypeError, ValueError):
-        scale = 1
-    if not isfinite(scale) or scale <= 0:
-        scale = 1
-    if available_width is None:
-        try:
-            available_width = float(app.main_window.size.width) - 32
-        except (AttributeError, TypeError, ValueError):
-            available_width = 328
-    if not isfinite(available_width) or available_width < 1:
-        available_width = 328
-    lines = _prompt_lines(plan["segments"], available_width, size, scale)
-    rows = []
-    for line in lines:
-        cells = []
-        for cell in line:
-            children = []
-            if cell["annotation"]:
-                children.append(label(cell["annotation"], size=cell["annotation_size"], color=MUTED,
-                                      text_align="center", width=cell["width"], margin_bottom=0,
-                                      text_role="study"))
-            children.append(label(cell["surface"], size=size, color=INK, text_align="center",
-                                  width=cell["width"], margin_bottom=0,
-                                  text_role=learning_text_role(question)))
-            cells.append(col(*children, width=cell["width"]))
-        rows.append(row(*cells, align_items="end", margin_bottom=6))
-    result = col(*rows, margin_bottom=8)
+    result, lines, available_width, scale = furigana_block(
+        app, plan["segments"], size=size, available_width=available_width,
+        text_role=learning_text_role(question))
     result._prompt_support = plan
     result._feedback_fragment = {"kind": "question_prompt", "question_id": question.get("id"),
         "target_id": question.get("target_id"), "plan": deepcopy(plan), "font_size": size,

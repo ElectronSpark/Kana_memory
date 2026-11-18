@@ -250,22 +250,25 @@ def annotate(question, text):
 
     The caller decides that the string is Japanese (answers_in_japanese for an answer or an option).
     """
+    spans = annotation_spans(question, text)
+    return inline_kana(text, spans) if spans else text
+
+
+def annotation_spans(question, text):
+    """[(start, end, kana)] that annotate writes inline: the same readings, for a page that sets them above."""
     if not isinstance(text, str) or not _KANJI.search(text):
-        return text
+        return []
     entry = question_entry(question) if isinstance(question, Mapping) else None
     if entry is not None and text in entry["options"]:
-        spans = [(start, end, reading) for start, end, reading, _ in entry["options"][text]]
-        return inline_kana(text, spans) if spans else text
+        return [(start, end, reading) for start, end, reading, _ in entry["options"][text]]
     if entry is not None:
         for raw, located in entry["fields"].values():
             if raw == text:  # the sentence itself: the readings chosen for it, at their own places
-                spans = [(start, end, reading) for start, end, reading, _ in located
-                         if not _NOTED.match(text, end)]
-                return inline_kana(text, spans) if spans else text
+                return [(start, end, reading) for start, end, reading, _ in located
+                        if not _NOTED.match(text, end)]
     pairs = known_pairs(question)
     # A text that is one course word (an option of a generated kind) before any word-by-word reading.
-    spans = ([] if any(surface in text for surface in pairs) else _whole(text, pairs)) or _spans(text, pairs)
-    return inline_kana(text, spans) if spans else text
+    return ([] if any(surface in text for surface in pairs) else _whole(text, pairs)) or _spans(text, pairs)
 
 
 def annotate_explanation(question, text):

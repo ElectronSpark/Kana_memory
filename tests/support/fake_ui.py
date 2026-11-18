@@ -41,3 +41,8 @@ def descendants(node):
 
 def text_of(node):
     return "\n".join(str(item.text) for item in descendants(node))
+
+def answer_cells(node):
+    """The (surface, kana) cells of every result answer line under node, in order (answer_furigana)."""
+    return [tuple(item._answer_cells) for item in descendants(node)
+            if getattr(item, "_answer_cells", None) is not None]

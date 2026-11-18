@@ -12,7 +12,7 @@ from hashlib import sha256
 import json
 
 from .navigation import page_view
-from .answer_result_ui import answer_text, shown_answer, shown_explanation
+from .answer_result_ui import answer_furigana_block, answer_text, shown_answer, shown_explanation
 from .question_instruction_ui import instruction_widgets
 from .question_support import (build_prompt_block, clean_prompt_preferences, learning_question_display,
                                learning_text_role, option_labels, prompt_audio_text)
@@ -507,7 +507,7 @@ class TutorUIMixin:
         from .learning_pitch_ui import answer_diagram
         pitch = is_pitch_question(q)
         answer = (answer_diagram(self, q, reveal=True) if pitch else
-                  u.label(shown_answer(q), size=20, flex=1, text_role=learning_text_role(q, "answer")))
+                  answer_furigana_block(self, q, size=20, flex=1, text_role=learning_text_role(q, "answer")))
         answer._feedback_fragment = {"kind": "tutor_feedback", "question": deepcopy(q), "result": deepcopy(result)}
         text = self._learning_answer_audio_text(q)
 

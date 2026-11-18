@@ -5,7 +5,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .navigation import page_view
-from .answer_result_ui import answer_text, asked_text, shown_answer, shown_explanation
+from .answer_result_ui import answer_furigana_block, answer_text, asked_text, shown_answer, shown_explanation
 from .retention_session import DiagnosticStore, BUDGETS, LIVE
 from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role, option_labels
@@ -481,7 +481,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         pitch = is_pitch_question(q)
         answer = (answer_diagram(self, q, answer=result['answered_text']) if pitch and viewed.get('correct') is True
                   else answer_diagram(self, q, reveal=True) if pitch
-                  else u.label(shown_answer(q), size=20, text_role=learning_text_role(q, 'answer')))
+                  else answer_furigana_block(self, q, size=20, text_role=learning_text_role(q, 'answer')))
         def expose_answer_audio():
             abilities = {(q['target_id'], q['ability'])}
             if q.get('family') == 'word':

@@ -12,7 +12,8 @@
 - mode: a choice question without a special stimulus (pitch, multi-gap) is
   answered by tapping an option; the others are self-checked in the deck
   (their input parts need the course page's own controls).
-- texts: the answer with readings (answer_result_ui.shown_answer) and the
+- texts: the answer, its cells with kana above the standard spelling
+  (answer_furigana.answer_cells, made only when the answer is shown) and the
   question's own explanation.
 """
 from __future__ import annotations
@@ -81,12 +82,15 @@ class CourseDeckLane:
         return DeckAnswerMode.SELF_CHECK
 
     def texts(self, ref: StateRef, question: Mapping[str, object]) -> DeckTexts:
-        from ...answer_result_ui import distinct_explanation, shown_answer
-        answer = shown_answer(dict(question))
+        from ...answer_furigana import answer_cells
+        from ...answer_result_ui import answer_text, distinct_explanation
+        answer = answer_text(dict(question))
         options = (tuple(question.get("choices") or ())
                    if self.mode(ref, question) is DeckAnswerMode.CHOICE else ())
+        # The answer's cells (standard spelling, kana above) are made only when the page shows the answer.
         return DeckTexts(prompt=str(question.get("prompt", "")), task=str(question.get("task") or ""),
                          options=options, answer=str(answer),
+                         answer_cells=lambda shown=dict(question): tuple(answer_cells(shown)),
                          explanation=distinct_explanation(question.get("feedback", ""), answer),
                          audio_text=str(question.get("audio_text") or "") if question.get("requires_audio") else "")
 
