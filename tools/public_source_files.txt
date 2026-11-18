@@ -417,6 +417,8 @@ tests/test_app_clock.py
 tests/test_study_path_selection.py
 tools/check_architecture.py
 tools/check_main_route_order.py
+tools/arrange_main_route_order.py
+tests/test_arrange_main_route_order.py
 tools/architecture_policy.json
 tests/test_architecture.py
 docs/learning_records_0282.txt

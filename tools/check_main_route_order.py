@@ -92,8 +92,36 @@ def given_sections(tree):
     return [section for section in _flat(tree) if section.get(GIVEN_ORDER)]
 
 
-def _positions(tree):
+def route_positions(tree) -> dict:
+    """entry id -> its place in the route (every entry of every stage, in route order)."""
     return {entry["id"]: index for index, entry in enumerate(e for s in _flat(tree) for e in s["entries"])}
+
+
+def key_floor(key, params) -> int:
+    """The floor of one readiness key: MixParams.choice_floor for a choice key, else MixParams.floor."""
+    from kanamemory.route_mix.readiness import is_choice_key
+    return params.choice_floor if is_choice_key(key) else params.floor
+
+
+def required_count(key, without, params) -> int:
+    """The question floor of a lesson of the beginning: min(gated questions without the order, floor)."""
+    return min(without, key_floor(key, params))
+
+
+def counts_before(readiness, cid, positions, at) -> dict:
+    """key -> gated questions of ``cid`` at route place ``at`` (requirements placed before ``at`` are learned)."""
+    return readiness.counts(cid, lambda r: positions.get(r, at) < at)
+
+
+def blocking_requirements(templates, known, limit=None) -> tuple:
+    """((requirement id, questions it blocks), ...) over the unmet ``templates`` ((fingerprint,
+    requirements), ...) of one key, most first (ties by id); ``known``: requirement id -> learned;
+    ``limit``: at most that many (None: all)."""
+    met = {sha for sha, requires in templates if all(known(r) for r in requires)}
+    blocked = Counter(r for r, _ in {(r, sha) for sha, requires in templates if sha not in met
+                                     for r in requires if not known(r)})
+    ranked = tuple(sorted(blocked.items(), key=lambda pair: (-pair[1], pair[0])))
+    return ranked if limit is None else ranked[:limit]
 
 
 @dataclass(frozen=True)
@@ -116,8 +144,7 @@ class FloorRow:
 def floor_rows(with_tree, without_tree, readiness, params) -> list:
     """FloorRow of every lesson of the given beginning (route order) and every key the readiness
     table has for it (abilities and choice keys)."""
-    from kanamemory.route_mix.readiness import is_choice_key
-    new, old = _positions(with_tree), _positions(without_tree)
+    new, old = route_positions(with_tree), route_positions(without_tree)
     rows = []
     for section in given_sections(with_tree):
         for entry in section["entries"]:
@@ -126,17 +153,12 @@ def floor_rows(with_tree, without_tree, readiness, params) -> list:
                 continue
             here, there = new[cid], old.get(cid, new[cid])
             known = lambda r, at=here: new.get(r, at) < at  # noqa: E731
-            now = readiness.counts(cid, known)
-            then = readiness.counts(cid, lambda r, at=there: old.get(r, at) < at)
+            now = counts_before(readiness, cid, new, here)
+            then = counts_before(readiness, cid, old, there)
             for key in sorted(set(now) | set(then)):
-                floor = params.choice_floor if is_choice_key(key) else params.floor
-                required = min(then.get(key, 0), floor)
-                templates = readiness.abilities(cid).get(key, ())
-                met = {sha for sha, requires in templates if all(known(r) for r in requires)}
-                blocked = Counter(r for r, _ in {(r, sha) for sha, requires in templates if sha not in met
-                                                 for r in requires if not known(r)})
-                top = tuple(sorted(blocked.items(), key=lambda pair: (-pair[1], pair[0]))[:_BLOCKERS])
-                rows.append(FloorRow(cid, key, then.get(key, 0), now.get(key, 0), required, top))
+                top = blocking_requirements(readiness.abilities(cid).get(key, ()), known, _BLOCKERS)
+                rows.append(FloorRow(cid, key, then.get(key, 0), now.get(key, 0),
+                                     required_count(key, then.get(key, 0), params), top))
     return rows
 
 
@@ -183,6 +205,41 @@ def _installed_library_of():
     return route_library_of(availability_catalogue())
 
 
+@dataclass(frozen=True)
+class Evaluation:
+    """What the check finds in an order: problems (main_route_order.order_problems), the floor rows
+    (FloorRow, route order; empty without listed ids), the beginning's runs (beginning_runs; None
+    without listed ids) and the params used."""
+    problems: dict
+    rows: tuple
+    runs: dict | None
+    params: object
+
+
+def evaluate(value, items=None, *, kana=None, readiness=None, library_of: Callable | None = None,
+             params=None) -> Evaluation:
+    """The findings of ``check`` (``value`` not None; arguments as there), unformatted."""
+    from kanamemory import main_route_order as given
+    from kanamemory.learning_content import learning_items
+    from kanamemory.study_path_catalog import _REFERENCE_STAGE, study_path_records
+    if items is None:
+        items = learning_items()
+        kana = _installed_kana() if kana is None else kana
+    kana = [] if kana is None else kana
+    library_of = _installed_library_of() if library_of is None else library_of
+    records = study_path_records([], items)
+    problems = given.order_problems(value, records, first_stage=1, optional_stage=_REFERENCE_STAGE,
+                                    library_of=library_of)
+    params = default_params() if params is None else params
+    if not given.order_ids(value):
+        return Evaluation(problems, (), None, params)
+    with_tree, without_tree = given_routes(value, items, kana)
+    if readiness is None:
+        readiness = read_given_readiness(with_tree, items, params)
+    rows = tuple(floor_rows(with_tree, without_tree, readiness, params))
+    return Evaluation(problems, rows, beginning_runs(with_tree), params)
+
+
 def check(value, items=None, *, kana=None, readiness=None, library_of: Callable | None = None, params=None,
           strict=False, report=None):
     """(error count, report lines) of an order over the catalogue (default: the installed one).
@@ -193,27 +250,16 @@ def check(value, items=None, *, kana=None, readiness=None, library_of: Callable 
     catalogue's providers); params: MixParams (default: a learner with the default switches); strict:
     warnings count as errors; report: a path for the TSV of every floor row."""
     from kanamemory import main_route_order as given
-    from kanamemory.learning_content import learning_items
-    from kanamemory.study_path_catalog import STAGES, _REFERENCE_STAGE, study_path_records
+    from kanamemory.study_path_catalog import STAGES
     if value is None:
         return 0, [f"{given.ORDER_KEY}: absent (the route is built as before)"]
-    if items is None:
-        items = learning_items()
-        kana = _installed_kana() if kana is None else kana
-    kana = [] if kana is None else kana
-    library_of = _installed_library_of() if library_of is None else library_of
-    records = study_path_records([], items)
-    problems = given.order_problems(value, records, first_stage=1, optional_stage=_REFERENCE_STAGE,
-                                    library_of=library_of)
+    found = evaluate(value, items, kana=kana, readiness=readiness, library_of=library_of, params=params)
+    problems, params = found.problems, found.params
     errors = given.problem_count(problems)
     lines = given.describe_problems(problems)
     warnings = 0
-    if given.order_ids(value):
-        params = default_params() if params is None else params
-        with_tree, without_tree = given_routes(value, items, kana)
-        if readiness is None:
-            readiness = read_given_readiness(with_tree, items, params)
-        rows = floor_rows(with_tree, without_tree, readiness, params)
+    if found.runs is not None:
+        rows = found.rows
         if report is not None:
             write_report(report, rows)
         for row in rows:
@@ -222,8 +268,7 @@ def check(value, items=None, *, kana=None, readiness=None, library_of: Callable 
                 blockers = ", ".join(f"{r} ({n})" for r, n in row.blockers) or "nothing on the route"
                 lines.append(f"{row.lesson}: {row.with_order} gated {row.key} questions at its place, "
                              f"{row.without} without the order, needs {row.required}; blocked most by {blockers}")
-        runs = beginning_runs(with_tree)
-        (words, word_sections), (others, other_sections) = runs["word"], runs["other"]
+        (words, word_sections), (others, other_sections) = found.runs["word"], found.runs["other"]
         lines.append(f"longest runs in the beginning: {words} word lessons ({word_sections} sections), "
                      f"{others} other lessons ({other_sections} sections)")
         if words > 2 * params.word_target:
