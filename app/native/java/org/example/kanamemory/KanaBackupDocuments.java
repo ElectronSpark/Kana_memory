@@ -20,6 +20,9 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
         void onComplete(String json, boolean cancelled, String error);
     }
     private static final int MAX_BYTES = 64 * 1024 * 1024;
+    // The most an import may carry: a content library pack (content_library_rules.MAX_PACK_BYTES).
+    // Each import's own limit (64 MiB for backups and feedback packs) is applied where the blocks are received.
+    private static final long MAX_IMPORT_BYTES = 512L * 1024 * 1024;
     private static final int BLOCK_BYTES = 64 * 1024;
     private static final String IMPORT_READY = "kana-backup-import-stream-v1";
     private static final String EXPORT_READY = "kana-backup-export-stream-v1";
@@ -131,7 +134,7 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
                     importEnded = true;
                     importInput = null;
                 } else {
-                    if (streamBytes + count > MAX_BYTES) throw new IOException("文件超过 64 MiB 限制。");
+                    if (streamBytes + count > MAX_IMPORT_BYTES) throw new IOException("文件超过 512 MiB 限制。");
                     streamBytes += count;
                 }
             }

@@ -109,6 +109,9 @@ inspect_backup / import_backup；行语义为 record_validation.py::validate_row
 当前约束：外部文件 64 MiB；解压暂存磁盘总预算 1 GiB；分块 64 KiB；单行上限
 129 MiB；每表最多 1,000,000 行。限制分别保护传输、解压、行与计数，不能把“1 GiB”
 解释成一次性内存分配。导出返回的压缩文件仍在有界内存中，不应宣称全程零内存。
+内容库包走同一条文件通道，但按自己的上限 512 MiB（设计 08）。Android 原生桥对导入总量的
+上限与之一致，各类导入自己的上限在接收分块处执行（0.36.0 起；此前原生桥对导入一律按
+64 MiB 截断，超过 64 MiB 的库包在 Android 上导不进，桌面不受影响）。
 哈希用于完整性校验，不是加密或签名；学习备份含个人答题、草稿及 AI 对话等资料。
 
 旧版只经显式转换入口：legacy_record_conversion.py::convert_legacy_backup；

@@ -99,6 +99,43 @@ def test_reject_corrupt_oversized_transfer_and_cleanup(documents,monkeypatch,blo
     asyncio.run(run())
 
 
+def test_native_bridge_lets_through_what_the_app_may_import():
+    """The picker bridge's own ceiling for an import is not below the largest import a caller may ask for (a
+    content library pack). It was 64 MiB while a pack may be 512 MiB, so no pack over 64 MiB could be imported
+    on Android. Exports and the block size keep the same bounds on both sides."""
+    import re
+    from kanamemory.content_library_rules import MAX_PACK_BYTES
+    source = (Path(__file__).resolve().parents[1]
+              / 'app/native/java/org/example/kanamemory/KanaBackupDocuments.java').read_text('utf-8')
+
+    def constant(name):
+        match = re.search(r'static final (?:int|long) ' + name + r' = ([0-9L* ]+);', source)
+        assert match, name
+        value = 1
+        for factor in match.group(1).replace('L', '').split('*'):
+            value *= int(factor)
+        return value
+
+    assert constant('MAX_IMPORT_BYTES') >= MAX_PACK_BYTES
+    assert 'streamBytes + count > MAX_IMPORT_BYTES' in source
+    assert constant('MAX_BYTES') == bridge._BACKUP_MAX_BYTES
+    assert 'streamBytes + block.length > MAX_BYTES' in source
+    assert constant('BLOCK_BYTES') == bridge._BACKUP_BLOCK_BYTES
+
+
+def test_library_import_is_bounded_by_its_own_limit_not_by_the_backup_limit(tmp_path, monkeypatch):
+    block = b'x' * bridge._BACKUP_BLOCK_BYTES
+    monkeypatch.setattr(bridge, '_BACKUP_MAX_BYTES', len(block))  # here a backup may carry one block
+    encoded = base64.b64encode(block).decode('ascii')
+    blocks = iter([encoded] * 3)
+    native = SimpleNamespace(readImportBlock=lambda: next(blocks, ''))
+    assert bridge._read_library_stream(native, str(tmp_path), 4 * len(block)) == block * 3
+    blocks = iter([encoded] * 3)
+    with pytest.raises(bridge.PlatformError, match='MiB 限制'):
+        bridge._read_library_stream(native, str(tmp_path), 2 * len(block))
+    assert not list(tmp_path.iterdir())
+
+
 def test_cancel_while_worker_reading_closes_handle_waits_worker_and_cleans_temp(documents):
     platform, host, folder=documents
     started,closed,ended=threading.Event(),threading.Event(),threading.Event()
