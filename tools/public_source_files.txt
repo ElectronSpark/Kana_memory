@@ -790,6 +790,7 @@ tests/test_example_pack_copying.py
 tests/test_example_read_operation.py
 tests/test_example_refresh_cache.py
 tests/test_explicit_learning_start.py
+tests/test_expression_lessons.py
 tests/test_feedback_clipboard_independent.py
 tests/test_feedback_clipboard_ui.py
 tests/test_feedback_direct_actions.py

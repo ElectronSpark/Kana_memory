@@ -447,5 +447,108 @@ def test_a_need_naming_a_stand_in_id_is_reported_at_build_and_at_retarget(tmp_pa
 def test_the_builders_own_limits_equal_the_helpers_and_the_apps():
     # The builder runs without the app and without the helper, so its two limits are copies of theirs.
     from kanamemory.learning_questions import MAX_OPENS_AFTER_REVIEWS
-    from practice_authoring_fields import MAX_NEEDS
+    from practice_authoring_fields import ANSWER_FORM_FIELDS, MAX_NEEDS
     assert (bqb.MAX_NEEDS, bqb.MAX_RELEASE) == (MAX_NEEDS, MAX_OPENS_AFTER_REVIEWS)
+    assert bqb.ANSWER_FORM_FIELDS == ANSWER_FORM_FIELDS
+
+
+# --- strict typed answers, the whole-expression recall question, the answer's display form ----------------------
+
+
+def recall_entry(**extra):
+    """A word lesson's "say the whole expression" question: Chinese situation cue -> the expression, typed."""
+    base = {"key": "t.recall.001", "target_id": "word:test:yoroshiku", "kind": "vocab_recall",
+            "prompt": "第一次见面，自我介绍完，你最后说什么？", "task": "写出整句表达。",
+            "answer": "よろしくお願いします", "accepted": ["よろしくおねがいします"], "strict": True,
+            "feedback": "よろしくお願いします。\n请多关照。", "scenario": "self_intro"}
+    base.update(extra)
+    return {k: v for k, v in base.items() if v is not None}
+
+
+@pytest.mark.parametrize("kind", ["controlled_sentence_production", "grammar_transform", "grammar_cloze"])
+def test_an_authored_strict_true_is_kept_on_typed_kinds_and_its_absence_builds_as_before(kind):
+    plain = entry(kind, prompt="あれ（　）です。", choices=None) if kind != "grammar_cloze" else entry()
+    plain.pop("choices", None)
+    before, _ = build_one(plain)
+    strict, _ = build_one({**plain, "strict": True})
+    explicit, _ = build_one({**plain, "strict": False})
+    assert before["template"]["input_mode"] == "text" and before["template"]["strict"] is False
+    assert strict["template"]["strict"] is True
+    assert {**strict["template"], "strict": False} == before["template"] == explicit["template"]
+    assert list(strict["template"]) == list(before["template"])
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"strict": "true"}, "strict must be true or false"),
+    ({"strict": True, "choices": ["は", "が"]}, "only on a typed answer"),
+    ({"kind": "grammar_meaning", "strict": True, "choices": ["は", "が"]}, "only on a typed answer"),
+    ({"kind": "grammar_reorder", "strict": True, "blocks": ["あれ", "は"], "prompt": None, "answer": None},
+     "only on a typed answer"),
+])
+def test_strict_is_refused_where_the_builder_does_not_decide_it(change, message):
+    item = {k: v for k, v in {**entry(), **change}.items() if v is not None}
+    with pytest.raises(bqb.BatchError) as caught:
+        bqb.build_batch([item], "x.authored.json")
+    assert message in str(caught.value)
+
+
+def test_vocab_recall_builds_the_whole_expression_question_of_a_word_lesson():
+    variant, fields = build_one(recall_entry())
+    t = variant["template"]
+    assert variant["kind"] == "vocab_recall" and variant["target_id"] == "word:test:yoroshiku"
+    assert list(t) == ["prompt", "task", "answer", "accepted_answers", "choices", "input_mode", "strict", "safe",
+                       "feedback", "support", "practice"]
+    assert (t["input_mode"], t["strict"], t["safe"], t["choices"]) == ("text", True, False, [])
+    assert t["accepted_answers"] == ["よろしくお願いします", "よろしくおねがいします"]
+    assert t["support"] == {"audio_safe": False, "reading_safe": False, "accent_safe": False}
+    practice = t["practice"]
+    assert (practice["task_family"], practice["scaffold"], practice["coverage_scope"], practice["assessed_ids"]) == (
+        "expression_recall", "retrieval", "focused", ["word:test:yoroshiku"])
+    prompt = t["prompt"]
+    assert practice["target_spans"] == [{"start": 0, "end": len(prompt), "quote": prompt}]
+    assert fields == {"opens_after_reviews": 0, "scenario_id": "self_intro"}
+    # The app's own check accepts the template; the kind is a word kind of the use ability.
+    from kanamemory.learning_questions import KIND_ABILITIES, WORD_KINDS, validate_practice
+    validate_practice(t, target_id=variant["target_id"])
+    assert KIND_ABILITIES["vocab_recall"] == "use" and "vocab_recall" in WORD_KINDS
+    # The Chinese cue is shown in the interface face, the typed expression in the Japanese study face (the
+    # word_form_recall family is a Japanese gap sentence, so it would put the cue in the study face).
+    from kanamemory.question_support import learning_text_role
+    question = {"kind": "vocab_recall", "practice": practice}
+    assert (learning_text_role(question, "prompt"), learning_text_role(question, "answer")) == ("ui", "study")
+    gap, _ = build_one(recall_entry(prompt="（　）。", family="word_form_recall"))
+    assert learning_text_role({"kind": "vocab_recall", "practice": gap["template"]["practice"]}, "prompt") == "study"
+
+
+def test_answer_display_and_reading_go_to_the_fields_never_into_the_template():
+    plain_variant, plain_fields = build_one(recall_entry(answer="よろしくおねがいします", accepted=None))
+    variant, fields = build_one(recall_entry(answer="よろしくおねがいします", accepted=None,
+                                             answer_display="よろしくお願いします"))
+    assert variant == plain_variant
+    assert fields == {**plain_fields, "answer_display": "よろしくお願いします"}
+    _, fields = build_one(recall_entry(answer_display="宜しくお願いします", answer_reading="よろしくおねがいします"))
+    assert (fields["answer_display"], fields["answer_reading"]) == ("宜しくお願いします", "よろしくおねがいします")
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"answer_display": ""}, "answer_display must be a non-empty string"),
+    ({"answer_display": " 誰 "}, "without surrounding space"),
+    ({"answer_display": 3}, "answer_display must be a non-empty string"),
+    ({"answer_reading": "だれ"}, "answer_reading is the reading of answer_display; give both"),
+])
+def test_answer_form_field_types_are_checked_without_the_app(change, message):
+    with pytest.raises(bqb.BatchError) as caught:
+        bqb.build_batch([{**entry(), **change}], "x.authored.json")
+    assert message in str(caught.value)
+
+
+def test_main_build_checks_the_answer_form_with_the_app_and_writes_nothing_on_a_failure(tmp_path, capsys):
+    good = recall_entry(answer="よろしくおねがいします", accepted=None, answer_display="よろしくお願いします")
+    bad = recall_entry(key="t.recall.002", answer_display="宜しく", answer_reading="よろしくおねがいします")
+    source = write_authored(tmp_path, [good, bad])
+    assert bqb.main(["build", str(source)], validate=no_check) == 1
+    assert "t.recall.002" in capsys.readouterr().err and not (tmp_path / "authored" / "pt.variants.json").exists()
+    source = write_authored(tmp_path, [good])
+    assert bqb.main(["build", str(source)], validate=no_check) == 0
+    fields = json.loads((tmp_path / "authored" / "pt.fields.json").read_text("utf8"))
+    assert fields["t.recall.001"]["answer_display"] == "よろしくお願いします"

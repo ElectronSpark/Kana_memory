@@ -8,8 +8,9 @@ Three commands:
 
     ``<stem>.variants.json``  a ``kanamemory-template-variants`` v1 staging file; each variant is
                               ``{"key", "target_id", "kind", "template", ["new_word"]}``
-    ``<stem>.fields.json``    ``{key: {"opens_after_reviews", "scenario_id", ["glosses"], ["needs"]}}``, the side fields the
-                              merge tool writes into the template before fingerprinting
+    ``<stem>.fields.json``    ``{key: {"opens_after_reviews", "scenario_id", ["glosses"], ["needs"], ["answer_display"],
+                              ["answer_reading"]}}``, the side fields the merge tool writes into the template before
+                              fingerprinting (pacing, needs) or beside it (glosses, the answer's display form)
 
 ``assemble BATCH_DIR [--out-dir DIR] [--source-prefix P]``
     joins the parts ``BATCH_DIR/authored/<stem>.variants.json`` (ordered by stem) and their fields files into
@@ -36,6 +37,10 @@ Compact entry (one object per template):
   blocks       grammar_reorder: the answer in ordered blocks; prompt = first block + one cue per further block,
                choices = blocks, answer = the blocks joined
   accepted     further accepted answers of typed and reorder kinds
+  strict       typed answers (text input) only: true grades every answer outside accepted wrong (default false:
+               such an answer stays unresolved); for controlled_sentence_production and vocab_recall, e.g. the
+               "say the whole expression" question of a word lesson (prompt = Chinese situation cue, answer = the
+               expression, accepted = its other spellings). Choices are always strict, reorders never.
   span         quote marked as practice.target_spans[0] (default: the gap mark if the prompt has one, else the
                whole prompt; production and reorder: the whole prompt); ``span_index`` picks the n-th occurrence
   hint         folded Chinese hint (``hint_policy: fold_always``)
@@ -46,6 +51,10 @@ Compact entry (one object per template):
   needs        fields ``needs``: 1..8 distinct content ids the question really depends on and the dependency tool
                cannot detect (never for timing); the merge puts them first in practice.background_ids. Never a
                new word's stand-in id (name the real lesson id)
+  answer_display, answer_reading
+               fields of the same names: the answer's standard spelling and, for an answer that is not all kana,
+               its kana reading; the merge stores them beside the template (contexts[template sha256]), never in
+               it. Checked with practice_authoring_fields.answer_form_fields when the app package imports
 
 The output is written exactly as the question writer's first builder wrote it (UTF-8, ``indent=1``, text mode,
 so the platform's line ending), which keeps old batches byte-identical when rebuilt.
@@ -81,10 +90,17 @@ GRAMMAR_FAMILY = {"grammar_meaning": "grammar_in_context", "grammar_cloze": "con
                   "targeted_correction": "targeted_correction",
                   "controlled_sentence_production": "controlled_sentence_production"}
 WORD_FAMILY = {"vocab_context_choice": "context_choice", "vocab_orthography": "contextual_orthography",
-               "vocab_usage": "vocab_usage", "vocab_meaning": "word_in_context"}
+               "vocab_usage": "vocab_usage", "vocab_meaning": "word_in_context",
+               "vocab_recall": "expression_recall"}
+# vocab_recall's default family is the "say the whole expression" question: its Chinese cue keeps the interface
+# face (question_support.learning_text_role gives the study face to a word_form_recall prompt, which is a
+# Japanese gap sentence; an entry of that shape names family "word_form_recall").
 DEFAULT_FAMILY = {**GRAMMAR_FAMILY, **WORD_FAMILY}
 # Typed grammar kinds: text input, no audio/reading/accent support.
 TEXT_KINDS = frozenset({"grammar_transform", "targeted_correction", "controlled_sentence_production"})
+# Typed word kinds (text input): the word in a gap, or the whole word or expression from a cue.
+TEXT_WORD_KINDS = frozenset({"vocab_usage", "vocab_recall"})
+ANSWER_FORM_FIELDS = ("answer_display", "answer_reading")  # practice_authoring_fields.ANSWER_FORM_FIELDS
 # Kinds whose options are meanings, so showing them first reveals nothing (``safe``).
 SAFE_CHOICE_KINDS = frozenset({"grammar_meaning", "vocab_meaning"})
 # Kinds that assess exactly their target (``coverage_scope: focused``).
@@ -106,7 +122,7 @@ def input_mode(entry):
     kind = entry["kind"]
     if kind == "grammar_reorder":
         return "reorder"
-    if kind in TEXT_KINDS or kind == "vocab_usage":
+    if kind in TEXT_KINDS or kind in TEXT_WORD_KINDS:
         return "text"
     if kind == "grammar_cloze" and not entry.get("choices"):
         return "text"
@@ -214,6 +230,16 @@ def entry_problems(entry):
         problems.append(f"{key}: glosses must be a list of objects")
     if "needs" in entry:
         problems += needs_problems(key, entry["needs"], entry.get("target_id"))
+    if "strict" in entry and (type(entry["strict"]) is not bool or mode != "text"):
+        problems.append(f"{key}: strict must be true or false, and only on a typed answer (text input); "
+                        "choices are always strict, reorders never")
+    for name in ANSWER_FORM_FIELDS:
+        value = entry.get(name)
+        if name in entry and (not isinstance(value, str) or not value.strip() or value != value.strip()):
+            problems.append(f"{key}: {name} must be a non-empty string without surrounding space "
+                            "(leave it out when there is none)")
+    if "answer_reading" in entry and "answer_display" not in entry:
+        problems.append(f"{key}: answer_reading is the reading of answer_display; give both")
     index = entry.get("span_index", 0)
     if type(index) is not int or index < 0:
         problems.append(f"{key}: span_index {index!r} must be a non-negative integer")
@@ -243,8 +269,10 @@ def build_template(entry):
     else:
         template.update(prompt=entry["prompt"], task=entry["task"], answer=entry["answer"])
         if mode == "text":
+            # An authored strict: true grades any other answer wrong; without it a typed answer outside
+            # accepted_answers stays unresolved, as before.
             template.update(accepted_answers=accepted_answers(entry["answer"], entry), choices=[],
-                            input_mode="text", strict=False, safe=False)
+                            input_mode="text", strict=entry.get("strict") is True, safe=False)
             if kind == "targeted_correction":
                 template["known_wrong"] = [entry["prompt"]]
         else:
@@ -291,6 +319,9 @@ def fields_of(entry):
                              for gloss in entry["glosses"]]
     if "needs" in entry:
         fields["needs"] = list(entry["needs"])
+    for name in ANSWER_FORM_FIELDS:
+        if name in entry:
+            fields[name] = entry[name]
     return fields
 
 
@@ -526,6 +557,23 @@ def app_problems(document, validate):
     return problems
 
 
+def answer_form_problems(document, fields):
+    """Keys whose answer_display / answer_reading the App could not show as written
+    (practice_authoring_fields.answer_form_fields; it needs the app package). Reads copies only."""
+    tools = str(ROOT / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    from practice_authoring_fields import AuthoringFieldError, answer_form_fields
+    problems = []
+    for variant in document["variants"]:
+        try:
+            answer_form_fields(deepcopy(variant["template"]), variant["kind"], fields.get(variant["key"]),
+                               key=variant["key"], target_id=variant["target_id"])
+        except AuthoringFieldError as error:
+            problems.append(str(error))
+    return problems
+
+
 def read_json(path):
     return json.loads(Path(path).read_text("utf8"))
 
@@ -552,7 +600,7 @@ def run_build(args, validate):
         plan = read_json(plan_path)
     document, fields = build_batch(entries, source.name, plan, args.source_prefix)
     if validate is not None:
-        problems = app_problems(document, validate)
+        problems = app_problems(document, validate) + answer_form_problems(document, fields)
         if problems:
             raise BatchError("\n".join(problems))
     out_dir = Path(args.out_dir) if args.out_dir else source.parent

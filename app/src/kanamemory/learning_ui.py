@@ -23,7 +23,7 @@ from .learning_questions import (build_learning_question, question_kinds, grade_
                                  PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION,
                                  audio_ready_kinds, stored_enabled_kinds)
 from .question_instruction_ui import instruction_widgets
-from .question_support import clean_prompt_preferences, build_prompt_block, prompt_audio_text, prompt_support, accent_caption, learning_text_role, _plain_prompt_parts, option_labels
+from .question_support import clean_prompt_preferences, build_prompt_block, prompt_audio_text, prompt_support, accent_caption, learning_text_role, _plain_prompt_parts, option_labels, lesson_title_role
 from .typography import configure_text_role, configure_study_ranges
 from .example_ui import ExampleUIMixin
 from .structured_lesson_ui import teaching_block, original_notes, block_widget
@@ -633,7 +633,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             # row itself is the render-time snapshot; feedback_context copies fragments when a report is made.
             entry._feedback_fragment = {"kind": "learning_library_entry", "target_id": item["id"],
                 "item_snapshot": item, "displayed_status": status}
-            if item["family"] == "word" and item["title"]:
+            if lesson_title_role(item) == "study" and item["title"]:
                 configure_study_ranges(entry, [(0, len(item["title"]))])
             children.append(entry)
         if offset:
@@ -665,7 +665,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         verified_teaching = teaching_allowed(item, store=self.store)
         instruction = item.get("instruction", {})
         children = [u.label(item["title"], size=25, bold=True, color=u.GREEN,
-                            text_role="study" if item["family"] == "word" else "ui")]
+                            text_role=lesson_title_role(item))]
         if answer_context and answer_context[0].get('target_id') == item['id']:
             from .semantic_errors import feedback_nodes
             children.extend(feedback_nodes(u, *answer_context))
@@ -1245,7 +1245,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         state = {'content_id': item['id'], 'introduction_id': item['introduction_id'],
                  'instruction_scope': item.get('instruction_scope'), 'ability': ability, 'levels': levels, 'busy': False}
         self._learning_familiarity_state = state
-        children = [u.label(item["title"], size=24, bold=True, text_role="study" if item["family"] == "word" else "ui"),
+        children = [u.label(item["title"], size=24, bold=True, text_role=lesson_title_role(item)),
                     u.label(labels.get(ability, ability), size=18, bold=True)]
 
         def begin(level):
@@ -1441,7 +1441,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         status, page = u.label("", size=13, color=u.MUTED), [None]
         self.screen("learning_wait", "引导例题暂不可用",
             u.label(item.get("title", ""), size=21, bold=True,
-                    text_role="study" if item.get("family") == "word" else "ui"),
+                    text_role=lesson_title_role(item)),
             u.label("这一项的引导例题暂不可用（旧例题已停用），可直接开始练习，或跳到下一项。", size=16),
             u.label("直接开始练习不会记为已掌握，之后仍按独立作答结果安排复习。", size=13, color=u.MUTED),
             status,
@@ -1653,7 +1653,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         compact = bool(familiarity and familiarity.get("route") == "compact"
                        and familiarity.get("diagnostic_state") != "needs_teaching")
         children = [u.label(item["title"], size=25, bold=True, color=u.GREEN,
-                            text_role="study" if item["family"] == "word" else "ui")]
+                            text_role=lesson_title_role(item))]
         if item.get("reading"):
             children.append(u.row(u.label(self.learning_reading_label(item), size=18, flex=1, text_role="study"),
                 *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))])))
@@ -2455,7 +2455,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 explicit=reference,
                 title='本题语序参考译文（实验）', show_source=True)
         self.screen("learning_feedback_detail", "详细", u.label(item["title"], size=22,
-            text_role="study" if item["family"] == "word" else "ui"),
+            text_role=lesson_title_role(item)),
             *origin_labels(item),
             *error_details,
             *question_reference,

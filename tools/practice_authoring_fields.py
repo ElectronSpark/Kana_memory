@@ -5,10 +5,15 @@ Design 11 section 18 (Q1-Q3). An authoring row of a NEW template may carry
   "scenario_id": str                -> practice.scenario_id (written as given),
   "glosses": [{"surface", "reading", "meaning", "lesson_id"?, "start"?}]
                                     -> contexts[template sha256]["background_glosses"] rows,
-  "needs": [content id, ...] (1..8) -> first in practice.background_ids, before the derived ids.
+  "needs": [content id, ...] (1..8) -> first in practice.background_ids, before the derived ids,
+  "answer_display": str, "answer_reading": str
+                                    -> contexts[template sha256]["answer_display" / "answer_reading"]: the answer's
+                                       standard spelling and (for an answer that is not all kana) its reading,
+                                       shown on the result page (answer_form_fields checks them).
 The two pacing keys are part of the practice and therefore of the template's fingerprint: they are set before
 validate_practice and before the fingerprint, never added to an existing template. Glosses sit beside the
-template, keyed by its fingerprint, so they may also be added to an existing template without changing it.
+template, keyed by its fingerprint, so they may also be added to an existing template without changing it; so
+does the answer's display form.
 needs are real dependencies the dependency tool cannot detect (a construction it does not recognise); they are not
 for timing (that is opens_after_reviews). They go into background_ids, which the App's gate unions with the derived
 question_dependencies entry (learning_questions.template_requires), so a later re-derivation keeps them; being
@@ -26,7 +31,11 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
-AUTHORING_FIELDS = frozenset({"glosses", "opens_after_reviews", "scenario_id", "needs"})
+AUTHORING_FIELDS = frozenset({"glosses", "opens_after_reviews", "scenario_id", "needs", "answer_display",
+                              "answer_reading"})
+# The answer's standard spelling and its reading, beside the template like the glosses (the App reads them with
+# learning_questions.reviewed_answer_form, on result pages only); learning_questions.ANSWER_FORM_KEYS.
+ANSWER_FORM_FIELDS = ("answer_display", "answer_reading")
 MAX_NEEDS = 8
 MAX_BACKGROUND = 40  # learning_questions.validate_practice: at most 40 background_ids
 GLOSS_REQUIRED = ("surface", "reading", "meaning")
@@ -34,6 +43,7 @@ GLOSS_OPTIONAL = ("lesson_id", "start")
 SCENARIO_NAMESPACE = "question_scenarios"
 # A gloss reading is the word's kana, as the page's reading rule (design 11 section 7, rule 3) shows it.
 _KANA_READING = re.compile(r"[ぁ-ゖゝゞァ-ヺーヽヾ]+\Z")
+_KANA_CHAR = re.compile(r"[ぁ-ゖゝゞァ-ヺーヽヾ]")
 # Flags of a question whose background-gloss channel the App closes (question_support._practice_background_context).
 _CLOSED_FLAGS = ("ai_generated", "tests_reading", "tests_pitch", "requires_audio", "audio_only",
                  "has_hidden_transcript")
@@ -51,8 +61,8 @@ def split_fields(fields, *, key):
     """The optional authoring fields of one template: (pacing fields, gloss entries).
 
     fields: the mapping of the optional keys (absent ones are simply missing). Any other key is refused, so a
-    misspelt field is never silently dropped. needs is read by needs_ids (a caller that takes authoring fields must
-    call it too, or refuse the field).
+    misspelt field is never silently dropped. needs is read by needs_ids and the answer's display form by
+    answer_form_fields (a caller that takes authoring fields must call them too, or refuse the fields).
     """
     if fields is None:
         return {}, []
@@ -309,6 +319,87 @@ def gloss_rows(raw, kind, target_id, entries, *, key, known_items=None, existing
     return sorted(rows, key=lambda row: row["start"])
 
 
-def context_row(rows, existing=()):
-    """The stored context of one template: existing and new gloss rows in prompt order."""
-    return {"background_glosses": sorted([*deepcopy(list(existing)), *deepcopy(rows)], key=lambda row: row["start"])}
+def context_row(rows, existing=(), form=None):
+    """The stored context of one template: existing and new gloss rows in prompt order, then the answer's display
+    form (answer_form_fields) when there is one; without it the row is exactly the glosses row of before."""
+    row = {"background_glosses": sorted([*deepcopy(list(existing)), *deepcopy(rows)], key=lambda row: row["start"])}
+    row.update((name, form[name]) for name in ANSWER_FORM_FIELDS if form and name in form)
+    return row
+
+
+def _reading_chars_ok(text):
+    """Kana (and the long mark) with the punctuation and spaces of the spelling, at least one kana, nothing else."""
+    import unicodedata
+    if not _KANA_CHAR.search(text):
+        return False
+    return all(_KANA_CHAR.fullmatch(char) or unicodedata.category(char)[0] in "PZ" for char in text)
+
+
+def _aligned(display, reading):
+    """Whether the App can put the reading over the display's kanji words (result_readings.word_spans lines it up).
+
+    word_spans falls back to the whole reading over the whole text when the kana between the kanji do not match; a
+    display that is one run of kanji always lines up. A display without kanji must sound like the reading.
+    """
+    from kanamemory.result_readings import _KANJI_RUN, word_spans
+    from kanamemory.word_sound_questions import normal_reading
+    if not _KANJI_RUN.search(display):
+        fold = lambda text: "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c  # noqa: E731
+                                    for c in normal_reading(text))
+        return fold(display) == fold(reading)
+    spans = word_spans(display, reading)
+    return bool(_KANJI_RUN.fullmatch(display)) or spans != [(0, len(display), normal_reading(reading))]
+
+
+def answer_form_fields(raw, kind, fields, *, key, target_id=None):
+    """{answer_display[, answer_reading]} of one template's authoring fields ({} when absent), checked.
+
+    The App trusts what it reads (answer_furigana.answer_form), so every condition is checked here: both are
+    non-empty strings without surrounding space; a reading needs a display; the reading is kana (with the
+    spelling's punctuation); the display differs from the answer; the answer is Japanese (the App's own check,
+    result_readings.answers_in_japanese: a meaning keeps no display); an all-kana answer is the reading of the
+    display (a reading, when given, must be that answer); any other answer needs the reading, which the display
+    must line up with (result_readings.word_spans). A multi-cloze template shows its slot label, never a display.
+    """
+    if not isinstance(fields, dict) or not any(name in fields for name in ANSWER_FORM_FIELDS):
+        return {}
+    form = {}
+    for name in ANSWER_FORM_FIELDS:
+        if name in fields:
+            value = fields[name]
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                _fail(key, f"{name} must be a non-empty string without surrounding space")
+            form[name] = value
+    if "answer_display" not in form:
+        _fail(key, "answer_reading is the reading of answer_display; give both")
+    from kanamemory.learning_questions import KIND_ABILITIES
+    from kanamemory.multi_cloze import is_cloze_question
+    from kanamemory.result_readings import _KANJI_RUN, answers_in_japanese
+    from kanamemory.word_sound_questions import normal_reading
+    display, reading = form["answer_display"], form.get("answer_reading")
+    answer = raw.get("answer") if isinstance(raw, dict) else None
+    if is_cloze_question(raw) or "multi_cloze" in raw:
+        _fail(key, "a multi-cloze template shows its slot answers; it takes no answer_display")
+    if not isinstance(answer, str) or not answer.strip():
+        _fail(key, "the template has no answer")
+    question = {"answer": answer, "kind": kind, "ability": KIND_ABILITIES.get(kind), "target_id": target_id}
+    if not answers_in_japanese(question):
+        _fail(key, f"the answer {answer!r} is not Japanese for {kind} (a meaning); the App shows no display for it")
+    if display == answer.strip():
+        _fail(key, "answer_display is the answer as written; leave it out")
+    if reading is not None and not _reading_chars_ok(reading):
+        _fail(key, f"answer_reading {reading!r} must be kana")
+    text = answer.strip()
+    all_kana = bool(re.search(r"[ぁ-ゖァ-ヺー]", text)) and not _KANJI_RUN.search(text)
+    if all_kana:
+        if reading is not None and normal_reading(reading) != normal_reading(text):
+            _fail(key, f"the answer {text!r} is all kana and is the reading; answer_reading {reading!r} differs "
+                       "(leave it out)")
+        if not _aligned(display, text):
+            _fail(key, f"answer_display {display!r} does not line up with the answer {text!r}")
+    else:
+        if reading is None:
+            _fail(key, f"the answer {text!r} is not all kana: give answer_reading, the reading of answer_display")
+        if not _aligned(display, reading):
+            _fail(key, f"answer_display {display!r} does not line up with answer_reading {reading!r}")
+    return form

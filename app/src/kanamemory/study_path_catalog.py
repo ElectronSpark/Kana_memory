@@ -92,6 +92,15 @@ def _digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
+EXPRESSION_PREFIX = "expression:"
+
+
+def _expression_stage():
+    """Stage of the common expressions: GRAMMAR_ROUTE_CONFIG["expression_stage"] (1..5), else 1."""
+    stage = GRAMMAR_ROUTE_CONFIG.get("expression_stage", 1)
+    return stage if type(stage) is int and 1 <= stage <= 5 else 1
+
+
 def _grammar_route(item):
     key = item["id"].removeprefix("grammar:")
     family = key.split(":")[0]
@@ -105,6 +114,12 @@ def _grammar_route(item):
         topic = item["title"].split("：")[0]
         if category == GRAMMAR_ROUTE_CONFIG.get("written_category"):
             stage = 4
+    elif key.startswith(EXPRESSION_PREFIX):
+        # A common expression (grammar:expression:<slug>, domain "expression") is said from the first
+        # expression stage on; a level moves it as it moves other grammar, prerequisites still lift it.
+        # Its section is its function (category: 问候, 道谢 ...).
+        stage = GRAMMAR_ROUTE_CONFIG.get("levels", {}).get(item.get("level"), _expression_stage())
+        topic = category
     else:
         stage = GRAMMAR_ROUTE_CONFIG.get("levels", {}).get(item.get("level"), 3)
         # Skeleton grammar placed in the first expression stage regardless of

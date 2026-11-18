@@ -320,3 +320,73 @@ def test_the_page_shows_a_gloss_while_the_word_is_unknown_and_drops_it_once_know
     assert notes(set()) == ["公民館：社区活动中心 · 囲碁：围棋"]
     # The learner's independent review of the lesson word hides its gloss; a word that is no lesson stays glossed.
     assert notes({HALL}) == ["囲碁：围棋"]
+
+
+# --- the answer's display form (answer_display / answer_reading) -------------------------------------------------
+
+
+def typed(answer, **changes):
+    raw = template(input_mode="text", choices=[], strict=False, answer=answer,
+                   practice={**template()["practice"], "scaffold": "retrieval"})
+    raw.update(changes)
+    return raw
+
+
+def test_the_display_form_is_checked_and_stored_beside_the_glosses():
+    from practice_authoring_fields import answer_form_fields
+    assert answer_form_fields(typed("ちかいです"), KIND, {}, key="k1") == {}
+    assert answer_form_fields(typed("ちかいです"), KIND, {"glosses": []}, key="k1") == {}
+    assert answer_form_fields(typed("ちかいです"), KIND, {"answer_display": "近いです"}, key="k1") == {
+        "answer_display": "近いです"}
+    # A reading equal to an all-kana answer is redundant but harmless.
+    assert answer_form_fields(typed("ちかいです"), KIND, {"answer_display": "近いです", "answer_reading": "ちかいです"},
+                              key="k1") == {"answer_display": "近いです", "answer_reading": "ちかいです"}
+    form = answer_form_fields(typed("さんぽに出かけます。"), "grammar_reorder",
+                              {"answer_display": "散歩に出かけます。", "answer_reading": "さんぽにでかけます。"}, key="k1")
+    assert form == {"answer_display": "散歩に出かけます。", "answer_reading": "さんぽにでかけます。"}
+    row = context_row(rows(), form=form)
+    assert list(row) == ["background_glosses", "answer_display", "answer_reading"]
+    assert context_row(rows()) == {"background_glosses": rows()}
+    assert context_row([], form={"answer_display": "近い", "other": 1}) == {"background_glosses": [],
+                                                                           "answer_display": "近い"}
+
+
+@pytest.mark.parametrize("raw,kind,fields,message", [
+    (typed("ちかい"), KIND, {"answer_display": " 近い"}, "without surrounding space"),
+    (typed("ちかい"), KIND, {"answer_display": ""}, "non-empty string"),
+    (typed("ちかい"), KIND, {"answer_reading": "ちかい"}, "give both"),
+    (typed("ちかい"), KIND, {"answer_display": "ちかい"}, "is the answer as written"),
+    (typed("近い"), KIND, {"answer_display": "近い所", "answer_reading": "chikai"}, "must be kana"),
+    (typed("近い"), KIND, {"answer_display": "近い所", "answer_reading": "ちか所"}, "must be kana"),
+    (typed("近い"), KIND, {"answer_display": "近いところ"}, "give answer_reading"),
+    (typed("近い"), KIND, {"answer_display": "近いです", "answer_reading": "ちかかった"}, "does not line up"),
+    (typed("ちかい"), KIND, {"answer_display": "近く"}, "does not line up"),
+    (typed("ちかい"), KIND, {"answer_display": "チカイデス"}, "does not line up"),
+    (typed("ちかい"), KIND, {"answer_display": "近い", "answer_reading": "とおい"}, "differs"),
+    (template(answer="在某处"), "grammar_meaning", {"answer_display": "某処"}, "not Japanese"),
+    (typed(""), KIND, {"answer_display": "近い"}, "has no answer"),
+])
+def test_each_bad_display_form_is_refused_with_its_reason(raw, kind, fields, message):
+    from practice_authoring_fields import answer_form_fields
+    with pytest.raises(AuthoringFieldError) as caught:
+        answer_form_fields(raw, kind, fields, key="k1")
+    assert str(caught.value).startswith("k1: ") and message in str(caught.value)
+
+
+def test_a_kana_display_of_the_same_sound_and_an_all_kanji_display_line_up():
+    from practice_authoring_fields import answer_form_fields
+    assert answer_form_fields(typed("ありがとう"), KIND, {"answer_display": "アリガトウ"}, key="k1")
+    assert answer_form_fields(typed("きょう"), KIND, {"answer_display": "今日"}, key="k1")
+
+
+def test_the_app_shows_an_accepted_display_form_with_its_readings():
+    # What the check lets through is what answer_furigana draws: the display, kana over each kanji word.
+    from kanamemory.answer_furigana import answer_form
+    from practice_authoring_fields import answer_form_fields
+    question = {"answer": "さんぽに出かけます。", "kind": "grammar_reorder", "ability": "application",
+                "target_id": CID}
+    form = answer_form_fields(typed("さんぽに出かけます。"), "grammar_reorder",
+                              {"answer_display": "散歩に出かけます。", "answer_reading": "さんぽにでかけます。"}, key="k1")
+    text, spans = answer_form(question, form=form)
+    assert text == "散歩に出かけます。"
+    assert [(text[start:end], kana) for start, end, kana in spans] == [("散歩", "さんぽ"), ("出", "で")]

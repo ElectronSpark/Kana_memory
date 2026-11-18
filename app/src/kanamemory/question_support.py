@@ -775,6 +775,15 @@ def prompt_support(question, preferences=None, known_ids=None):
     return result
 
 
+def lesson_title_role(item):
+    """Typography of a lesson title, from the lesson's kind, never from Hanzi shapes: a word's title and a common
+    expression's (domain "expression") are Japanese study text; other grammar and pronunciation titles are Chinese
+    descriptions in the interface face."""
+    if not isinstance(item, Mapping):
+        return "ui"
+    return "study" if item.get("family") == "word" or item.get("domain") == "expression" else "ui"
+
+
 def learning_text_role(question, field="prompt"):
     """Choose typography from the exercise contract, never from Hanzi shapes.
 
