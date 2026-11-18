@@ -1,4 +1,6 @@
 """Registry, install/enable/remove, startup reconciliation and layered loading."""
+import hashlib
+import io
 import json
 import zipfile
 
@@ -238,6 +240,66 @@ def test_core_pack_replaces_bundled_teaching_and_lexicon_paths(world, tmp_path, 
     assert rules.registry_entry(service.registry(), rules.CORE_LIBRARY_ID)["source"]["kind"] == "bundled"
     content_pack.clear_cache()
     assert content_pack.pack_path().name == "teaching_content.sqlite3" and "libraries" not in content_pack.pack_path().parts
+
+
+def _with_namespace_json(pack, namespaces):
+    """The same core pack in the form built before 2026-11-18: each namespace also as teaching/<name>.json."""
+    with zipfile.ZipFile(pack) as archive:
+        manifest = json.loads(archive.read(rules.MANIFEST_FILE))
+        entries = {name: archive.read(name) for name in manifest["files"]}
+    for name, value in namespaces.items():
+        raw = json.dumps(content_pack.namespace_document(name, value), ensure_ascii=False).encode("utf-8")
+        path = "teaching/" + name + ".json"
+        entries[path] = raw
+        manifest["files"][path] = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        manifest["layers"]["teaching"].append(path)
+    manifest["content_sha256"] = rules.content_digest(manifest["files"])
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(rules.MANIFEST_FILE, json.dumps(manifest, ensure_ascii=False))
+        for name, raw in entries.items():
+            archive.writestr(name, raw)
+    return buffer.getvalue()
+
+
+def test_a_core_pack_of_the_older_form_with_namespace_json_still_installs_and_serves_its_database(world, tmp_path,
+                                                                                                   monkeypatch):
+    from package_library_pack import package
+    from support.content_library_support import CORE_NAMESPACES
+    service, root = world["service"], world["root"]
+    package(world["resources"], tmp_path / "core.zip")
+    data = _with_namespace_json(tmp_path / "core.zip", CORE_NAMESPACES)
+    inspection = service.inspect_bytes(data, "core-old.zip")
+    assert [name for name, _ in inspection.report.teaching_documents] == ["lesson", "route"]
+    assert inspection.report.has_teaching_pack and inspection.precheck.replaces_core
+    assert inspection.precheck.blocking_reasons() == ()
+    entry = service.install(inspection)
+    assert (root / entry["path"] / "teaching" / "lesson.json").is_file()
+    monkeypatch.delenv("KANAMEMORY_TEACHING_PACK")
+    content_pack.clear_cache()
+    service.startup_sync()
+    assert content_pack.pack_path() == root / entry["path"] / "teaching/teaching_content.sqlite3"
+    assert set(content_pack.load_namespace("lesson")["_ITEMS"]) == set(CORE_ITEMS)
+    assert content_pack.library_status() == {rules.CORE_LIBRARY_ID: {"state": "ready", "reason": None}}
+
+
+def test_a_core_pack_without_namespace_json_installs_without_documents_or_indexes(world, tmp_path, monkeypatch):
+    from package_library_pack import package
+    service, root = world["service"], world["root"]
+    package(world["resources"], tmp_path / "core.zip")
+    inspection = service.inspect_bytes((tmp_path / "core.zip").read_bytes(), "core.zip")
+    assert inspection.report.teaching_documents == () and inspection.report.manifest["provides"]["namespaces"] == [
+        "lesson", "route"]
+    entry = service.install(inspection)
+    folder = root / entry["path"]
+    assert sorted(p.name for p in (folder / "teaching").iterdir()) == ["teaching_content.sqlite3"]
+    assert not (folder / content_pack.INDEX_DIRECTORY).exists()
+    monkeypatch.delenv("KANAMEMORY_TEACHING_PACK")
+    content_pack.clear_cache()
+    service.startup_sync()
+    assert content_pack.pack_path() == folder / "teaching/teaching_content.sqlite3"
+    assert content_pack.load_namespace("route")["STAGES"] == ["intro"]
+    assert content_pack.library_status() == {rules.CORE_LIBRARY_ID: {"state": "ready", "reason": None}}
 
 
 def test_backup_rows_validate_registry_shape(world):

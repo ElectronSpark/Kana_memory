@@ -9,6 +9,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import zipfile
 
 import pytest
@@ -126,3 +127,48 @@ def test_an_extension_library_ships_readings_for_its_own_items(tmp_path, monkeyp
     finally:
         store.close()
         content_pack.clear_cache()
+
+
+def test_a_core_pack_carries_the_teaching_database_as_its_only_teaching_member(tmp_path):
+    result, manifest = _package(tmp_path)
+    report = rules.validate_library_pack(tmp_path / "pack.zip")
+    assert manifest["layers"]["teaching"] == [rules.TEACHING_PACK_FILE] and report.teaching_documents == ()
+    with zipfile.ZipFile(tmp_path / "pack.zip") as archive:
+        members = archive.namelist()
+    assert [name for name in members if name.startswith("teaching/")] == [rules.TEACHING_PACK_FILE]
+    database = tmp_path / "resources" / "teaching_content.sqlite3"
+    assert manifest["provides"]["namespaces"] == sorted(name for name, _ in content_pack.read_pack_namespaces(database))
+    assert result["namespaces"] == len(manifest["provides"]["namespaces"]) == 5
+    # The namespaces are still walked: lessons are provided with their fingerprints, side tables claim nothing.
+    assert sorted(manifest["provides"]["items"]) == sorted(CORE_ITEMS)
+    assert manifest["fingerprints"] == {cid: item_fingerprint(item) for cid, item in CORE_ITEMS.items()}
+    assert report.has_teaching_pack and report.has_lexicon and report.total_bytes == sum(
+        info["bytes"] for info in manifest["files"].values())
+
+
+def test_an_extension_pack_still_carries_one_json_document_per_namespace(tmp_path):
+    _, manifest = _package(tmp_path, library_id="author.json", extension=True, namespaces=["lesson", "question_readings"])
+    assert manifest["layers"]["teaching"] == ["teaching/lesson.json", "teaching/question_readings.json"]
+    assert rules.TEACHING_PACK_FILE not in manifest["files"]
+    report = rules.validate_library_pack(tmp_path / "pack.zip")
+    assert [name for name, _ in report.teaching_documents] == ["lesson", "question_readings"]
+
+
+def test_a_pack_over_the_size_limits_stops_before_writing_with_a_breakdown_by_kind(tmp_path, monkeypatch):
+    _, manifest = _package(tmp_path / "fits")
+    total = sum(info["bytes"] for info in manifest["files"].values())
+    monkeypatch.setattr(rules, "MAX_PACK_BYTES", total - 1)
+    with pytest.raises(ValueError) as caught:
+        _package(tmp_path / "over")
+    message = str(caught.value)
+    assert not (tmp_path / "over" / "pack.zip").exists()
+    assert f"over MAX_PACK_BYTES {total - 1:,}" in message and "by 1" in message and "Bytes by kind:" in message
+    sqlite_bytes = manifest["files"][rules.TEACHING_PACK_FILE]["bytes"]
+    assert re.search(rf"teaching sqlite +1 files +{sqlite_bytes:,} ", message)
+    assert "lexicon" in message and "other" in message and "teaching json" not in message
+    assert "Largest members: " + rules.TEACHING_PACK_FILE in message
+    monkeypatch.setattr(rules, "MAX_PACK_BYTES", total + 10 ** 6)
+    monkeypatch.setattr(rules, "MAX_TEACHING_BYTES", 10)  # one namespace document of an extension pack
+    with pytest.raises(ValueError, match=r"teaching/lesson\.json is [\d,]+ bytes, over MAX_TEACHING_BYTES 10") as caught:
+        _package(tmp_path / "document", library_id="author.big", extension=True, namespaces=["lesson"])
+    assert "teaching json" in str(caught.value) and not (tmp_path / "document" / "pack.zip").exists()

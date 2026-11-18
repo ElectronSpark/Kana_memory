@@ -1,12 +1,19 @@
 """Package runtime resources as a kanamemory-library-pack v1 ZIP (design 08 §4).
 
 The default output is the core library ``kanamemory.core``: the teaching
-database (v1 or v2) is carried as teaching/teaching_content.sqlite3 and also
-exported namespace by namespace as teaching/<name>.json; the lexicon,
-annotation databases, the review overlay, media and NOTICE.txt follow the
-layer layout. ``--extension`` packs only the selected namespaces as an
-extension library (no lexicon, no teaching database). Nothing executable or
-learner-related enters the archive; tools/package_content_bundle.py is unchanged.
+database (v1 or v2) is carried once, as teaching/teaching_content.sqlite3, and
+its namespaces are listed in provides.namespaces; the app reads an installed
+core's teaching content from that database (content_pack.pack_path), so the
+namespaces are not exported again as teaching/<name>.json (the rules accept a
+core pack without them; core packs built before still carry them and still
+import). The lexicon, annotation databases, the review overlay, media and
+NOTICE.txt follow the layer layout. ``--extension`` packs only the selected
+namespaces as an extension library, one teaching/<name>.json document each (no
+lexicon, no teaching database). Before the archive is written the file table is
+checked against the app's size limits (content_library_rules MAX_PACK_BYTES,
+MAX_FILE_BYTES, MAX_TEACHING_BYTES); a pack over one stops with a breakdown of
+the bytes by kind. Nothing executable or learner-related enters the archive;
+tools/package_content_bundle.py is unchanged.
 
 Phase 3/4: every manifest carries provides/references/retires/aliases/overrides
 and item revisions (conflict rule c). references are derived: depends_on ids
@@ -182,6 +189,63 @@ def _route_table(library_id, specs):
     return table
 
 
+SIZE_KINDS = ("teaching sqlite", "teaching json", "lexicon", "annotations", "media", "review", "other")
+
+
+def size_kind(path):
+    """The kind a pack member is counted under in the size breakdown."""
+    if path == rules.TEACHING_PACK_FILE:
+        return "teaching sqlite"
+    if path.startswith(rules.LAYER_PREFIX["teaching"]):
+        return "teaching json"
+    for kind in ("lexicon", "annotations", "media", "review"):
+        if path.startswith(rules.LAYER_PREFIX[kind]):
+            return kind
+    return "other"
+
+
+def size_breakdown(files):
+    """{kind: [member count, bytes]} for every kind in SIZE_KINDS."""
+    totals = {kind: [0, 0] for kind in SIZE_KINDS}
+    for path, info in files.items():
+        row = totals[size_kind(path)]
+        row[0] += 1
+        row[1] += info["bytes"]
+    return totals
+
+
+def _mib(value):
+    return f"{value / (1024 * 1024):.1f} MiB"
+
+
+def size_problem(files):
+    """A message naming every size limit of the app the file table breaks, with the breakdown by kind; or None.
+
+    The same limits validate_manifest and validate_library_pack apply, checked before the archive is
+    written so that the content side sees what grew rather than a bare refusal.
+    """
+    problems = []
+    total = sum(info["bytes"] for info in files.values())
+    if total > rules.MAX_PACK_BYTES:
+        problems.append(f"the members add up to {total:,} bytes ({_mib(total)}), over MAX_PACK_BYTES "
+                        f"{rules.MAX_PACK_BYTES:,} ({_mib(rules.MAX_PACK_BYTES)}) by {total - rules.MAX_PACK_BYTES:,}")
+    for path, info in sorted(files.items()):
+        if info["bytes"] > rules.MAX_FILE_BYTES:
+            problems.append(f"{path} is {info['bytes']:,} bytes, over MAX_FILE_BYTES {rules.MAX_FILE_BYTES:,}")
+        elif size_kind(path) == "teaching json" and info["bytes"] > rules.MAX_TEACHING_BYTES:
+            problems.append(f"{path} is {info['bytes']:,} bytes, over MAX_TEACHING_BYTES "
+                            f"{rules.MAX_TEACHING_BYTES:,} (one namespace document)")
+    if not problems:
+        return None
+    lines = ["Library pack exceeds the app's size limits: " + "; ".join(problems) + ".", "Bytes by kind:"]
+    for kind, (count, size) in size_breakdown(files).items():
+        if count:
+            lines.append(f"  {kind:16s} {count:5d} files {size:>14,d} ({_mib(size)})")
+    largest = sorted(files.items(), key=lambda pair: -pair[1]["bytes"])[:5]
+    lines.append("Largest members: " + ", ".join(f"{path} {_mib(info['bytes'])}" for path, info in largest))
+    return "\n".join(lines)
+
+
 def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_version=None, title=None,
             extension=False, namespaces=None, include_media=True, description="", rewrite_ids=False,
             depend_on_source=False, optional_references=(), retires=(), aliases=None, overrides=(),
@@ -223,7 +287,8 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
     revisions, dependencies = {}, set()
     for name, value in values.items():
         provided_namespaces.append(name)
-        add("teaching/" + name + ".json", _encoded(namespace_document(name, value)), "teaching")
+        if extension:  # a core pack serves its namespaces from the teaching database it carries
+            add("teaching/" + name + ".json", _encoded(namespace_document(name, value)), "teaching")
         for content_id, item in _items(value):
             if content_id not in fingerprints:
                 provides_items.append(content_id)
@@ -257,6 +322,9 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             for path in sorted(p for p in (resources / "media").rglob("*") if p.is_file()):
                 add(path.relative_to(resources).as_posix(), _check_file(path, resources), "media")
     add(rules.NOTICE_FILE, _check_file(resources / rules.NOTICE_FILE, resources), "notice")
+    problem = size_problem(files)
+    if problem:
+        raise ValueError(problem)
     with closing(sqlite3.connect(resources.joinpath("content.sqlite3").as_uri() + "?mode=ro", uri=True)) as db:
         lexicon = dict(db.execute("SELECT key,value FROM metadata"))
     version = library_version or json.loads(lexicon.get("content_version", '"' + metadata["content_sha256"][:12] + '"'))

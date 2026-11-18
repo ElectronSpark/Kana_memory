@@ -658,8 +658,11 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
   study_path_runtime.refresh_study_home；设置中心按钮在 learning_ui.show_settings_hub。
 - platform_desktop/platform_android.import_library_pack（备份导入通道，二进制，Android SAF MIME 增加 application/zip）；
   learning_store.validate_backup_rows 校验注册表键；diagnostic_events 增 content_library 操作码。
-- tools/package_library_pack.py：把运行时资源打成 kanamemory.core 库包（teaching sqlite + 逐命名空间 JSON、
-  lexicon、annotations、review、media、NOTICE）；--extension 可打扩展库。
+- tools/package_library_pack.py：把运行时资源打成 kanamemory.core 库包（teaching sqlite、lexicon、annotations、
+  review、media、NOTICE）；--extension 可打扩展库（逐命名空间 JSON）。2026-11-18 起核心库包不再把各命名空间另导出为
+  teaching/<namespace>.json：已安装核心库运行时只读 teaching sqlite（pack_path），JSON 是同一内容的第二份，导入时还要整份
+  解码；规则早已允许带 teaching sqlite 的核心包不带 JSON（provides.namespaces 照列），先前带 JSON 的核心包照常导入。
+  写包前按 App 的尺寸上限（MAX_PACK_BYTES、MAX_FILE_BYTES、MAX_TEACHING_BYTES）检查文件表，超限即停并按类别列出字节数。
 - 测试：tests/test_content_library_rules.py、tests/test_content_library_service.py、tests/test_content_library_ui.py，
   夹具 tests/support/content_library_support.py（全部合成数据，可在 demo 导出树运行）。
 
