@@ -170,6 +170,7 @@
   "app/src/kanamemory/arrangement/ui/section_note.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display"],
   "app/src/kanamemory/arrangement/sources/__init__.py": [],
   "app/src/kanamemory/route_mix/__init__.py": [],
+  "app/src/kanamemory/main_route_order.py": ["__future__", "collections.abc", "hashlib"],
   "app/src/kanamemory/route_mix/params.py": ["__future__", "dataclasses"],
   "app/src/kanamemory/route_mix/readiness.py": ["__future__", "collections.abc"],
   "app/src/kanamemory/route_mix/sections.py": ["__future__", "collections.abc", "hashlib", ".params"],

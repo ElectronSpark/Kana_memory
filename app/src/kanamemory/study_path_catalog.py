@@ -37,6 +37,10 @@ _STAGE_ZERO_UNIT_ORDER = ("sound:mora", "alphabet:hiragana", "alphabet:katakana"
 
 
 _REFERENCE_STAGE = 6
+# Neutral titles of a flat MAIN_ROUTE_ORDER (main_route_order.flat_layout): a section of words of
+# several topics, and a unit without a grammar lesson ("{}": its number among such units).
+ORDER_WORDS_TITLE = "词汇"
+ORDER_OPENING_TITLE = "开头 · 第 {} 组"
 
 
 def _loan_stage(script):
@@ -712,7 +716,32 @@ def assemble_study_path(records, *, version=None, scope=None, section_identity=N
     return _weave_vocabulary(_combine_micro_lessons(result, scope_key))
 
 
-def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_of=None):
+def _ordered_study_path(records, order):
+    """The core route with the given beginning (main_route_order); today's route without one.
+
+    The lessons of the beginning leave the records; the others are assembled
+    exactly as before (their dependencies on the beginning are resolvable),
+    and the beginning's units open the first stage after the sounds stage.
+    """
+    from . import main_route_order as given
+    layout_of = given.structured_layout if given.is_structured(order) else given.flat_layout
+    layout, trouble = layout_of(order, records, words_title=ORDER_WORDS_TITLE, opening_title=ORDER_OPENING_TITLE,
+                                first_stage=1, optional_stage=_REFERENCE_STAGE)
+    if trouble:
+        # A content error the check reports (order_problems); the route was repaired (prerequisite
+        # first, sections split, titles replaced) and keeps every lesson.
+        from .diagnostic_events import record_error
+        record_error("main_route_order", "read", ValueError())
+    chosen = {cid for _, sections in layout for _, ids in sections for cid in ids}
+    if not chosen:
+        return assemble_study_path(records)
+    rest = [record for record in records if record[5]["id"] not in chosen]
+    units = given.beginning_units(layout, records, STAGES[1], digest=_digest)
+    path = assemble_study_path(rest, resolvable=frozenset(chosen))
+    return given.join_beginning(path, units, STAGES[1], [stage_id for stage_id, _ in STAGES])
+
+
+def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_of=None, main_route_order=None):
     """Return independent nested snapshots covering every supplied identity.
 
     Existing learner-added dictionary senses appear in optional self-selected
@@ -720,8 +749,16 @@ def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_
     library_of (content id -> extension library id or None): an extension
     library's large sections are cut (design 11 section 16, M8(a)); without
     it, and when no library section is large, the tree is the one built before.
+    main_route_order (tests, tools; None: the content's MAIN_ROUTE_ORDER): the
+    given beginning of the route (main_route_order); absent or empty, the
+    route is exactly the one built before.
     """
-    path = assemble_study_path(study_path_records(kana_rows, learning_items, extra_items))
+    from .main_route_order import ORDER_KEY, is_structured, order_ids
+    records = study_path_records(kana_rows, learning_items, extra_items)
+    value = _PATH.get(ORDER_KEY) if main_route_order is None else main_route_order
+    order = value if is_structured(value) else order_ids(value)
+    usable = order_ids(value) and len(STAGES) > 1
+    path = _ordered_study_path(records, order) if usable else assemble_study_path(records)
     if library_of is None:
         return path
     from .route_mix.sections import split_library_sections

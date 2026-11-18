@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 import hashlib
 
-from .params import DEFAULT_PARAMS, MixParams
+from .params import DEFAULT_PARAMS, GIVEN_ORDER, MixParams
 
 
 def _digest(value: str) -> str:
@@ -36,7 +36,8 @@ def library_of_section(section, library_of: Callable[[str], str | None]) -> str 
 
 
 def _chunks(section, library_of, params):
-    if library_of_section(section, library_of) is None:
+    if section.get(GIVEN_ORDER) or library_of_section(section, library_of) is None:
+        # A section of the main route's given beginning is cut as the content gave it.
         return None
     entries = section["entries"]
     if all(entry.get("family") == "word" for entry in entries):

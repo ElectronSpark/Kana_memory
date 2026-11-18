@@ -32,6 +32,8 @@ OPERATIONS = frozenset({
     # F2: debounced AI practice/form, mastery dialogue/scope and setup-page drafts.
     "ai_practice_draft", "ai_form_draft", "retention_dialogue_draft", "retention_scope_draft",
     "practice_setup_draft",
+    # study_path_catalog: the given beginning of the main route lists a lesson before its prerequisite.
+    "main_route_order",
 })
 STAGES = frozenset({"play", "save", "commit", "sync", "refresh", "request", "read", "decode",
                     "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal",

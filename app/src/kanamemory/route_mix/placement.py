@@ -60,7 +60,7 @@ from bisect import bisect_right, insort
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from .params import DEFAULT_PARAMS, MixParams
+from .params import DEFAULT_PARAMS, GIVEN_ORDER, MixParams  # noqa: F401 - GIVEN_ORDER for sources
 from .readiness import Readiness, ReadinessCounter, is_choice_key
 
 WORD, RULE, GRAMMAR, OTHER = "word", "rule", "grammar", "other"

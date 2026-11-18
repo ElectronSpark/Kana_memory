@@ -7,6 +7,9 @@ from dataclasses import dataclass, fields
 # the per-kind floor); 4: readiness counts only templates open at introduction (design 11 section 18, Q8);
 # 5: the choice floor follows the kinds the learner has switched on (one choice per ability), not the groups
 ALGORITHM_VERSION = 5
+# The flag of a section of the main route's given beginning (main_route_order.GIVEN_ORDER): the mix keeps
+# those sections first, in their order and units, and mixes only what follows them.
+GIVEN_ORDER = "given_order"
 
 
 def switched_kinds(kinds) -> tuple:

@@ -67,7 +67,8 @@ KEY_POLICIES = {
         "VERSION", "TE_FORMS", "NAI_FORMS", "VERB_PLAIN_FORMS", "PLAIN_FORMS", "NONPAST_FORMS", "FORM_BASES")},
     **{("study_path_catalog", key): "singleton" for key in (
         "PATH_VERSION", "STAGES", "COHERENCE_RULES", "GRAMMAR_ROUTE_CONFIG", "PRONUNCIATION_ROUTE_CONFIG",
-        "COHERENCE_GROUPS", "EXAM_COHERENCE")},
+        # MAIN_ROUTE_ORDER: the given beginning of the core main route (main_route_order).
+        "COHERENCE_GROUPS", "EXAM_COHERENCE", "MAIN_ROUTE_ORDER")},
     **{("vocabulary_lessons", key): "singleton" for key in ("VOCABULARY_REVISION", "SOURCE_ID")},
 }
 

@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 import sqlite3
 
-from .placement import RULE, WORD, MixCancelled, section_of
+from .placement import GIVEN_ORDER, RULE, WORD, MixCancelled, section_of
 from .readiness import Readiness, choice_key
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -94,6 +94,8 @@ def needed_items(tree, mixable, providers: Mapping[str, str]) -> list:
             continue
         for unit in stage["units"]:
             for section in unit["sections"]:
+                if section.get(GIVEN_ORDER):
+                    continue  # the given beginning is never placed (plan._route_parts)
                 movable = section_of(section, providers).kind in (WORD, RULE)
                 result.extend(entry["id"] for entry in section["entries"] if entry.get("kind") == "learning"
                               and (movable or entry["id"] in providers))

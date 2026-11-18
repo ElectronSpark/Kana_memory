@@ -329,6 +329,7 @@ app/src/kanamemory/study_path.py
 app/src/kanamemory/kana_early_batch.py
 app/src/kanamemory/extra_practice_runtime.py
 app/src/kanamemory/study_path_catalog.py
+app/src/kanamemory/main_route_order.py
 app/src/kanamemory/study_path_display.py
 app/src/kanamemory/study_path_runtime.py
 app/src/kanamemory/study_path_selection.py
@@ -412,6 +413,7 @@ tools/check_python.py
 tests/test_app_clock.py
 tests/test_study_path_selection.py
 tools/check_architecture.py
+tools/check_main_route_order.py
 tools/architecture_policy.json
 tests/test_architecture.py
 docs/learning_records_0282.txt
@@ -910,6 +912,7 @@ tests/test_snapshot_copy_plan.py
 tests/test_snapshot_policy_projection.py
 tests/test_structural_contracts.py
 tests/test_study_path_weaving.py
+tests/test_main_route_order.py
 tests/test_study_queries.py
 tests/test_study_routes.py
 tests/test_study_store_transactions.py

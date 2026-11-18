@@ -6,6 +6,11 @@ derivation tree digest, content identity). plan_mix computes it from a
 derivation tree and the readiness of its items; apply_plan turns a matching
 plan into the mixed tree and refuses (None) any plan that does not fit the
 tree exactly. Section and entry identities, titles and depends_on never change.
+
+The sections of the route's given beginning (flag GIVEN_ORDER, main_route_order)
+open the first mixed stage: they are already mixed by design, so they keep
+their order and units, count as learned before the mix like stage 0, and only
+the sections after them are placed.
 """
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 
-from .params import DEFAULT_PARAMS, MixParams
+from .params import DEFAULT_PARAMS, GIVEN_ORDER, MixParams
 from .placement import WORD, arrange, section_of
 from .readiness import Readiness
 
@@ -39,6 +44,8 @@ def snapshot(tree) -> dict:
                                    for entry in section["entries"]]}
                 if section.get("unresolved_dependencies"):
                     row["unresolved_dependencies"] = list(section["unresolved_dependencies"])
+                if section.get(GIVEN_ORDER):
+                    row[GIVEN_ORDER] = True
                 sections.append(row)
             units.append({"id": unit["id"], "sections": sections})
         stages.append({"id": stage["id"], "optional": bool(stage.get("optional")), "units": units})
@@ -52,10 +59,12 @@ def tree_digest(tree) -> str:
     for stage in tree["stages"]:
         if stage.get("optional"):
             continue
+        # A given-beginning section adds its flag (absent everywhere else: the digest of a route
+        # without a given beginning is the one computed before).
         rows.append([stage["id"], [[section["id"], section.get("unit_id", unit["id"]),
                                     bool(section.get("unresolved_dependencies")),
                                     [[entry.get(name) for name in _ENTRY_FIELDS] + [sorted(entry.get("depends_on", ()))]
-                                     for entry in section["entries"]]]
+                                     for entry in section["entries"]]] + ([GIVEN_ORDER] if section.get(GIVEN_ORDER) else [])
                                    for unit in stage["units"] for section in unit["sections"]]])
     encoded = json.dumps(rows, ensure_ascii=False, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
@@ -118,11 +127,34 @@ def _text(value) -> bool:
     return isinstance(value, str) and 0 < len(value) <= _MAX_TEXT
 
 
+def _given_lead(sections) -> list:
+    """The leading sections of a stage that belong to the given beginning (GIVEN_ORDER)."""
+    lead = []
+    for section in sections:
+        if not section.get(GIVEN_ORDER):
+            break
+        lead.append(section)
+    return lead
+
+
+def _given_leads(tree, mixable) -> dict:
+    """{first mixed stage id: its given beginning's (section id, unit id) rows} (empty without one)."""
+    for stage in tree["stages"]:
+        if stage["id"] in mixable and not stage.get("optional"):
+            lead = _given_lead(section for unit in stage["units"] for section in unit["sections"])
+            return {stage["id"]: tuple((section["id"], section["unit_id"]) for section in lead)} if lead else {}
+    return {}
+
+
 def _route_parts(tree, mixable, library_of):
-    """(prefix entry ids, [(stage id, Sections)], suffix entry ids, hard prerequisites on the route)."""
+    """(prefix entry ids, [(stage id, Sections)], suffix entry ids, hard prerequisites on the route,
+    {stage id: ((section id, unit id), ...) of its given beginning}).
+
+    The given beginning opening the first mixed stage is kept as it is: its entries join the prefix
+    (learned before the mixed sections, like stage 0) and its rows open that stage's plan."""
     on_route = {entry["id"] for stage in tree["stages"] for unit in stage["units"]
                 for section in unit["sections"] for entry in section["entries"]}
-    prereqs, prefix, suffix, stages = {}, [], [], []
+    prereqs, prefix, suffix, stages, leads = {}, [], [], [], {}
     seen_mixed = False
     for stage in tree["stages"]:
         sections = [section for unit in stage["units"] for section in unit["sections"]]
@@ -132,12 +164,17 @@ def _route_parts(tree, mixable, library_of):
                 if needed:
                     prereqs[entry["id"]] = needed
         if stage["id"] in mixable and not stage.get("optional"):
+            lead = [] if seen_mixed else _given_lead(sections)
+            if lead:
+                prefix.extend(entry["id"] for section in lead for entry in section["entries"])
+                leads[stage["id"]] = tuple((section["id"], section["unit_id"]) for section in lead)
+                sections = sections[len(lead):]
             seen_mixed = True
             stages.append((stage["id"], tuple(section_of(section, library_of) for section in sections)))
         else:
             target = suffix if seen_mixed else prefix
             target.extend(entry["id"] for section in sections for entry in section["entries"])
-    return prefix, stages, suffix, prereqs
+    return prefix, stages, suffix, prereqs, leads
 
 
 def assign_units(sections: Sequence, fixed_ids, deferred_units: Mapping[str, str]) -> list[str]:
@@ -186,17 +223,20 @@ def plan_mix(tree, readiness: Readiness, *, mixable: Sequence[str], library_of: 
     ``cancelled``: asked between stages (placement.MixCancelled when it says so); ``overridden``:
     entry ids that are core although a library provides them (sources.overridden_entries)."""
     mixable = set(mixable)
-    prefix, stages, suffix, prereqs = _route_parts(tree, mixable, library_of)
+    prefix, stages, suffix, prereqs, leads = _route_parts(tree, mixable, library_of)
     result = arrange(stages, prefix=prefix, suffix=suffix, readiness=readiness, prereqs=prereqs,
                      library_of=library_of, params=params, cancelled=cancelled, overridden=frozenset(overridden))
     deferred_units = {sid: row[2] for sid, row in result.deferred.items()}
     planned, summary = [], {"deferred": len(result.deferred), "stages": {}}
+    if leads:
+        summary["given"] = sum(len(rows) for rows in leads.values())
     for stage in result.stages:
         if stage.changed and not stage.keep_units:
             units = assign_units(stage.sections, stage.fixed, deferred_units)
         else:
             units = [section.unit_id for section in stage.sections]
-        planned.append((stage.stage_id, tuple((section.id, unit) for section, unit in zip(stage.sections, units))))
+        planned.append((stage.stage_id, leads.get(stage.stage_id, ())
+                        + tuple((section.id, unit) for section, unit in zip(stage.sections, units))))
         summary["stages"][stage.stage_id] = {"changed": stage.changed, "variant": stage.variant,
                                              "limit": stage.limit, "lower": stage.lower,
                                              "sections": len(stage.sections),
@@ -213,11 +253,16 @@ def apply_plan(tree, plan: MixPlan, *, mixable, providers: Mapping[str, str]):
     in, keep every unit one contiguous run and keep every hard prerequisite before its dependent.
     A section changes stage only as M8(b) moves one: to a later stage, a grammar section of one
     extension library (``providers``: entry id -> extension library) that nobody needs first.
-    Stages the plan does not name are shared with the input.
+    Stages the plan does not name are shared with the input. The given beginning that opens the
+    first mixed stage opens it in the plan too, in its order and units.
     """
     if not isinstance(plan, MixPlan):
         return None
     mixable = set(mixable)
+    leads = _given_leads(tree, mixable)
+    rows_of = dict(plan.stages)
+    if any(tuple(rows_of.get(stage_id, ()))[:len(lead)] != lead for stage_id, lead in leads.items()):
+        return None
     stages = {stage["id"]: (number, stage) for number, stage in enumerate(tree["stages"])}
     sections, home = {}, {}
     for stage in tree["stages"]:
