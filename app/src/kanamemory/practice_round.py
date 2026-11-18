@@ -23,6 +23,9 @@ class AppRunPlan:
     # The entry promote() moved to the front last: ('course', question_id) or
     # ('kana', session_id, native_key); "one block at a time" (design 12 B3).
     promoted: tuple | None = None
+    # The moment of this round's last 继续学习 dispatch (memory only): a dispatch after a sitting
+    # break re-arranges the round first (design 12 B11).
+    last_dispatch_at: object = None
 
 
 def enable(store):
@@ -409,6 +412,17 @@ def _to_front(plan, course_id, session_id, question, front_rank):
             plan.priorities[('cross-kana', (session_id, key))] = (1, 0)
             marker = ('kana', session_id, key)
     return marker
+
+
+def mark_dispatch(store, at):
+    """Remember ``at`` as the active round's last dispatch (memory only; nothing without an active round)."""
+    if active(store):
+        store._practice_run_plan.last_dispatch_at = at
+
+
+def last_dispatch(store):
+    """The active round's last dispatch moment, or None (no active round, or none dispatched yet)."""
+    return store._practice_run_plan.last_dispatch_at if active(store) else None
 
 
 def promoted(store):

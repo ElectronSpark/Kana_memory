@@ -233,6 +233,17 @@ def current_route_next(service):
 
 
 @dataclass(frozen=True)
+class Rearrange:
+    """A dispatch's request to re-arrange the frozen round once (design 12 B5); nothing was shown or sealed.
+
+    ``identities``: the new content (lesson content ids, kana members) the
+    round could not show; the probe memo remembers them so that no second
+    re-arrangement is made for them.
+    """
+    identities: frozenset
+
+
+@dataclass(frozen=True)
 class PreparedKana:
     """Proof that continue already reconciled and prepared the stored main queue.
 
@@ -528,8 +539,10 @@ class StudyPathRuntimeMixin:
         # Design 12 E1: an early batch of extra practice left by an earlier launch ends before anything is served.
         from .extra_practice_runtime import end_left_early_batch
         end_left_early_batch(self)
+        StudyPathRuntimeMixin._renew_round_after_break(self)
         from .practice_round import begin, sealed, seal, frozen_priority, native_key, mark_finished
         begin(self.store, restart_finished=not _checkpoint_saved)
+        StudyPathRuntimeMixin.study_arrangement(self).dispatched(_utc(None))
         # Personal-content head/hold reads share one index (WP7a) up to the
         # queued course questions; writes run in transactions (read live) and
         # any local write renews the index before the next lookup.
@@ -586,7 +599,35 @@ class StudyPathRuntimeMixin:
         # One read context for the rest of this synchronous action: course
         # dispatch, protected-teaching probes and the course page share it.
         with self.learning_store.read_operation(now=now) as read:
-            StudyPathRuntimeMixin._continue_dispatch(self, pending, now, read, service, prepared_kana, scope=scope)
+            outcome = StudyPathRuntimeMixin._continue_dispatch(self, pending, now, read, service, prepared_kana,
+                                                               scope=scope, rearrange=not kwargs.get("_rearranged"))
+        StudyPathRuntimeMixin._rearrange_round(self, outcome)
+
+    def _renew_round_after_break(self):
+        """Design 12 B11: after a sitting break the main round is re-arranged once before anything is served.
+
+        Not while extra practice owns the round (its mode, or an early kana
+        batch). What is in progress (a draft, feedback, an opened block, a
+        short step) comes first in the fresh round, as after any restart.
+        """
+        from .domain import _utc
+        from .extra_practice_runtime import manages_round
+        return StudyPathRuntimeMixin.study_arrangement(self).renew_after_break(
+            _utc(None), leave_alone=lambda: manages_round(self))
+
+    def _rearrange_round(self, outcome):
+        """Design 12 B5: re-arrange the frozen round once for new content it could not show, and continue.
+
+        The same restart as a focus change or added sections: stored
+        questions, drafts, feedback and due times stay; what is in progress
+        comes first again. The memo records the content first, so the new
+        round never asks again for it; ``_rearranged`` keeps this one
+        "继续学习" from asking twice.
+        """
+        if not isinstance(outcome, Rearrange):
+            return
+        StudyPathRuntimeMixin.study_arrangement(self).rearrange(outcome.identities)
+        self.continue_study_path(_checkpoint_saved=True, _rearranged=True)
 
     def _course_current_in_background(self, pending, now, prepared_kana):
         """Start the sealed-round course current() on a worker; True when this action waits.
@@ -659,10 +700,12 @@ class StudyPathRuntimeMixin:
             seeded = (resume.snapshot.current(self.store)
                       and read.seed(self.learning_store.current_key(enabled, resume.now, fair_new=True),
                                     resume.value, resume.ticket.revision))
-            if seeded:
-                StudyPathRuntimeMixin._continue_dispatch(self, resume.pending, resume.now, read,
-                                                         self.study_path_service(), resume.prepared_kana)
-                return
+            outcome = (StudyPathRuntimeMixin._continue_dispatch(self, resume.pending, resume.now, read,
+                                                                self.study_path_service(), resume.prepared_kana)
+                       if seeded else None)
+        if seeded:
+            StudyPathRuntimeMixin._rearrange_round(self, outcome)
+            return
         self.continue_study_path(_checkpoint_saved=True, _course_inline=True)
 
     def _sealed_round_left_out(self, current, read):
@@ -682,12 +725,17 @@ class StudyPathRuntimeMixin:
         return bool(courses["ready"] or courses["instruction"] or courses["waiting"])
 
     def _share_dispatch(self, pending, current, normal_kana, kana_priority, course_priority, now, read, skipped,
-                        kana_kinds, scope=None):
+                        kana_kinds, scope=None, rearrange=True):
         """Breadth-first dispatch (design 12 B2-B5): (protected (lane, head) or None, lane or None).
 
         A protected head is already promoted and is shown like the protected
         first-teaching block; a lane is the review side the share rule chose;
-        (None, None) leaves the existing lane choice. An explicit start keeps
+        (None, None) leaves the existing lane choice. (Rearrange, None): new
+        content this frozen round cannot show (a refused promotion, or added
+        lessons without a queued question while the round has nothing to
+        teach) asks for one re-arrangement of the round (B5); never twice for
+        the same content (the probe memo) and only while ``rearrange``, so at
+        most once per "继续学习". An explicit start keeps
         its rule; heads below tier 3 (feedback, drafts, short steps, context
         words, a promoted block) and new work without a due review keep the
         existing order. The study clock reads every answer from the store.
@@ -695,11 +743,12 @@ class StudyPathRuntimeMixin:
         the kinds with a candidate inside it share the time first.
         """
         from .arrangement.model import Unit
-        from .arrangement.sources.candidates import DispatchCandidates, LaneHead
+        from .arrangement.sources.candidates import DispatchCandidates, LaneHead, head_member
         from .first_teaching_dispatch import explicit_start_head
         from .practice_round import promote, promote_initial, sealed
         enabled = self.learning_preferences()["enabled"]
-        if not sealed(self.store):
+        was_sealed = sealed(self.store)
+        if not was_sealed:
             explicit = explicit_start_head(self.store, self.learning_store, normal_kana, current,
                 enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read)
             if explicit and not (explicit[0] == "course" and explicit[1].get("type") == "instruction"
@@ -723,6 +772,7 @@ class StudyPathRuntimeMixin:
             memo=arrangement.probe_memo, scope_contents=scope)
         dispatcher = arrangement.dispatcher
         decision = dispatcher.decide(source, now)
+        memo = arrangement.probe_memo
         if decision.unit is Unit.NEW:
             lane, head = decision.candidate.ref
             # A kana candidate needs a session: without one kana_kinds is () and
@@ -732,13 +782,38 @@ class StudyPathRuntimeMixin:
                     pending is not None and promote(self.store, session_id=pending["session_id"],
                                                     question=head["question"])):
                 return (lane, head), None
-            # Not registered in this round: new content has no candidate now.
+            # Not registered in this round: re-arrange it once (B5), then a limited wait.
+            identity = frozenset({head_member(lane, head) or lane})
+            if rearrange and memo.may_rearrange(identity):
+                return Rearrange(identity), None
             source.promotion_refused()
             decision = dispatcher.decide(source.without_new(), now)
+        elif rearrange and source.found_nothing_in_round() and was_sealed:
+            # B5: nothing to teach in this frozen round, while added lessons it never queued wait outside it.
+            from .home_runtime import home_service
+            outside = home_service(self).unqueued_teaching(projection=read)
+            if outside and memo.may_rearrange(outside):
+                return Rearrange(outside), None
+        if (decision.unit is Unit.KANA and rearrange and was_sealed
+                and not any(candidate.unit is Unit.COURSE for candidate in source.review_candidates())):
+            # B5: the review side went to kana because the frozen round holds no course review, while
+            # course reviews came due outside it (their question is created at the next collection).
+            identity = source.round_key()
+            if not memo.reviews_checked_recently(identity, now):
+                memo.reviews_checked(identity, now)
+                from .home_runtime import home_service
+                due = home_service(self).unqueued_due(projection=read)
+                if due and memo.may_rearrange(due):
+                    return Rearrange(due), None
         return None, {Unit.COURSE: "course", Unit.KANA: "kana"}.get(decision.unit)
 
-    def _continue_dispatch(self, pending, now, read, service, prepared_kana, scope=_UNREAD):
-        """``scope``: the focus scope's content the caller read for this action (None: no scope); read here when not given."""
+    def _continue_dispatch(self, pending, now, read, service, prepared_kana, scope=_UNREAD, rearrange=True):
+        """``scope``: the focus scope's content the caller read for this action (None: no scope); read here when not given.
+
+        Returns a Rearrange when the share rule asks to re-arrange the round
+        (design 12 B5; only while ``rearrange``): nothing is sealed or shown
+        then, and the caller restarts the round and continues; else None.
+        """
         from . import ui_components as u
         from .app import KanaMemory
         from .review_dispatch import kana_resume_priority, stored_review_priority
@@ -790,7 +865,9 @@ class StudyPathRuntimeMixin:
             # Breadth first (design 12 B2-B5): new content and review share time.
             protected, share_lane = StudyPathRuntimeMixin._share_dispatch(
                 self, pending, current, normal_kana, kana_priority, course_priority, now, read, skipped,
-                KanaMemory._queue_kinds(self, pending) if pending else (), scope)
+                KanaMemory._queue_kinds(self, pending) if pending else (), scope, rearrange)
+            if isinstance(protected, Rearrange):
+                return protected
         else:
             protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
                 enabled_kinds=self.learning_preferences()["enabled"],

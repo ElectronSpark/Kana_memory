@@ -67,6 +67,14 @@ def charges(events: Sequence[ClockEvent]) -> list[tuple[ClockEvent, float]]:
     return charged
 
 
+def sitting_break(previous: datetime, previous_day: str, now: datetime, day: str) -> bool:
+    """Whether an action at ``now`` (on study day ``day``) starts a new sitting after one at ``previous``.
+
+    The same rule as charges(): a gap longer than SITTING_BREAK, or another study day.
+    """
+    return (now - previous).total_seconds() > SITTING_BREAK or day != previous_day
+
+
 def _add(usage: dict, unit: Unit, seconds: float) -> None:
     usage[unit] = usage.get(unit, 0.0) + seconds
 

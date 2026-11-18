@@ -91,6 +91,43 @@ class StoreArrangement:
     def serves(self, store) -> bool:
         return self.store is store
 
+    def rearrange(self, identities) -> None:
+        """Design 12 B5: re-arrange the main round once for new content it could not show.
+
+        The memo records ``identities`` first (never a second re-arrangement
+        for them), then the same restart as a focus change.
+        """
+        self.probe_memo.rearranged(identities)
+        _restart_main_round(self.store)
+
+    def renew_after_break(self, now, *, leave_alone: Callable[[], bool] = lambda: False) -> bool:
+        """Design 12 B11: a round does not outlive its sitting; True when it was re-arranged now.
+
+        Called at the start of a main-lane "继续学习", before the round is
+        resumed. When the active round's last dispatch lies before a sitting
+        break (rules/clock.sitting_break: more than 30 minutes, or another
+        study day), the same restart as a focus change ends it and the caller
+        collects a fresh round, what is in progress first. Both orientations.
+        ``leave_alone()``, asked only after a break: another owner manages the
+        round now (extra practice), so it is not touched.
+        """
+        from ..practice_round import last_dispatch
+        from .rules.clock import sitting_break
+        store = self.store
+        previous = last_dispatch(store)
+        renewed = bool(previous is not None and sitting_break(
+            previous, store.study_day(previous).isoformat(), now, store.study_day(now).isoformat()))
+        if renewed and leave_alone():
+            return False
+        if renewed:
+            _restart_main_round(store)
+        return renewed
+
+    def dispatched(self, now) -> None:
+        """Remember ``now`` as the active main round's last dispatch (memory only; design 12 B11)."""
+        from ..practice_round import mark_dispatch
+        mark_dispatch(self.store, now)
+
     def scope_contents(self) -> frozenset[str] | None:
         """The focus scope's content for the scheduling (one settings read without a scope); None for none."""
         return self.focus.scope_contents()

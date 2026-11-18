@@ -507,6 +507,7 @@ class ShareProbe(NamedTuple):
     """What share_probe found: a protected (lane, head) or None, and why there is none."""
     found: tuple | None
     waiting: bool   # a started block is inside its bridge wait; it becomes the candidate when ready
+    stopped: bool = False   # two unscored initial checks today: no new content for the day
 
 
 def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=None,
@@ -525,7 +526,7 @@ def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=N
     now = _utc(now)
     services = _services(store, now)
     if services.stopped:
-        return ShareProbe(None, False)
+        return ShareProbe(None, False, True)
     anchors = _block_anchors(services.service, services.kana, services.ability, services.kana_ability)
     block = _block_head(store, learning, services.service, services.kana, anchors, earned=True,
                         enabled_kinds=enabled_kinds, kana_kinds=kana_kinds, now=now, projection=projection,

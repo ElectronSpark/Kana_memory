@@ -8,6 +8,8 @@ candidate is found only when asked: first_teaching_dispatch.share_candidate
 (the "a block is due" branch of the first-teaching service, with the
 two-unscored-checks stop), and none while a block this round promoted is
 unfinished and can go on within the bridge wait ("one block at a time").
+found_nothing_in_round tells the caller that the probe found nothing the
+frozen round may show, so it can re-arrange the round once (design 12 B5).
 Reads only, apart from clearing the promotion marker of a block that no
 longer holds the slot. No SQL: the store's query owners, the first-teaching
 probes and practice_round answer.
@@ -97,6 +99,7 @@ class DispatchCandidates:
         self._in_scope = in_scope or (_everything if self._scope is None else ScopeMembership(self._scope))
         self._memo = memo     # services.probe_memo.ProbeMemo of the store, or None (always probe)
         self._new: list = []  # [candidate or None] once probed
+        self._empty = False   # the probe ran and the round holds no new content it may show now
 
     def _candidate(self, lane: str, head: dict, unit: Unit | None = None) -> Candidate:
         unit = unit or _LANE_UNIT[lane]
@@ -117,9 +120,23 @@ class DispatchCandidates:
         return ReviewsOnly(self)
 
     def promotion_refused(self) -> None:
-        """The new head could not be promoted: this round does not probe for new content again."""
+        """The new head could not be promoted (also after a re-arrangement): no probe for RETRY_AFTER."""
         if self._memo is not None:
             self._memo.refused(self._round(), self._now)
+
+    def found_nothing_in_round(self) -> bool:
+        """Whether this dispatch's probe ran and found no new content in the round.
+
+        Not when no probe ran (a block holds the slot, the memo's minute, new
+        content was not asked for), a started block is inside its bridge wait,
+        or today's two unscored initial checks stopped new content: a
+        re-arranged round would not show anything then either.
+        """
+        return self._empty
+
+    def round_key(self):
+        """The active round's identity (practice_round.round_id), None without one; keys the probe memo."""
+        return self._round()
 
     def _round(self):
         from ...practice_round import round_id
@@ -134,6 +151,7 @@ class DispatchCandidates:
                             skip_teaching_ids=self._skipped, **({} if self._scope is None else {"scope": self._scope}))
         found = probe.found
         if found is None:
+            self._empty = not probe.waiting and not getattr(probe, "stopped", False)
             if self._memo is not None and not probe.waiting:
                 # A block inside its bridge wait is the candidate within a minute: probe again.
                 self._memo.found_nothing(self._round(), self._now)

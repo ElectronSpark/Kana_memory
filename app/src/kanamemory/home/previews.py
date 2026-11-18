@@ -46,6 +46,8 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
     suspended and get a question planned under the enabled kinds (blocked or
     not, due or not): design 12 UI6 counts a due one of them in "重点之外到期
     N 题" (presenter.home_focus, unqueued_course).
+    "due": {(content_id, ability)} of those counted in "ready" (answerable
+    now, no question yet): design 12 B5 re-arranges a running round for them.
     """
     from ..domain import _utc
     from ..learning_dependencies import independent_ready_ids, prerequisite_status
@@ -54,7 +56,7 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
     enabled = course_kinds()
     result = {"ready": 0, "waiting": 0, "instruction": 0, "blocked": 0,
               "blocked_content": 0, "blocked_material": 0, "next_due": None}
-    ids = {"queued": set(), "unqueued": set(), "planned": set()}
+    ids = {"queued": set(), "unqueued": set(), "planned": set(), "due": set()}
     from ..practice_round import planned_round_running
     limited = round_limited and planned_round_running(store)
     if not enabled:
@@ -144,6 +146,7 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
                 future.append(due)
             else:
                 result["ready"] += 1
+                ids["due"].add((item['id'], unit['ability']))
     result["instruction"] = len(teaching)
     result["blocked_content"] = len(blocked_content)
     result["next_due"] = min(future) if future else None

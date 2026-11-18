@@ -311,7 +311,7 @@ B3 候选。
      · 一次只开一个块：本轮里有一个被提升而还没有结果的块时，F 没有候选（它在等 60 秒间隔时由复习填空）。“被提升而还没有
        结果”记在本轮的内存计划里（提升时记下那道题；它得到结果——包括未能评分——或进入比间隔更长的等待时清除）。
      · 当天已有两次定稿而未能评分的首检时没有候选（现有保护）。
-     · 候选必须在本轮登记之内。
+     · 候选必须在本轮登记之内；不在其内而本该教的，按 B5 的“重排一次”处理。
    课程复习 C：课程的普通队头，如果它是到期复习（冻结优先级 3）。
    假名练习 K：假名的普通队头，如果它是到期复习（冻结优先级 3）。
 B4 选择（两层）。
@@ -323,6 +323,17 @@ B5 在一轮里随时出教学块。选中 F 的候选时总是先“提升”�
    promote_initial 相同：移到所在线冻结顺序的最前、跨线优先级记为 (1,0)。此后这个块靠这个冻结优先级接着做完（B2(1)），与现在未封存
    时的机制相同（同一个块从介绍到首次检查用的是同一道待答题；新假名的介绍与它的第一道题是同一个队列条目）。学习者中途离开
    （“稍后再学”）后再回来，仍先出这个块，与现在相同——不另设撤销。不引入新条目，不改其他条目的冻结优先级与相对顺序。
+   重排一次（2026-11-18）：一轮在进程里可以活好几天（离开 App 再回来不结束它），封存之后的一轮不出新题、不登记新条目。
+   所以两种情形下改由重排来教：选中 F 而它的候选提升不成（不在本轮登记之内）；或探 F 一无所获（不是因为间隔等待，
+   也不是当天两次未评分即停），而本轮封存之后才加入、还没有待答题的课在外面等着（每天加入的听辨能力、补上的前置、
+   自己的材料、标为读过的小节里的课；即首页预览“可开始初学”不限本轮时读到的那些）。这时用改重点、加小节时的同一个动作
+   practice_round.restart(store, lane='main') 重排当前这一轮，并在同一次“继续学习”里再分派一次：新的一轮收集时给这些课
+   出题、登记，候选因此可以提升。题、草稿、反馈与到期时间都不动，进行中的照旧在最前。每次“继续学习”至多重排一次；
+   同一内容在同一个 store 对象上只为它重排一次（ProbeMemo 记着）。重排之后仍提升不成，只在 60 秒内不再探（与“一无所获”
+   相同），不再是本轮剩余的时间。扎实取向不受影响。
+   课程复习同理：份额选了复习、本轮里没有课程复习候选，而课程复习在本轮之外已经到期（它的题要到下一次收集才出），
+   也重排一次；同一组到期单元不重排第二次，这一查一轮里每 60 秒至多一次。一道在封存之后被替换的题（新题号不在本轮
+   登记里）不在此列，照旧等这一轮结束。
 B6 钟与窗口。
    事件：两条线上留有时刻的学习动作——假名的正式作答与单词拼写作答（review_event、word_spelling_attempt），课程的正式作答
      （learning_event 的 primary／unresolved），教学过程里的时刻（课程与追加能力的引导完成 guided_at_utc、批量小测每次作答的时刻、
@@ -358,6 +369,12 @@ B10 新内容没有候选时（没有已加入而未学的课与假名、被前�
    一次同样的提示（两个按钮：加入下一小节并开始／先复习；只在内存里记“这次启动已提示”）。不自动加入（N4）。设了范围而范围里还有没加入的
    小节时，提示的是范围里的下一小节，否则是当前路线的。
 
+B11 一轮不跨过一坐（2026-11-18，两种取向都适用）。一轮只在进程的内存里，手机上进程可以活好几天；原先它一直延续到
+   做完或被重排，封存后加入、到期的内容都进不来。现在每次主线的“继续学习”先看本轮上一次分派的时刻（只记在内存的
+   本轮计划里，不存储、不设设置）：与现在之间隔了一坐（按 B6 的钟：超过 30 分钟，或不在同一个学习日），就先用
+   practice_round.restart(store, lane='main') 重排一次，再从头收集。进行中的（草稿、反馈、已开的块、短步）照旧排在最前。
+   一坐之内什么都不变；加练模式或提前的一批假名在用这一轮时不重排。扎实取向：一坐之内不变，新的一坐从新的收集开始，
+   与以前每次启动 App 时相同。
 6 第一步之二：不以答对为关卡（广度优先时）
 Q1 引导题答错可以继续。答错后的结果页除了答案与讲解，多一个“看过了，继续”：它走 advance_instruction 的 bridge 检查点（阶段 guide →
    bridge，记下引导完成时刻，照常开始 60 秒的间隔）；检查点里的 guide_correct 仍是 false（last_checkpoint 变为 bridge）。分三种情形：
@@ -506,6 +523,8 @@ WP-B7 文档与验证：02（学习取向一屏、首页两行、假名练到哪
 [I 2026-11-12] WP-B2 的事件来源与两个设置键的接线：sources/events.StoreEventSource 与 services/preferences.ArrangementPreferences，校验链、反馈快照与清除时的保留；合成存储测试。首次有界读取，之后只读新追加的行（以 rowid 检索；第一次评分定稿后缓存，追加的作答学习日不晚于它或时刻早于它时重新查询）；状态的任一张卡在日志之前已有复习（作答前状态有更早的 last_review，或在 legacy_kana_states_without_events 里）则全算复习，只声明熟悉、没有卡的假名保留第一次评分；只有教学标记是教学动作，第一次正式作答是普通作答；截断取上限＋1 行，只在多出的行存在时截，不拆同一时刻，每次更新后重算截断点，截断后的窗口与全新读取相同；引导标记与 _teaching_service 共用 guide_evidence（诊断性标题曝光不算）。未做：批量小测每次作答的时刻（检查点里逐条解码）；未接入调用点。
 [I 2026-11-12] WP-B3 接入“继续学习”（B2–B5、B7、B8）：取向为广度优先时，_continue_dispatch 在两条线的冻结优先级之后，明确开始照旧（first_teaching_dispatch.explicit_start_head，由 choose_protected 抽出），普通队头低于 3 档或没有到期复习时照旧，否则由 ShareDispatcher.decide 在新内容、课程复习、假名练习之间按窗口用时选；新内容的候选是 share_candidate（_proportional_teaching “挣到之后”的整条分支抽出，含两次未评分即停，扎实取向下 choose_protected 与 _proportional_teaching 的结果不变），选中后用 practice_round.promote（封存后也可用、只限已登记条目、记下被提升的条目，RoundSnapshot 与 PreparedKana 的校验都算它）提升再按受保护块显示；提升不成或该课被跳过（本次运行的“跳到下一项”）时只在复习之间再选。一次只开一个块：本轮被提升的块没有结果、且现在或桥接等待（60 秒检索延迟＋30 秒）之内可答时新内容没有候选；有了结果、被跳过、不见了，或要等得更久（题型关掉、前置挡住、推迟或重试等待）时清除记号，新内容可以另有候选。重启后已开始而未提升的块还在等待之内时也不开第二个块，等到可答时它是候选。探 F 候选什么都没找到时本轮 60 秒内不再探，提升被拒时本轮不再探（只在内存；合成存储上这样的一次分派比扎实多约 7.5 毫秒，加了之后约 0.8 毫秒）；探到的候选按代码都已在本轮登记（封存后才加入的课探不到），提升被拒是防御性的分支。8／16／32／64 与同日循环保护在广度优先时不用。O7：钟的冷读对窗口里的状态先按现有索引逐个查最早的正式作答，早于回看起点 2 天以上的不再排序，合成存储 3,000／20,000 条（窗口内各约 300 条）冷读约 16–21／126–128 毫秒 → 2.4／2.5 毫秒，再答一题后约 0.5 毫秒，事件逐条相同。测试：tests/test_arrangement_continue.py（fake UI、合成存储、可控时钟）。未做：学习重点的范围（DispatchCandidates 的 in_scope 参数留了接入处，默认全在范围内）；B10 提示；“课程学习”单线入口不走份额；原生实测（WP-B7）。
 [I 2026-11-13] WP-B4 关卡（Q1–Q3、Q5）：只在取向为广度优先时生效，判断都调用 rules/gates，扎实或没有设置时走原路径。Q1：引导题答错后结果页多一个“看过了，继续”（分步引导的中间一步为“这一步看过了，下一步”），走 advance_instruction 的 bridge（阶段到 bridge、记下 guided_at、60 秒间隔照旧，guide_correct 仍为 false）；普通、被替换过的（guide_write_guard 只对已有答错记录之后的 bridge 放行）与音调引导三种都有；advance_guided_sequence 对有答错记录的一步放行，检查点形状不变；仍可重答。取向由 LearningStore.arrangement_orientation（经 ArrangementPreferences）读取。Q2：intro_batch.record_answer 只在该项未了结时重排（quiz_requeue_after_miss），finished（不带取向：队列空且每项答对或已放行）与 complete_intro_batch 据此完成，未答对的项写 bridge、与其他项一样进入间隔与首次检查；intro_batch_state.validate_database 接受“每道题都有答错记录而离开队列”的项（只有广度规则会这样放行，放行后改回扎实，这一批仍能完成；这一处放宽与取向无关，Q2 的正文已照此改写）。Q3：learning_dependencies._status 对阶段为 done 的前置经 learning.store 读取取向（TaughtRule：一次前置检查至多读一次设置，只在遇到“教学做完而没有独立答对”的前置时读），满足时状态为 taught、ready 为真；前置所在内容库不可用的判断在它之前，两种取向下都照旧；independent_ready_ids 不变；build_dependency_plan 的 unmet 只列未满足的；前置页列出“已学过、可以接着往后学的前置”。前置关系待核、前置未加入照旧挡住。content_availability 的那一处（193、256–258）是前置所在内容库停用或缺失时的依赖判断，不是“前置没答对就挡住后面的课”，不动。Q5：动过的结果页没有“要答对才能继续”的字样。普通（没有被替换过的）引导在存储一侧没有新的把关：advance_instruction 的 bridge 本来就允许（“引导暂不可用”页用它），按钮只在有答错记录时出现并在点击时再查一次。测试：tests/test_arrangement_gates.py（合成存储、fake UI，三种取向）。未做：03 的一段（content_availability 的结论）与 02 的结果页说明归 WP-B7；原生验证。
+[I 2026-11-18] B11 与 B5 的课程复习：practice_round.AppRunPlan 增 last_dispatch_at（mark_dispatch／last_dispatch，只在内存）；rules/clock.sitting_break（纯，与 charges 同一条“新的一坐”）；StoreArrangement.renew_after_break(now) 与 dispatched(now)；_continue_study_path 在 end_left_early_batch 之后、begin 之前调 _renew_round_after_break（extra_practice_runtime.manages_round：加练模式开着或有提前的一批假名时不动），begin 之后记下这次分派。_share_dispatch：选了假名、本轮已封存、没有课程复习候选、本轮里 60 秒内没查过（ProbeMemo.reviews_checked_recently／reviews_checked）时读 HomeService.unqueued_due（home/previews.course_preview 增 ids["due"]：没有题、现在可答的课程能力），不空且未为它们重排过就返回 Rearrange。合成的一坐（第 1 天：六课刚加入、假名一直到期，40 次分派；同一进程第 2 天）：改前第 2 天课程复习 0 道，改后 3 道（到期 4 道里，其余一道到期较晚）。测试：tests/test_arrangement_continue.py 末节（第 2 天、30 分钟以内不变、两种取向、草稿与已开的块仍在最前、加练不动、不循环）。
+[I 2026-11-18] B5 的重排一次：提升被拒原先使本轮剩余时间不再探新内容；按代码探到的候选都已登记，这条分支实际走不到，真正等着的是封存之后才加入、本轮没有题的课（每天的听辨能力、补上的前置、自己的材料、标为读过的小节），它们要等这一轮结束，而假名一直到期时一轮可以很久不结束。现在：_share_dispatch 在提升被拒、或探针一无所获（DispatchCandidates.found_nothing_in_round：探过、不在间隔等待、不是两次未评分即停，first_teaching_dispatch.ShareProbe 增 stopped）而本轮已封存、HomeService.unqueued_teaching（首页的课程预览不限本轮时“可开始初学”的内容）不空时，返回 Rearrange；_continue_dispatch 不封存不显示，原样交回；调用处（_continue_study_path 与后台课程结果的续接）离开读操作之后由 _rearrange_round 调 StoreArrangement.rearrange（记下这些内容〔ProbeMemo.rearranged〕，再 practice_round.restart(store, lane='main')），再以 _rearranged 调一次 continue_study_path，那一次不再重排。ProbeMemo.refused 改为 60 秒，may_rearrange／rearranged 记着已为哪些内容重排过（同一 store 对象上不为同一内容重排第二次）。份额、钟、FSRS、扎实取向不变。测试：tests/test_arrangement_continue.py 新增一节（报告里的一坐：假名一直到期、刚开始的课程；一轮里加入的课一次重排后就教；同一内容不重排第二次；两次未评分即停不重排；探针记忆），同一文件里提升被拒的两条改写。未做：首页或等待页说明新内容在等什么；一轮里到期的课程复习同样要等这一轮结束（不是新内容，见交付说明的选项）。
 [I 2026-11-13] WP-B5 选材（P1）：新纯文件 rules/background（BackgroundCandidate、select_background，RESERVE_EVERY＝3）。ai_questions.build_learning_scope 给了上限时经 ArrangementPreferences 读取取向并调用它：广度优先时留 limit // 3 个位置给到期的已知条目（熟悉度低的在前，同分按原顺序），放在第 3、6、9……位，其余位置按原顺序补齐、不重复；到期条目不够时位置还给原顺序，所以不比原来短。“到期”取该条目已有的、通过现行筛选的单元里任何一个的到期时刻不晚于现在；到期标记只在选择时用，不写进条目，不发给模型。不设上限（本地判断、导师）与扎实取向下结果与原来逐条相同，且不读设置。目标（targets）的次序不动。测试：tests/test_arrangement_scope.py（合成条目，10 项）。未做：范围内在前（H2，归 WP-H）；04 的一段归 WP-B7。
 [I 2026-11-13] WP-B6 设置与界面（UI1–UI5、D1、D2、B10）：服务与显示模型（presenters、kana_depth、launch_notes、display、rules/depth、practice_kind_policy）与页面（arrangement/ui 的 orientation_page、home_rows、section_note、progress_block），页面只收显示模型与回调（设计 13 的 S1）。取向一屏从学习安排页、首页（UI5 一行；广度优先时的今日用时行）与假名专项练习设置页（“假名练到哪一步”）进入；确定时先改题型开关（选“保持”不写）并更新未完成队列的题型策略，最后写取向，所以中断的确定留下“没有选过”；返回不写任何东西。全新安装（没有取向、三类作答记录与教学标记都没有）只由首页主按钮在本次启动第一次按下时先显示这一屏，确定后接着原来的动作；“继续学习”本身与其他入口不检查。首页：没选过时只多 UI5 一行（在次要区最前，首页仍只有一个主按钮）；扎实时不变；广度优先时到期数之上有进度行与今日用时行，B10 的“没有新内容”是 presenters.no_new_content 一处规则（接线只传首页已读的事实）：首页有工作、“可开始初学”为 0、当前路线没有状态为已加入或已开始的条目（课、假名、参考页都算，被挡住而开始不了的课也在内）、其他启用的路线都没有进行中的小节，四条都成立才算——宁可不显示，还有已加入而未学的内容时不说“已加入的内容都学过了”；留下的缺口：任何路线之外加入的假名看不到（此时仍可能显示），被挡住（前置、内容库停用）而开始不了的已加入内容也让它不显示，当天两次未评分首页不知道，此时“加入下一小节”带着“已加入的内容都学过了”排在卡片最前（次要区不再重复），本次启动中条件成立时第一次按首页主按钮，先显示一次提示（加入下一小节并开始／先复习），用的是最近一次首页刷新时的事实（按下时不重读），不自动加入；结束页“本次学习已保存”在广度优先时同样把它放在最前。学习记录页在三种取向下都有“时间与进度”。取向在每次“继续学习”时读取，轮次中改取向不需要重启（测试：同一轮里来回切换，轮次与会话不变）。测试：tests/test_arrangement_depth.py、test_arrangement_presenters.py、test_arrangement_pages.py、test_arrangement_screens.py。修正轮（独立审查之后，同日）：(1) 现有测试的改动是总负责人决定、点名接受的例外：test_due_shortcuts、test_native_notes_n10_n13、test_study_path_enroll_notice、test_study_path_runtime、test_study_reference_flow、test_study_routes_ui 各加一到两行“全新安装的取向一屏已显示过”（presenter.showed_orientation()），test_detail_header 加页面 study_orientation 的路由一项；都不改断言。(2) “时间与进度”的通过率只看各日志最新 2,000 行（presenters.PASS_RATE_REACH，作参数传给 StudyQueries.latest_review_ratings 的 reach）里最近 40 次复习：课程在最新 2,000 条主记录里、假名某方向在 review_event 最新 2,000 行（单词卡也占行数）里；不足 40 次按已有的算，没有就写“还没有复习记录”。读取经时间索引倒序取这 2,000 行即止，不随历史增长（合成存储 3,000／20,000 行：手写方向 0 次复习时 6.2→3.5／44.7→4.1 毫秒，课程主记录放大到同样行数时 11.6→8.5／87.7→8.9 毫秒）。(3) 首页两行不显示错的数：钟的窗口某个来源到了 2,000 行上限而被截断时（StoreEventSource.window_cut 给出截断时刻），窗口没有包含近 7 个学习日的全部事件就不显示“近 7 天新学”那一段（路线那一段照旧；没有路线时整行不显示），没有包含今天的全部事件就不显示今日用时行；学习记录页照旧完整读取（period()）。(4) “新学 L 课”“新假名 K 个”每样只算一次，算在第一次学它的那个时段：一课取它所有能力与范围的教学标记、第一次正式评分里最早的一个，一个假名（内容、字形）取它的引入标记与所有题型第一次正式评分里最早的一个；在记录之前就学过的（最早一次作答前已有复习、或卡片有复习而无作答记录）不算。已学过的课新开一个能力、已学过的假名新开一个题型，对钟仍是新内容（归属不变），但不是新的一课、新的假名。只对本时段的少数候选按索引查（每个单元、每张卡一次查找，加上所问课的教学标记），查出已是旧的就记住（以后的作答只会更晚），钟重新整读时一起忘掉；合成存储 3,000／20,000 行上 22 个候选的查找约 0.26 毫秒，记住旧的之后约 0.13 毫秒，首页（广度优先、窗口已热）约 1.6／1.1 毫秒。(5) “时间与进度”的标题、每天一行与复习各行（含“最近 40 次通过”与“通过 X%（共 N 次）”的选择、“还没有复习记录”）都由 presenter 写好放进 ProgressModel，页面只排版。(6) 当前练习是单一题型（或只含单词题型的综合练习）时，档位只改综合练习的开关、实际用的题型不变（enabled_preference_kinds 前后相同）：D2 那句改为“只改综合练习的题型开关；现在用的单一题型练习不受影响。”（单词综合练习为“……现在用的练习不受影响。”；用哪一句按练习方式是不是综合练习定，不按实际在用的题型个数）。(7) arrangement/ui 的页面以 import kanamemory.ui_components as u 导入，pure_imports 里登记 "kanamemory.ui_components" 而不是 "..."，从而 from ... import app 会被架构检查报出。(8) 从首页 UI5 一行确定后返回：保留的首页被恢复，go_back 对首页调用 refresh_home_actions，所以那一行已经消失，接线不用改（测试走真实的 go_back）。未做：02、03、04 的段落（WP-B7）；B10 在设了学习重点范围时提示范围里的下一小节，归 WP-H（现在没有页面能设范围）；原生验证。
 WP-H 学习重点（18 节）：rules/focus（范围成员、线内排序键、跨去处的“先范围内”）、sources/scope_catalog（经 StudyPathService 与内容库
@@ -985,7 +1004,7 @@ M1 新代码放进一个子包 app/src/kanamemory/arrangement（“学习安排�
          focus.py             FocusService——学习重点给调度与页面用：范围 → 内容集合、范围的状态；change 是改重点的唯一入口（相同则什么都不做，否则写设置并重排一次当前这一轮）（WP-H）
          kana_depth.py        KanaDepthSetting——题型开关的读取、预览、各档会停掉的到期数与应用（经 practice_kind_policy）
          dispatch.py          ShareDispatcher——窗口用时；向候选来源按需取候选并给出下一项（范围在候选里：先在有范围内候选的去处之间分）
-         probe_memo.py        ProbeMemo——本轮探新内容一无所获或提升被拒之后暂不再探（WP-B3）
+         probe_memo.py        ProbeMemo——本轮探新内容一无所获或提升被拒之后 60 秒内不再探；记着已为哪些内容或到期单元重排过一轮，本轮外到期复习的查询每 60 秒至多一次（B5）（WP-B3）
          launch_notes.py      LaunchNotes——本次启动已提示过的三件事（B10 的启动后提示、全新安装的取向一屏、加练前的“加练”一页），只在内存
          practice.py          PracticeCredit——一次作答算什么（课程、假名，kana_answer 是假名作答的接入点）
          practice_sitting.py  PracticeSitting——一坐练习的记忆：练习里答错过谁、隔了几题；确认的答错经 ConfirmedMissMove

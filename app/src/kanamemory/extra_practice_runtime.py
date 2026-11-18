@@ -365,6 +365,16 @@ def end_extra_practice(app):
         _end_batch_reported(app, session)
 
 
+def manages_round(app):
+    """Whether extra practice owns the main round now (the mode is on, or an early kana batch stands):
+    the sitting renewal of design 12 B11 leaves such a round alone."""
+    session = _existing_session(app)
+    if session is not None and session.active:
+        return True
+    from .kana_early_batch import standing_early_batch
+    return standing_early_batch(app.store) is not None
+
+
 def end_left_early_batch(app):
     """At the start of 继续学习, while the mode is off: an early batch an earlier launch left (or a backup
     brought back) is ended before anything is served; once per store, with the first home page."""

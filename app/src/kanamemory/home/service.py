@@ -145,6 +145,17 @@ class HomeOverviewService:
         "blocked_content", "blocked_material", "next_due"} (previews.course_preview)."""
         return self._course_preview(projection=projection, round_limited=round_limited)[0]
 
+    def unqueued_teaching(self, projection=None) -> frozenset[str]:
+        """Content ids of untaught lessons (or added abilities) the current settings could teach but that
+        have no queued question yet, so a running planned round cannot show them (design 12 B5)."""
+        return frozenset(self._course_preview(projection=projection, round_limited=False)[1]["unqueued"])
+
+    def unqueued_due(self, projection=None) -> frozenset[tuple[str, str]]:
+        """(content id, ability) of course abilities that are answerable now but have no queued question
+        (their question is created at the next collection), so a running planned round cannot serve them
+        (design 12 B5)."""
+        return frozenset(self._course_preview(projection=projection, round_limited=False)[1]["due"])
+
     def unqueued_reviews(self, inputs: HomeInputs, pending=UNREAD) -> dict:
         """Due kana reviews without a queued question: {"ready", "waiting", "next_due"} (previews.kana_preview).
 
