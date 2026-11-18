@@ -380,6 +380,7 @@ docs/first_teaching_fairness_0260.txt
 docs/pitch_source_alignment_v3_contract.txt
 docs/teaching_harness_eval_cases.json
 environment/build_public_app.ps1
+environment/build_personal_app.ps1
 environment/requirements-public.txt
 environment/run_app.ps1
 tests/test_public_distribution.py
@@ -430,6 +431,7 @@ environment/bootstrap_windows.ps1
 tools/build_environment.py
 tests/test_build_environment.py
 tests/test_apk_launcher_class.py
+tests/test_build_identity_file.py
 docs/build-environment.txt
 tools/run_evidence.py
 tests/test_run_evidence.py

@@ -25,8 +25,13 @@ lock file. Do not use only the two direct requirements files for a declared
 rebuild. Extra developer packages are not implicitly part of this contract.
 
 Android recreation and verification
-Use an explicit short ASCII ToolchainRoot with each run_app/build_public_app
-stage. create uses the pinned template Git URL, commit and template_hash in
+Use an explicit short ASCII ToolchainRoot with each run_app/build_public_app/
+build_personal_app stage. A personal package is built from a clean public tree
+with -IdentityFile (a build identity file outside the tree; format in
+tools/app_build_identity.py) and -ContentRoot (a resources directory outside the
+tree); both are applied to the build copy (app within ToolchainRoot) only, and
+the generated project there must be created with the same identity (create
+stage) before build and package. See docs/public-build.txt. create uses the pinned template Git URL, commit and template_hash in
 app/pyproject.toml. The canonical template is the clean commit
 32244ad8bd608cc451f05718d07f2e3429541333 (format 0.3.27). An observed existing
 cache lacks the template's empty pip-options.txt; this is not a required patch

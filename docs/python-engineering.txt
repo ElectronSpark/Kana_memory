@@ -65,7 +65,10 @@ requirements-quality.txt 显式保留 Windows 时钟测试所需 tzdata，不依
 也拒绝留有个人交付位置（个人安装包目录、证据归档仓库路径）的公开文档。
 每个提交先在公开文件的干净树上验证：tools/build_demo_content.py 建 demo 内容，跑 tools/check_python.py，
 改动涉及代码或测试时再跑公开测试全集；推送后以本仓库的 CI 结果为准。安装包由公开代码加私有内容构建，
-交付记录写明所用的公开提交。
+交付记录写明所用的公开提交。个人安装包从本仓库的干净树构建（environment/build_personal_app.ps1）：私有内容
+（-ContentRoot，一个资源目录）与包身份（-IdentityFile，构建身份文件，格式见 tools/app_build_identity.py）都作为树外的
+数据给出，只写进工具链里的构建副本，不另有一份私有版本的代码或 app/pyproject.toml；两者缺一时照旧构建 demo。
+做法与审计见 docs/public-build.txt“PERSONAL PACKAGE FROM THIS TREE”。
 新增临时运行目录使用 .test_runs/<任务>/<轮次>；报告按已选文件归档，不 git add .。
 本规范不授权删除旧证据，不自动安装 Git hooks；发布版本（标签、安装包）另行决定。
 

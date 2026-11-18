@@ -16,7 +16,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from app_build_identity import load_identity, verify_apk
+from app_build_identity import load_identity, read_identity_file, verify_apk
 from inspect_app_apk import inspect_python_module
 
 PACKAGES = {'personal': 'org.example.kanamemory', 'demo': 'org.example.demo.kanamemory',
@@ -53,10 +53,17 @@ def expected_metadata(app_source, identity):
         return {prefix + '/' + p.name: p.read_bytes().replace(b'\r\n', b'\n') for p in destination.iterdir()}
 
 
-def verify(apk, app_source, aapt, *, profile):
+def verify(apk, app_source, aapt, *, profile, identity_file=None):
+    """identity_file (personal profile only): the build identity file of a personal build of a public tree;
+    app_source is then that build's copy in the toolchain, which holds the applied identity and the content."""
     apk, app_source = Path(apk), Path(app_source)
     identity = load_identity(app_source)
-    if profile not in PACKAGES or identity['package_id'] != PACKAGES[profile]:
+    expected = PACKAGES.get(profile)
+    if identity_file is not None:
+        if profile != 'personal':
+            raise ValueError('An identity file belongs to the personal profile')
+        expected = read_identity_file(identity_file)['bundle'] + '.kanamemory'
+    if expected is None or identity['package_id'] != expected:
         raise ValueError('Source package does not match the explicitly selected profile')
     verify_apk(apk, aapt, identity)
     fingerprint = sha(apk)
@@ -110,10 +117,12 @@ def main():
     parser.add_argument('--apk', type=Path, required=True)
     parser.add_argument('--aapt', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--identity-file', type=Path,
+                        help='personal profile: the build identity file of a personal build of a public tree')
     args = parser.parse_args()
     if args.report.exists():
         raise FileExistsError('Use a fresh report; previous evidence is never overwritten')
-    report = verify(args.apk, args.app_source, args.aapt, profile=args.profile)
+    report = verify(args.apk, args.app_source, args.aapt, profile=args.profile, identity_file=args.identity_file)
     with args.report.open('x', encoding='utf-8', newline='\n') as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
         stream.write('\n')

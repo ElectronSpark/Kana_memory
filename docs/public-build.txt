@@ -28,14 +28,44 @@ docs/build-environment.txt. In a fresh copy, run PowerShell from its root:
   .\environment\build_public_app.ps1 -Stage build
   .\environment\build_public_app.ps1 -Stage package
 
-The default short ASCII toolchain path is %TEMP%\km. A different path may be
-selected with -ToolchainRoot C:\km-demo. Each stage must use the same path. The
-demo uses app-public within that path, separate from personal builds. A prepared
-Python environment can be selected explicitly with -Python <python.exe>.
+The default short ASCII toolchain path is %LOCALAPPDATA%\km (never a path in the
+temporary directory: the system deletes old files there, and the scripts refuse
+it). A different path may be selected with -ToolchainRoot C:\km-demo. Each stage
+must use the same path. The demo uses app-public within that path, separate from
+personal builds. A prepared Python environment can be selected explicitly with
+-Python <python.exe>.
 The APK is written to environment\artifacts. The package ID is
 org.example.demo.kanamemory, so installing the demo cannot overwrite the personal
 org.example.kanamemory installation or its learning records. A demo source tree
 automatically enables strict demo checks even if run_app.ps1 is invoked directly.
+
+PERSONAL PACKAGE FROM THIS TREE
+A personal package is built from this same public code: the content and the
+package identity are given as data from outside the tree, never as a second
+edition of the code. Both are needed; without them this tree builds the demo.
+
+  .\environment\build_personal_app.ps1 -Stage create -IdentityFile <file> -ContentRoot <dir>
+  .\environment\build_personal_app.ps1 -Stage build -IdentityFile <file> -ContentRoot <dir>
+  .\environment\build_personal_app.ps1 -Stage package -IdentityFile <file> -ContentRoot <dir>
+
+<dir> is a complete resources directory (content.sqlite3, teaching_content.sqlite3
+of the personal profile, and the rest of a content pack). <file> is a small JSON
+file kept outside the tree, for example:
+
+  {"format": "kanamemory-build-identity-v1", "profile": "personal",
+   "bundle": "org.example.yourname", "formal_name": "YourAppName"}
+
+The package ID is bundle + ".kanamemory"; formal_name names the APK file. The
+script prints the identity and the content it builds with; it writes the identity
+only into the build copy in the toolchain (app within ToolchainRoot, shared with
+personal builds of a development tree), never into this tree, and refuses the
+demo and QA package IDs, a file or a content directory inside the tree, and
+one of the two without the other. An APK installs over an existing installation
+only when it has the same package ID and the same signing certificate; debug
+builds are signed with the build machine's debug key. Audit the result with
+environment\verify_distribution_apk.py --profile personal --identity-file <file>
+--app-source <ToolchainRoot>\app (the build copy, which holds the applied identity
+and the content), then apksigner and zipalign as for any package.
 
 The lock includes quality tools. Run python -X utf8 tools/check_python.py from
 any directory for bounded engineering checks. The same command is

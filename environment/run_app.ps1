@@ -5,7 +5,10 @@ param(
     [string]$ToolchainRoot = (Join-Path $env:LOCALAPPDATA 'km'),
     [string]$Serial = 'emulator-5580',
     [switch]$PublicBuild,
-    [string]$Python = ''
+    [string]$Python = '',
+    # A personal build of a clean public tree (environment/build_personal_app.ps1): both or neither.
+    [string]$IdentityFile = '',
+    [string]$ContentRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 
@@ -280,7 +283,7 @@ function Assert-PackagedBuildIdentity {
         ForEach-Object { Join-Path $_.FullName 'aapt.exe' } |
         Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $aapt) { throw 'Android aapt missing; cannot verify APK build identity.' }
-    & $Python -X utf8 $IdentityTool verify-apk $AppSource --apk $Apk --aapt $aapt | Out-Null
+    & $Python -X utf8 $IdentityTool verify-apk $AppSource --apk $Apk --aapt $aapt @identityArgs | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'APK build identity check failed; rebuild the current app version.' }
 }
 
@@ -297,12 +300,40 @@ if (($ToolchainRoot.TrimEnd('\') + '\').StartsWith($temporaryRoot + '\', [String
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $projectPython = if ($Python) { [IO.Path]::GetFullPath($Python) } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }
 if (Test-Path -LiteralPath (Join-Path $projectRoot 'clean-source-manifest.json')) { $PublicBuild = $true }
+# A personal build of a clean public tree: the identity (a build identity file, tools/app_build_identity.py) and the
+# content (a resources directory) are given as data from outside the tree and applied to the build copy only.
+# Without both, a clean public tree builds the demo exactly as before and its demo package-ID guard stays.
+$PersonalOverlay = [bool]($IdentityFile -or $ContentRoot)
+if ($PersonalOverlay) {
+    if (-not ($IdentityFile -and $ContentRoot)) {
+        throw 'A personal build of a public tree needs both -IdentityFile and -ContentRoot.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'clean-source-manifest.json'))) {
+        throw 'IdentityFile and ContentRoot are for a clean public tree; this tree carries its own identity and content.'
+    }
+    if ($PSBoundParameters.ContainsKey('PublicBuild')) {
+        throw 'The public demo build takes no IdentityFile or ContentRoot.'
+    }
+    $IdentityFile = [IO.Path]::GetFullPath($IdentityFile)
+    $ContentRoot = [IO.Path]::GetFullPath($ContentRoot).TrimEnd('\')
+    foreach ($outside in @($IdentityFile, $ContentRoot)) {
+        if (($outside.TrimEnd('\') + '\').StartsWith($projectRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Personal identity and content stay outside the public tree: $outside"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) { throw "Build identity file missing: $IdentityFile" }
+    if (-not (Test-Path -LiteralPath (Join-Path $ContentRoot 'teaching_content.sqlite3') -PathType Leaf)) {
+        throw "Content root holds no teaching pack (teaching_content.sqlite3): $ContentRoot"
+    }
+    $PublicBuild = $false
+}
+$identityArgs = if ($PersonalOverlay) { @('--identity-file', $IdentityFile) } else { @() }
 $appSource = Join-Path $projectRoot 'app'
 $buildDirectory = if ($PublicBuild) { 'app-public' } else { 'app' }
 $appBuild = Join-Path $ToolchainRoot $buildDirectory
 $identityTool = Join-Path $projectRoot 'tools\app_build_identity.py'
 $environmentTool = Join-Path $projectRoot 'tools\build_environment.py'
-$sourceDatabase = Join-Path $appSource 'src/kanamemory/resources/content.sqlite3'
+$sourceDatabase = if ($PersonalOverlay) { Join-Path $ContentRoot 'content.sqlite3' } else { Join-Path $appSource 'src/kanamemory/resources/content.sqlite3' }
 $publicCheck = Join-Path $projectRoot 'tools\check_public_content.py'
 $demoSource = Join-Path $projectRoot 'demo\content.json'
 function Assert-PublicContent {
@@ -370,11 +401,15 @@ if (-not $PublicBuild) {
     & $projectPython -X utf8 -c $teachingCheck (Join-Path $appSource 'src') (Join-Path (Split-Path -Parent $sourceDatabase) 'teaching_content.sqlite3')
     if ($LASTEXITCODE -ne 0) { throw 'Personal teaching pack is missing, incomplete, or corrupt. Rebuild it before packaging.' }
 }
-$identityJson = & $projectPython -X utf8 $identityTool read $appSource
+$identityJson = & $projectPython -X utf8 $identityTool read $appSource @identityArgs
 if ($LASTEXITCODE -ne 0) { throw 'App build identity is inconsistent.' }
 $buildIdentity = $identityJson | ConvertFrom-Json
 if ($PublicBuild -and $buildIdentity.package_id -ne 'org.example.demo.kanamemory') {
     throw 'Public demo requires its separate org.example.demo.kanamemory package ID. Use the clean source export.'
+}
+if ($PersonalOverlay) {
+    Write-Host ('PERSONAL build of the public tree {0}: package {1}, file {2}; identity {3}; content {4}' -f
+        $projectRoot, $buildIdentity.package_id, $buildIdentity.apk_name, $IdentityFile, $ContentRoot)
 }
 $packagedName = $buildIdentity.apk_name
 $sdkRoot = Join-Path $ToolchainRoot 'briefcase\tools\android_sdk'
@@ -392,6 +427,15 @@ if ([IO.Path]::GetFullPath($appBuild) -eq [IO.Path]::GetFullPath($appSource)) {
 New-Item -ItemType Directory -Force -Path $appBuild | Out-Null
 Copy-Item -LiteralPath (Join-Path $appSource 'pyproject.toml') -Destination $appBuild -Force
 Copy-Item -LiteralPath (Join-Path $appSource 'src') -Destination $appBuild -Recurse -Force
+if ($PersonalOverlay) {
+    # The identity goes into the build copy only (as the export writes the demo identity), then the content.
+    & $projectPython -X utf8 $identityTool apply $appBuild --identity-file $IdentityFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not apply the build identity to the build copy.' }
+    $buildResources = Join-Path $appBuild 'src\kanamemory\resources'
+    New-Item -ItemType Directory -Force -Path $buildResources | Out-Null
+    Get-ChildItem -LiteralPath $ContentRoot -Force | Copy-Item -Destination $buildResources -Recurse -Force
+    [void](Remove-StaleGeneratedResources -AppBuildRoot $appBuild -SourceResources $ContentRoot)
+}
 [void](Remove-StaleGeneratedModules -AppBuildRoot $appBuild -SourcePackage (Join-Path $appSource 'src/kanamemory'))
 [void](Remove-PublicBuildPersonalAudio -AppBuildRoot $appBuild -PersonalAudioIncluded $personalAudioIncluded)
 $oldBriefcase = $env:BRIEFCASE_HOME
@@ -432,7 +476,7 @@ try {
         }
         function Copy-NativeBridge {
             [void](Assert-SafeGeneratedPath -Path $gradleFile -AppRoot $appBuild)
-            & $projectPython -X utf8 $identityTool sync-gradle $appSource --gradle $gradleFile | Out-Null
+            & $projectPython -X utf8 $identityTool sync-gradle $appSource --gradle $gradleFile @identityArgs | Out-Null
             if ($LASTEXITCODE -ne 0) { throw 'Could not synchronize generated Android version.' }
             $targetJava = Join-Path $appBuild 'build\kanamemory\android\gradle\app\src\main\java'
             if ((Test-Path -LiteralPath $nativeJava) -and (Test-Path -LiteralPath $targetJava)) {
