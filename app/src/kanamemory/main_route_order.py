@@ -22,8 +22,16 @@ is a content error (order_problems names every such pair, with the other
 errors). The route is still built from such data, never dropping a lesson: a
 missing prerequisite is placed first (a structured order: in a section of its
 own just before the section that needs it, in the same unit), an oversized or
-mixed-family section is split, an empty title is replaced; the caller records
-one diagnostic. Learning ids and entries never change, only positions.
+mixed-family section is split, an empty title is replaced. The route build
+records one diagnostic whenever order_problems finds an error in the stored
+order (also when it then builds the route without a beginning). Learning ids
+and entries never change, only positions.
+
+The lessons not listed are assembled as before, without the listed ones, which
+can merge other neighbours: a section or unit of that rest whose lessons differ
+from those of the section or unit with the same id in the route built without
+the order gets a new id, a digest of its contents (renew_rest_ids), so that a
+saved focus on the old id never silently covers other lessons.
 
 No Toga, database, clock or network.
 """
@@ -40,8 +48,9 @@ WORD_LIMIT = 8
 OTHER_LIMIT = 4
 UNIT_SECTIONS = 8  # a flat order starts a new unit after this many sections
 _MAX_ORDER = 20000
-_ERRORS = ("malformed", "empty_title", "empty", "oversize", "mixed_family", "unknown", "repeated",
+_ERRORS = ("malformed", "empty_title", "empty", "oversize", "mixed_family", "unknown", "library", "repeated",
            "prerequisite_after")
+_NOTES = ("kept_in_place", "lifted")
 
 
 def _digest(value: str) -> str:
@@ -118,7 +127,8 @@ def _orderable(record, first_stage, optional_stage) -> bool:
     return record is not None and first_stage <= record[0] < optional_stage
 
 
-def order_problems(value, records, *, first_stage: int = 1, optional_stage: int = 6) -> dict:
+def order_problems(value, records, *, first_stage: int = 1, optional_stage: int = 6,
+                   library_of: Callable[[str], str | None] | None = None) -> dict:
     """What is wrong with a MAIN_ROUTE_ORDER value over study_path_records ``records``.
 
     Places: "entry n" in a flat order (from 0); "unit u", "unit u section s" and "unit u section s
@@ -126,11 +136,14 @@ def order_problems(value, records, *, first_stage: int = 1, optional_stage: int 
     a unit or section that is not a mapping, a unit without a sections list, a section without an
     entries list, an entry that is not a content id), ``empty_title`` (place), ``empty`` (place: a
     unit without sections, a section without entries), ``oversize`` ((place, family, size, limit)),
-    ``mixed_family`` ((place, families)), ``unknown`` ((place, id)), ``repeated`` ((place, id,
-    first place)), ``prerequisite_after`` ((place, id, prerequisite, its place or None when not
-    listed)). Notes: ``kept_in_place`` ((place, id): a lesson of the sounds stage or of an
-    optional stage keeps its place)."""
-    result = {name: [] for name in (*_ERRORS, "kept_in_place")}
+    ``mixed_family`` ((place, families)), ``unknown`` ((place, id)), ``library`` ((place, id,
+    library): a lesson an extension library provides, ``library_of``: content id -> extension
+    library or None; the order is core content), ``repeated`` ((place, id, first place)),
+    ``prerequisite_after`` ((place, id, prerequisite, its place or None when not listed)). Notes:
+    ``kept_in_place`` ((place, id): a lesson of the sounds stage or of an optional stage keeps its
+    place), ``lifted`` ((id, the listed or lifted lesson that needs it)): every unlisted lesson of
+    the prerequisite closure of the listed ones that the route places in the beginning, each once."""
+    result = {name: [] for name in (*_ERRORS, *_NOTES)}
     if value is None:
         return result
     lessons = _learning(records)
@@ -189,7 +202,11 @@ def order_problems(value, records, *, first_stage: int = 1, optional_stage: int 
         first[cid], index[cid] = place, number
         if cid not in lessons:
             result["unknown"].append((place, cid))
-        elif not _orderable(lessons[cid], first_stage, optional_stage):
+            continue
+        owner = library_of(cid) if library_of is not None else None
+        if owner is not None:
+            result["library"].append((place, cid, owner))
+        if not _orderable(lessons[cid], first_stage, optional_stage):
             result["kept_in_place"].append((place, cid))
     for cid, place in first.items():
         record = lessons.get(cid)
@@ -200,6 +217,19 @@ def order_problems(value, records, *, first_stage: int = 1, optional_stage: int 
                 continue  # in the sounds stage (before) or not a lesson of the route
             if dependency not in index or index[dependency] > index[cid]:
                 result["prerequisite_after"].append((place, cid, dependency, first.get(dependency)))
+    lifted = set()
+
+    def lift(cid, chain):
+        for dependency in lessons[cid][5].get("depends_on", ()):
+            if (dependency in first or dependency in lifted or dependency in chain
+                    or not _orderable(lessons.get(dependency), first_stage, optional_stage)):
+                continue
+            lifted.add(dependency)
+            result["lifted"].append((dependency, cid))
+            lift(dependency, chain | {cid})
+    for cid in first:
+        if _orderable(lessons.get(cid), first_stage, optional_stage):
+            lift(cid, frozenset())
     return result
 
 
@@ -220,12 +250,16 @@ def describe_problems(problems: Mapping) -> list:
     lines.extend(f"{place}: entries of different families ({', '.join(map(str, families))})"
                  for place, families in problems["mixed_family"])
     lines.extend(f"{place}: unknown id {cid}" for place, cid in problems["unknown"])
+    lines.extend(f"{place}: {cid} is provided by the extension library {owner}, not by the core content"
+                 for place, cid, owner in problems["library"])
     lines.extend(f"{place}: {cid} repeated (first at {first})" for place, cid, first in problems["repeated"])
     for place, cid, dependency, at in problems["prerequisite_after"]:
         where = "is not listed" if at is None else f"is listed later, at {at}"
         lines.append(f"{place}: {cid} comes before its prerequisite {dependency}, which {where}")
     lines.extend(f"note: {place}: {cid} belongs to the sounds stage or an optional stage and keeps its place"
                  for place, cid in problems["kept_in_place"])
+    lines.extend(f"note: {cid} is not listed and will be placed in the beginning, before {needed_by}, which needs it"
+                 for cid, needed_by in problems["lifted"])
     return lines
 
 
@@ -304,10 +338,11 @@ def flat_layout(order: Sequence[str], records, *, words_title: str, opening_titl
                 first_stage: int = 1, optional_stage: int = 6):
     """(layout, trouble) of a flat order: layout [(unit title, [(section title, [ids])])].
 
-    Consecutive words form one section whatever their topics, up to WORD_LIMIT; consecutive
-    lessons of another family form a section while they share a topic, up to OTHER_LIMIT. A unit
-    starts at every grammar lesson (a grammar point and what follows it) and after UNIT_SECTIONS
-    sections. A section is titled with its entries' topic when they share one, else
+    Consecutive words form one section whatever their topics, up to WORD_LIMIT. A unit starts at
+    every grammar lesson (a grammar point and what follows it) and after UNIT_SECTIONS sections, so
+    grammar points are never merged: each grammar lesson has a section of its own. Consecutive
+    lessons of another non-word kind (reading rules) form a section while they share a topic, up to
+    OTHER_LIMIT. A section is titled with its entries' topic when they share one, else
     ``words_title``; a unit with the unit title of its first grammar lesson, else ``opening_title``
     with its number among such units ("{}"). ``trouble``: a prerequisite was lifted."""
     sequence, lifted = beginning_sequence(order, records, first_stage=first_stage, optional_stage=optional_stage)
@@ -398,6 +433,53 @@ def beginning_units(layout, records, stage: tuple, *, digest: Callable[[str], st
                            topics=[section["title"]], **{GIVEN_ORDER: True})
         units.append(unit)
     return units
+
+
+def _lesson_sets(tree):
+    """({section id: its entry ids}, {unit id: its entry ids}) of a route, as frozensets."""
+    sections, units = {}, {}
+    for stage in tree["stages"]:
+        for unit in stage["units"]:
+            ids = []
+            for section in unit["sections"]:
+                own = [entry["id"] for entry in section["entries"]]
+                sections[section["id"]] = frozenset(own)
+                ids.extend(own)
+            units[unit["id"]] = frozenset(ids)
+    return sections, units
+
+
+def renew_rest_ids(path, reference, *, digest: Callable[[str], str] = _digest):
+    """Give a new id to every section and unit of ``path`` (the route of the lessons not listed)
+    whose set of entries differs from that of the section or unit with the same id in ``reference``
+    (the route built without the order): "section:" or "unit:" + digest("main-rest|" + stage id +
+    "|" + its entry ids in order). One whose entries are the same, or whose id ``reference`` does
+    not have, keeps its id. Every reference to a renewed id (section depends_on, unit_id) follows.
+    ``path`` is changed in place and returned."""
+    old_sections, old_units = _lesson_sets(reference)
+    sections, units = {}, {}
+    for stage in path["stages"]:
+        for unit in stage["units"]:
+            ids = []
+            for section in unit["sections"]:
+                own = [entry["id"] for entry in section["entries"]]
+                ids.extend(own)
+                old = old_sections.get(section["id"])
+                if old is not None and old != frozenset(own):
+                    sections[section["id"]] = "section:" + digest("main-rest|" + stage["id"] + "|" + "|".join(own))
+            old = old_units.get(unit["id"])
+            if old is not None and old != frozenset(ids):
+                units[unit["id"]] = "unit:" + digest("main-rest|" + stage["id"] + "|" + "|".join(ids))
+    if not sections and not units:
+        return path
+    for stage in path["stages"]:
+        for unit in stage["units"]:
+            unit["id"] = units.get(unit["id"], unit["id"])
+            for section in unit["sections"]:
+                section["id"] = sections.get(section["id"], section["id"])
+                section["unit_id"] = units.get(section["unit_id"], section["unit_id"])
+                section["depends_on"] = [sections.get(sid, sid) for sid in section["depends_on"]]
+    return path
 
 
 def join_beginning(path, units, stage: tuple, stage_ids: Sequence[str]):

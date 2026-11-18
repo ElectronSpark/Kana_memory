@@ -717,28 +717,28 @@ def assemble_study_path(records, *, version=None, scope=None, section_identity=N
 
 
 def _ordered_study_path(records, order):
-    """The core route with the given beginning (main_route_order); today's route without one.
+    """(route, trouble): the core route with the given beginning (main_route_order); today's route
+    without one. ``trouble``: the route was repaired (prerequisite first, sections split, titles
+    replaced; a content error order_problems reports) and keeps every lesson.
 
     The lessons of the beginning leave the records; the others are assembled
-    exactly as before (their dependencies on the beginning are resolvable),
-    and the beginning's units open the first stage after the sounds stage.
+    as before (their dependencies on the beginning are resolvable), a section
+    or unit of theirs that now holds other lessons than the one of the same id
+    in today's route gets a new id (main_route_order.renew_rest_ids), and the
+    beginning's units open the first stage after the sounds stage.
     """
     from . import main_route_order as given
     layout_of = given.structured_layout if given.is_structured(order) else given.flat_layout
     layout, trouble = layout_of(order, records, words_title=ORDER_WORDS_TITLE, opening_title=ORDER_OPENING_TITLE,
                                 first_stage=1, optional_stage=_REFERENCE_STAGE)
-    if trouble:
-        # A content error the check reports (order_problems); the route was repaired (prerequisite
-        # first, sections split, titles replaced) and keeps every lesson.
-        from .diagnostic_events import record_error
-        record_error("main_route_order", "read", ValueError())
     chosen = {cid for _, sections in layout for _, ids in sections for cid in ids}
     if not chosen:
-        return assemble_study_path(records)
+        return assemble_study_path(records), trouble
     rest = [record for record in records if record[5]["id"] not in chosen]
     units = given.beginning_units(layout, records, STAGES[1], digest=_digest)
-    path = assemble_study_path(rest, resolvable=frozenset(chosen))
-    return given.join_beginning(path, units, STAGES[1], [stage_id for stage_id, _ in STAGES])
+    path = given.renew_rest_ids(assemble_study_path(rest, resolvable=frozenset(chosen)),
+                                assemble_study_path(records), digest=_digest)
+    return given.join_beginning(path, units, STAGES[1], [stage_id for stage_id, _ in STAGES]), trouble
 
 
 def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_of=None, main_route_order=None):
@@ -751,14 +751,21 @@ def build_study_path(kana_rows, learning_items=None, extra_items=(), *, library_
     it, and when no library section is large, the tree is the one built before.
     main_route_order (tests, tools; None: the content's MAIN_ROUTE_ORDER): the
     given beginning of the route (main_route_order); absent or empty, the
-    route is exactly the one built before.
+    route is exactly the one built before. Whenever main_route_order.order_problems
+    finds an error in it, one diagnostic is recorded (the route is built as it
+    is built without the check).
     """
-    from .main_route_order import ORDER_KEY, is_structured, order_ids
+    from . import main_route_order as given
     records = study_path_records(kana_rows, learning_items, extra_items)
-    value = _PATH.get(ORDER_KEY) if main_route_order is None else main_route_order
-    order = value if is_structured(value) else order_ids(value)
-    usable = order_ids(value) and len(STAGES) > 1
-    path = _ordered_study_path(records, order) if usable else assemble_study_path(records)
+    value = _PATH.get(given.ORDER_KEY) if main_route_order is None else main_route_order
+    order = value if given.is_structured(value) else given.order_ids(value)
+    usable = given.order_ids(value) and len(STAGES) > 1
+    path, trouble = _ordered_study_path(records, order) if usable else (assemble_study_path(records), False)
+    if value is not None and (trouble or given.problem_count(given.order_problems(
+            value, records, first_stage=1, optional_stage=_REFERENCE_STAGE, library_of=library_of))):
+        # A content error the check reports (tools/check_main_route_order.py): one diagnostic per build.
+        from .diagnostic_events import record_error
+        record_error("main_route_order", "read", ValueError())
     if library_of is None:
         return path
     from .route_mix.sections import split_library_sections

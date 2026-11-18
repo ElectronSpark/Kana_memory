@@ -234,8 +234,8 @@ def test_the_checking_tool_reads_tsv_json_and_namespace_orders_and_fails_on_erro
     assert errors == 0 and lines[0].startswith("MAIN_ROUTE_ORDER (units): 7 lessons listed, 0 errors")
     broken = [unit_of("", ("太多", [f"word:{w}" for w in "駅 学校 本 犬 猫 水 茶 肉 魚".split()]))]
     errors, lines = check(broken, items)
-    assert errors == 2 and lines[1:] == ["unit 1: empty or missing title",
-                                         "unit 1 section 1: 9 word entries, more than 8"]
+    assert errors == 2 and lines[1:3] == ["unit 1: empty or missing title",
+                                          "unit 1 section 1: 9 word entries, more than 8"]
 
 
 def test_the_order_is_core_content_only():
@@ -389,3 +389,201 @@ def test_the_app_repairs_a_structured_order_and_keeps_every_lesson(fixture_rules
     sections = flatten_sections(path)
     positions = {section["id"]: index for index, section in enumerate(sections)}
     assert all(positions[d] < positions[s["id"]] for s in sections for d in s["depends_on"])
+
+
+# --- the checker: question floor, runs, lifted chains, library lessons --------------------------
+
+def sha(n):
+    return f"{n:064x}"
+
+
+# 茶 has three meaning questions that need 水 (one also 肉) and one switched-on one that needs 水:
+# without an order 水 comes first, so it has 2 and 1; listed before 水 it has none.
+TEA = Readiness({"word:茶": {"meaning": [(sha(1), ["word:水"]), (sha(2), ["word:水"]), (sha(3), ["word:水", "word:肉"])],
+                             "on:meaning": [(sha(1), ["word:水"])]},
+                 "word:駅": {"meaning": [(sha(4), [])]}})
+
+
+def test_the_checker_holds_every_given_lesson_to_the_question_floor(fixture_rules, tmp_path):
+    from check_main_route_order import check, floor_rows, given_routes
+    items = catalogue()
+    report = tmp_path / "floor.tsv"
+    errors, lines = check(["word:茶", "word:駅"], items, readiness=TEA, library_of=lambda cid: None,
+                          params=MixParams(), report=report)
+    assert errors == 2
+    assert ("word:茶: 0 gated meaning questions at its place, 2 without the order, needs 2; "
+            "blocked most by word:水 (3), word:肉 (1)") in lines
+    assert ("word:茶: 0 gated on:meaning questions at its place, 1 without the order, needs 1; "
+            "blocked most by word:水 (1)") in lines
+    rows = report.read_text(encoding="utf-8").splitlines()
+    assert rows[0] == "lesson\tkey\twithout_order\twith_order\trequired\tshort\tblocked_by"
+    assert rows[1:] == ["word:茶\tmeaning\t2\t0\t2\tyes\tword:水:3 word:肉:1",
+                        "word:茶\ton:meaning\t1\t0\t1\tyes\tword:水:1",
+                        "word:駅\tmeaning\t1\t1\t1\t\t"]
+    # Bringing 水 forward too meets the floor: the order passes.
+    assert check(["word:水", "word:茶", "word:駅"], items, readiness=TEA, library_of=lambda cid: None,
+                 params=MixParams())[0] == 0
+    with_tree, without_tree = given_routes(["word:水", "word:茶"], items)
+    rows = floor_rows(with_tree, without_tree, TEA, MixParams(floor=1))
+    assert [(row.lesson, row.key, row.without, row.with_order, row.required, row.short) for row in rows] == [
+        ("word:茶", "meaning", 2, 2, 1, False), ("word:茶", "on:meaning", 1, 1, 1, False)]
+
+
+def test_the_checker_reports_long_runs_and_strict_makes_them_fail(fixture_rules):
+    from check_main_route_order import check
+    items = [*catalogue(), *(grammar(f"extra{n}") for n in range(5))]
+    order = ["word:駅", "word:学校", "word:本", "word:犬", "word:猫",
+             *(f"grammar:extra{n}" for n in range(5))]
+    params = MixParams(word_target=2, nonword_target=1)
+    errors, lines = check(order, items, readiness=Readiness({}), library_of=lambda cid: None, params=params)
+    assert errors == 0
+    assert ("longest runs in the beginning: 5 word lessons (1 sections), 5 other lessons (5 sections)") in lines
+    assert "warning: a run of 5 word lessons, more than 2 x 2 (the mix never breaks up the beginning)" in lines
+    assert "warning: a run of 5 other lessons, more than 4 x 1 (the mix never breaks up the beginning)" in lines
+    assert check(order, items, readiness=Readiness({}), library_of=lambda cid: None, params=params,
+                 strict=True)[0] == 2
+    assert check(order, items, readiness=Readiness({}), library_of=lambda cid: None, strict=True)[0] == 0
+
+
+def test_a_flat_order_never_merges_grammar_points(fixture_rules):
+    items = [*catalogue(), *(grammar(f"extra{n}") for n in range(3))]
+    path = build_study_path([], items, main_route_order=[f"grammar:extra{n}" for n in range(3)])
+    assert [[e["id"] for e in s["entries"]] for s in given_sections(path)] == [
+        ["grammar:extra0"], ["grammar:extra1"], ["grammar:extra2"]]
+    assert len({s["unit_id"] for s in given_sections(path)}) == 3
+
+
+def test_every_unlisted_lesson_of_a_prerequisite_chain_is_reported_once(fixture_rules):
+    records = study_path_records([], catalogue())
+    problems = given.order_problems(["word:学生", "grammar:topic:wa"], records)
+    assert problems["prerequisite_after"] == [("entry 0", "word:学生", "grammar:topic:wa", "entry 1"),
+                                              ("entry 1", "grammar:topic:wa", "grammar:copula:plain", None)]
+    assert problems["lifted"] == [("grammar:copula:plain", "grammar:topic:wa")]
+    # 学生 needs 话题 は, which needs copula:plain: the error names the first missing link, the notes
+    # every lesson the route lifts, the second link included.
+    problems = given.order_problems(["word:学生"], records)
+    assert problems["prerequisite_after"] == [("entry 0", "word:学生", "grammar:topic:wa", None)]
+    assert problems["lifted"] == [("grammar:topic:wa", "word:学生"), ("grammar:copula:plain", "grammar:topic:wa")]
+    assert given.problem_count(problems) == 1  # the notes do not count
+    problems = given.order_problems(["word:学生", "grammar:copula:polite"], records)
+    assert problems["lifted"] == [("grammar:topic:wa", "word:学生"), ("grammar:copula:plain", "grammar:topic:wa")]
+    assert ("note: grammar:copula:plain is not listed and will be placed in the beginning, before "
+            "grammar:topic:wa, which needs it") in given.describe_problems(problems)
+    # What the route lifts is exactly what is reported.
+    path = build_study_path([], catalogue(), main_route_order=["word:学生", "grammar:copula:polite"])
+    assert [e["id"] for s in given_sections(path) for e in s["entries"]] == [
+        "grammar:copula:plain", "grammar:topic:wa", "word:学生", "grammar:copula:polite"]
+
+
+def test_a_lesson_of_an_extension_library_in_the_order_is_an_error(fixture_rules):
+    from check_main_route_order import check
+    records = study_path_records([], catalogue())
+    library_of = lambda cid: "library.test" if cid == "word:犬" else None  # noqa: E731
+    problems = given.order_problems(["word:駅", "word:犬"], records, library_of=library_of)
+    assert problems["library"] == [("entry 1", "word:犬", "library.test")]
+    assert given.problem_count(problems) == 1
+    errors, lines = check(["word:駅", "word:犬"], catalogue(), readiness=Readiness({}), library_of=library_of)
+    assert errors == 1
+    assert "entry 1: word:犬 is provided by the extension library library.test, not by the core content" in lines
+
+
+def test_one_bad_order_shows_the_floor_runs_chain_and_library_findings(fixture_rules):
+    from check_main_route_order import check
+    order = ["word:茶", "word:学生", "word:駅", "word:学校", "word:本", "word:犬", "word:猫"]
+    errors, lines = check(order, catalogue(), readiness=TEA, params=MixParams(word_target=2),
+                          library_of=lambda cid: "library.test" if cid == "word:犬" else None)
+    text = "\n".join(lines)
+    assert "word:犬 is provided by the extension library library.test" in text           # 7
+    assert "note: grammar:copula:plain is not listed" in text                              # 6
+    assert "word:茶: 0 gated meaning questions at its place" in text                       # 1
+    assert "warning: a run of 6 word lessons, more than 2 x 2" in text                     # 2
+    assert errors == 4  # library, the missing prerequisite, two floor rows
+
+
+# --- run-time diagnostics: one per build whenever the check finds an error -----------------------
+
+@pytest.mark.parametrize("value", [["word:駅", "word:nothing"], ["word:駅", "word:学校", "word:駅"],
+                                   [{"title": "x", "sections": [{"title": "y", "entries": ["word:駅"]}]}, "word:駅"],
+                                   [{}], "word:駅", [None, 3], [{"title": "空", "sections": []}]])
+def test_every_order_with_an_error_records_one_diagnostic_and_builds_as_before(fixture_rules, monkeypatch, value):
+    items = catalogue()
+    assert given.problem_count(given.order_problems(value, study_path_records([], items))) > 0
+    monkeypatch.setitem(catalog._PATH, given.ORDER_KEY, value)
+    before = diagnostics()
+    path = build_study_path([], items)
+    assert diagnostics() == before + 1
+    # The route is the one these orders built before: the usable ids first, or today's route.
+    usable = [cid for cid in dict.fromkeys(given.order_ids(value)) if cid in {item["id"] for item in items}]
+    assert learning_ids(path)[1:1 + len(usable)] == usable
+    if not usable:
+        monkeypatch.delitem(catalog._PATH, given.ORDER_KEY)
+        assert path == build_study_path([], items)
+
+
+def test_a_library_lesson_in_the_stored_order_records_a_diagnostic_when_providers_are_known(fixture_rules):
+    items = catalogue()
+    before = diagnostics()
+    build_study_path([], items, main_route_order=["word:駅"], library_of=lambda cid: None)
+    assert diagnostics() == before
+    build_study_path([], items, main_route_order=["word:駅"], library_of=lambda cid: "lib" if cid == "word:駅" else None)
+    assert diagnostics() == before + 1
+
+
+# --- the rest of the route: ids that would change meaning are renewed ----------------------------
+
+def _sets(path):
+    sections = {s["id"]: frozenset(e["id"] for e in s["entries"]) for s in flatten_sections(path)}
+    units = {u["id"]: frozenset(e["id"] for s in u["sections"] for e in s["entries"])
+             for stage in path["stages"] for u in stage["units"]}
+    return sections, units
+
+
+def test_a_section_or_unit_of_the_rest_with_other_lessons_gets_a_new_id(fixture_rules):
+    items = catalogue()
+    today_sections, today_units = _sets(build_study_path([], items))
+    path = build_study_path([], items, main_route_order=["word:水", "word:茶"])
+    sections, units = _sets(path)
+    rest = {sid: ids for sid, ids in sections.items()
+            if sid not in {s["id"] for s in given_sections(path)}}
+    for sid, ids in rest.items():
+        assert today_sections.get(sid, ids) == ids  # an id that stays names the same lessons
+    for uid, ids in units.items():
+        assert today_units.get(uid, ids) == ids or all(s.get(GIVEN_ORDER) for s in flatten_sections(path)
+                                                       if s["unit_id"] == uid)
+    food = frozenset({"word:肉", "word:魚", "word:米"})
+    renewed = next(sid for sid, ids in rest.items() if ids == food)
+    assert renewed not in today_sections
+    assert renewed == "section:" + catalog._digest("main-rest|" + catalog.STAGES[2][0] + "|word:肉|word:魚|word:米")
+    assert sum(1 for sid in rest if sid in today_sections) == len(rest) - 1  # only that one changed
+    # Every reference follows: units, depends_on.
+    known = set(sections)
+    for stage in path["stages"]:
+        for unit in stage["units"]:
+            for section in unit["sections"]:
+                assert section["unit_id"] == unit["id"]
+                assert set(section["depends_on"]) <= known
+    # The same order gives the same ids.
+    assert _sets(build_study_path([], items, main_route_order=["word:水", "word:茶"])) == (sections, units)
+
+
+def _tree(*units):
+    return {"stages": [{"id": "stage:x", "units": [
+        {"id": uid, "sections": [{"id": sid, "unit_id": uid, "depends_on": list(deps),
+                                  "entries": [{"id": cid} for cid in ids]} for sid, ids, deps in sections]}
+        for uid, sections in units]}]}
+
+
+def test_renewing_follows_a_merge_of_other_neighbours():
+    # Without the order: a, then b+c; with b listed, the rest merges a with c under a's id.
+    reference = _tree(("unit:u", [("section:a", ["a"], []), ("section:bc", ["b", "c"], ["section:a"])]),
+                      ("unit:v", [("section:d", ["d"], ["section:a"])]))
+    path = _tree(("unit:u", [("section:a", ["a", "c"], [])]), ("unit:v", [("section:d", ["d"], ["section:a"])]))
+    given.renew_rest_ids(path, reference)
+    new_section = "section:" + given._digest("main-rest|stage:x|a|c")
+    new_unit = "unit:" + given._digest("main-rest|stage:x|a|c")
+    assert path == _tree((new_unit, [(new_section, ["a", "c"], [])]),
+                         ("unit:v", [("section:d", ["d"], [new_section])]))
+    # The same lessons (or an id the reference does not have) keep their ids.
+    same = _tree(("unit:u", [("section:a", ["a"], []), ("section:new", ["c"], [])]))
+    assert given.renew_rest_ids(deepcopy(same), _tree(("unit:u", [("section:a", ["a"], []),
+                                                                  ("section:bc", ["c"], [])]))) == same
