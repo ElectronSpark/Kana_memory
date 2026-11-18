@@ -95,15 +95,38 @@ def test_a_snapshot_whose_context_is_gone_falls_back_to_the_answer(monkeypatch):
     assert lq.reviewed_answer_form({"practice_source": "broken"}) == {}
 
 
+GLOSS = {"start": 3, "end": 6, "surface": "図書館", "meaning": "图书馆", "reading": "としょかん", "target_id": "word:other"}
+
+
 def test_the_answer_form_never_reaches_an_open_question(monkeypatch):
-    context = {"background_glosses": [], "answer_display": "学校", "answer_reading": "がっこう"}
-    monkeypatch.setattr(lq, "_reviewed_context", lambda question: dict(context))
-    question = reading("がっこう")
-    assert lq.reviewed_practice_context(question) == {"background_glosses": []}
-    assert lq.reviewed_answer_form(question) == {"answer_display": "学校", "answer_reading": "がっこう"}
-    display = question_support.learning_question_display({**question, "practice_source": {
-        "schema_version": 1, "item_fingerprint": "0" * 64, "template_sha256": "f" * 64}, "prompt": "学校"})
+    """A cloze with a reviewed context goes through prompt support and its glosses; the form stays out."""
+    context = {"background_glosses": [dict(GLOSS)], "answer_display": "行きました", "answer_reading": "いきました"}
+    asked = []
+    monkeypatch.setattr(lq, "_reviewed_context", lambda question: asked.append(1) or dict(context))
+    question = {"target_id": "grammar:x", "content_id": "grammar:x", "kind": "grammar_cloze",
+                "ability": "application", "prompt": "昨日、図書館へ（　）。", "answer": "行きました",
+                "practice": {"target_spans": []}, "practice_source": {
+                    "schema_version": 1, "item_fingerprint": "0" * 64, "template_sha256": "f" * 64}}
+    assert lq.reviewed_practice_context(question) == {"background_glosses": [GLOSS]}
+    display = question_support.learning_question_display(question)
+    assert asked and display["background_glosses"] == [GLOSS]          # the gloss path really ran
     assert "answer_display" not in str(display) and "answer_reading" not in str(display)
+    assert "行きました" not in str(display.get("background_glosses"))
+    assert lq.reviewed_answer_form(question) == {"answer_display": "行きました", "answer_reading": "いきました"}
     # empty or non-string values are no display form
     context.update(answer_display=" ", answer_reading=3)
     assert lq.reviewed_answer_form(question) == {}
+
+
+def test_the_display_is_stripped_and_used_only_for_a_japanese_answer(monkeypatch):
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: [])
+    form = {"answer_display": "  学校\n", "answer_reading": " がっこう "}
+    assert furigana.answer_form(use("がっこう"), form=form) == ("学校", [(0, 2, "がっこう")])
+    assert furigana.answer_form(use("学校X"), form=form) == ("学校", [(0, 2, "がっこう")])
+    assert furigana.answer_form(use("学校"), form={"answer_display": " \n"}) == ("学校", [])
+    # a meaning question keeps its Chinese answer, and nothing is looked up for it
+    monkeypatch.setattr(furigana, "lookup_answer_form", lambda question: pytest.fail("not looked up"))
+    for ability, kind in (("understanding", "vocab_meaning"), ("listening", "vocab_audio_meaning")):
+        meaning = {"target_id": "none", "kind": kind, "ability": ability, "answer": "学校"}
+        assert furigana.answer_form(meaning, form={"answer_display": "がっこう"}) == ("学校", [])
+        assert furigana.answer_form(meaning) == ("学校", [])

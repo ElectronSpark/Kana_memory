@@ -1819,7 +1819,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 u.button("继续", lambda w, expected=self._learning_guide:
                     self.finish_learning_guide(expected_question=expected), primary=True))
         else:
-            answer = answer_furigana_block(self, self._learning_guide, bold=True, flex=1 if speaker else 0,
+            answer = answer_furigana_block(self, self._learning_guide, size=14, bold=True, flex=1 if speaker else 0,
                 text_role=learning_text_role(self._learning_guide, "answer"))
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
                 u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", ""))),

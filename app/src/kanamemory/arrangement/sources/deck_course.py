@@ -91,6 +91,9 @@ class CourseDeckLane:
         return DeckTexts(prompt=str(question.get("prompt", "")), task=str(question.get("task") or ""),
                          options=options, answer=str(answer),
                          answer_cells=lambda shown=dict(question): tuple(answer_cells(shown)),
+                         # Deliberate (owner 2026-11-18): compared with the plain answer, an explanation
+                         # line that is the answer sentence is dropped; the sentence is shown once, in the
+                         # answer line with its readings above (before, the inline-kana answer never matched).
                          explanation=distinct_explanation(question.get("feedback", ""), answer),
                          audio_text=str(question.get("audio_text") or "") if question.get("requires_audio") else "")
 

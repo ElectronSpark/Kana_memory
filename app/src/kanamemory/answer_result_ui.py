@@ -55,11 +55,12 @@ def distinct_explanation(explanation, answer):
                      if line.strip() != str(answer).strip()).strip()
 
 
-def answer_furigana_block(app, question, answer=None, *, text_role, size=20, bold=False, **style):
+def answer_furigana_block(app, question, answer=None, *, text_role, size, bold=False, **style):
     """The answer line of a result page: the answer's standard spelling with kana above its kanji words.
 
     Owner 2026-11-18 (answer_furigana): one format for the answer; the content's display form is looked
     up here, when the result is shown. Drawn by furigana_ui.cells_widget (one label when nothing has kana).
+    size and text_role are the caller's: each page keeps the size its answer label had.
     Both imports stay inside: this module's other helpers are pure and are used without Toga.
     """
     from .answer_furigana import answer_cells

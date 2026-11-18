@@ -49,28 +49,33 @@ def answer_form(question, answer=None, *, form=None):
     """(text, spans) of the answer a result page shows.
 
     form: {answer_display, answer_reading} from the content (None: look it up). It applies only to the
-    question's own answer. With answer_display the text is that spelling, read from the answer when the
-    answer is all kana, else from answer_reading; a display that is the answer as written and has neither
-    keeps the readings of today. Without it the text is the answer as today, with the readings the inline
-    form had (none for a Chinese meaning).
+    question's own answer, and only when the answer is Japanese (answers_in_japanese, the readings' own
+    check: a Chinese meaning stays as it is); surrounding white space is dropped. With answer_display
+    the text is that spelling, read from the answer when the answer is all kana, else from
+    answer_reading; a display that is the answer as written and has neither keeps the readings of
+    today. Without it the text is the answer as today, with the readings the inline form had (none for
+    a Chinese meaning).
     """
     text = answer_text(question, answer)
     own = answer is None or answer == question.get("answer")
-    if own and form is None:
+    japanese = isinstance(text, str) and answers_in_japanese(question)
+    if own and japanese and form is None:
         form = lookup_answer_form(question)
-    display = (form or {}).get("answer_display") if own else None
-    if isinstance(display, str) and display.strip():
+    display = (form or {}).get("answer_display") if own and japanese else None
+    display = display.strip() if isinstance(display, str) else ""
+    if display:
         reading = (form or {}).get("answer_reading")
+        reading = reading.strip() if isinstance(reading, str) else ""
         if _all_kana(text):
             spans = word_spans(display, text)
-        elif isinstance(reading, str) and reading.strip():
+        elif reading:
             spans = word_spans(display, reading)
-        elif display == text and answers_in_japanese(question):
+        elif display == text:
             spans = annotation_spans(question, display)
         else:
             spans = []
         return display, spans
-    if isinstance(text, str) and answers_in_japanese(question):
+    if japanese:
         return text, annotation_spans(question, text)
     return text, []
 
