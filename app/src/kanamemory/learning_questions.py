@@ -829,9 +829,20 @@ def _reading_normal(text):
 
 def _grammar_kana(text):
     """Curated readings for these exact examples, not a general kanji guesser."""
-    forms = deepcopy(_CONTENT.get('GRAMMAR_READINGS', {}))
-    return re.sub("|".join(re.escape(x) for x in sorted(forms, key=len, reverse=True)) or r"(?!)",
-                  lambda match: forms[match.group()], text)
+    table = _CONTENT.get('GRAMMAR_READINGS', {})
+    key = tuple(table.items())  # the table as it is now; its pattern is compiled once per table
+    compiled = _GRAMMAR_FOLD.get(key)
+    if compiled is None:
+        forms = dict(key)
+        compiled = (re.compile("|".join(re.escape(x) for x in sorted(forms, key=len, reverse=True)) or r"(?!)"),
+                    forms)
+        _GRAMMAR_FOLD.clear()
+        _GRAMMAR_FOLD[key] = compiled
+    pattern, forms = compiled
+    return pattern.sub(lambda match: forms[match.group()], text)
+
+
+_GRAMMAR_FOLD = {}
 
 
 _LATIN = re.compile(r"[A-Za-z]")
@@ -1145,33 +1156,80 @@ def reorder_cue(question) -> str:
     return head if head and head in choices and len(blanks) == len(choices) - 1 else ""
 
 
-def _reading_forms(question, normal=None):
-    """[(text, reading spans)] of the right answers, for reading_form_answers; only when an answer is judged.
+_KANJI_CHAR = re.compile(r"[㐀-䶿一-鿿豈-﫿々]")
+# Compiled reading forms of the questions judged last (built when an answer is judged, never before).
+_READING_FORMS = {}
+_READING_FORMS_SIZE = 16
 
-    Each accepted answer with the readings its result page shows (result_readings.annotation_spans) when
-    the content's own kana answers confirm them (reading_form_answers.agrees: the all-kana accepted answers,
-    a kana answer, answer_reading); unconfirmed spans are dropped, so that text is typed as it stands. And
-    the answer's standard spelling when the content gives one (reviewed_answer_form), read from the kana
-    answer or from answer_reading (result_readings.word_spans); without either it is typed as it stands.
+
+def _reading_forms(question):
+    """The right answers as compiled pieces (reading_form_answers.compile_form); only when an answer is judged.
+
+    The answer's standard spelling when the content gives one (reviewed_answer_form), read from the kana
+    answer or from answer_reading (result_readings.word_spans), else typed as it stands. Then each accepted
+    answer with kanji, with the readings its result page shows (result_readings.annotation_reader) when the
+    content's own kana forms confirm them (reading_form_answers.agrees: the all-kana accepted answers, a kana
+    answer, answer_reading); unconfirmed spans are dropped. An accepted answer that is already one spelling
+    of a form found before is skipped (most listed answers are spellings of one sentence). Pieces are
+    normalised with _normal only: the curated single-kanji fold (_grammar_kana) belongs to the exact
+    comparison, never to a reading form. The last few questions' forms are kept (_READING_FORMS).
     """
-    from .result_readings import annotation_spans, word_spans
-    normal = normal or _normal
     answer = question.get("answer")
-    texts = [x for x in question.get("accepted_answers", [answer]) if isinstance(x, str)]
+    accepted = question.get("accepted_answers", [answer])
+    texts = list(dict.fromkeys(x for x in (accepted if isinstance(accepted, list) else [answer])
+                               if isinstance(x, str)))
     form = reviewed_answer_form(question)
     display = form.get("answer_display", "").strip()
     reading = answer if reading_form_answers.all_kana(answer) else form.get("answer_reading", "").strip()
+    # What the forms are built from, so that other content (a library installed or removed while the app
+    # runs) never reuses them: the lesson, kind and template, the answers and the standard spelling.
+    source = question.get("practice_source")
+    key = (question.get("target_id"), question.get("kind"),
+           source.get("template_sha256") if isinstance(source, dict) else None,
+           answer, tuple(texts), display, reading)
+    if key in _READING_FORMS:
+        _READING_FORMS[key] = _READING_FORMS.pop(key)  # most recent last
+        return _READING_FORMS[key]
+    from .result_readings import annotation_reader, word_spans
     references = [*(x for x in texts if reading_form_answers.all_kana(x)), *([reading] if reading else [])]
-    forms = []
-    for text in dict.fromkeys(texts):
-        spans = annotation_spans(question, text)
-        forms.append((text, spans if reading_form_answers.agrees(text, spans, references, normal) else []))
+    forms, complete = [], []  # complete: forms whose every kanji has a reading
+
+    def add(text, spans):
+        pieces = reading_form_answers.compile_form(text, spans, _normal)
+        forms.append(pieces)
+        if reading_form_answers.reads_every_kanji(text, spans):
+            complete.append(pieces)
+
     if display and display not in texts:
-        forms.append((display, word_spans(display, reading) if reading else []))
+        add(display, word_spans(display, reading) if reading else [])
+    read = annotation_reader(question)
+    for text in sorted((x for x in texts if _KANJI_CHAR.search(x)), key=lambda x: -len(_KANJI_CHAR.findall(x))):
+        if any(reading_form_answers.walk(_normal(text), pieces) for pieces in complete):
+            continue  # one spelling of a form whose every kanji has its confirmed reading
+        spans = read(text)
+        if reading_form_answers.clean_spans(text, spans) and reading_form_answers.agrees(
+                text, spans, references, _normal):
+            add(text, spans)
+    forms = tuple(forms)
+    _READING_FORMS[key] = forms
+    while len(_READING_FORMS) > _READING_FORMS_SIZE:
+        del _READING_FORMS[next(iter(_READING_FORMS))]
     return forms
 
 
-def grade_learning_answer(question: dict, answer) -> dict:
+def _reading_form_match(question, answer):
+    """The typed answer (normalised with _normal, never the single-kanji fold) is one reading form."""
+    plain = _normal(answer)
+    return any(reading_form_answers.walk(plain, pieces) for pieces in _reading_forms(question))
+
+
+def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True) -> dict:
+    """Judge a typed or chosen answer of a question snapshot.
+
+    reading_forms=False: the judge before 2026-11-18, without answers that write kanji words as their
+    readings (reading_form_answers). Only for checking a result stored by that judge: such a result stays
+    valid when it equals either judgement (validate_practice_guide).
+    """
     from .material_review import reviewed_question
     question = reviewed_question(question)
     if multi_cloze.is_cloze_question(question):
@@ -1228,8 +1286,8 @@ def grade_learning_answer(question: dict, answer) -> dict:
         if matched is not None:
             return matched
     known_wrong = {normal(x) for x in question.get("known_wrong", [])}
-    if value in accepted or (value not in known_wrong and reading_form_answers.applies(question)
-                             and reading_form_answers.matches_any(value, _reading_forms(question, normal), normal)):
+    if value in accepted or (reading_forms and value not in known_wrong and reading_form_answers.applies(question)
+                             and _reading_form_match(question, answer)):
         return {"status": "correct", "correct": True, "message": question.get("feedback", "正确。"), "scorable": True}
     if question.get("strict") or value in known_wrong:
         result = {"status": "incorrect", "correct": False, "message": question.get("feedback", "请核对答案。"), "scorable": True}

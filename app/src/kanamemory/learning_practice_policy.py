@@ -584,9 +584,13 @@ def validate_practice_guide(content_id, revision, checkpoint, *, item=None, vali
             raise ValueError("Invalid practice guide result")
         if validate_result:
             from .learning_questions import grade_learning_answer
-            correct = (checkpoint.get("guide_answer") is not None
-                       and grade_learning_answer(q, checkpoint["guide_answer"]).get("status") == "correct")
-            if checkpoint["guide_correct"] != correct:
+            answer = checkpoint.get("guide_answer")
+
+            def judged(**options):
+                return answer is not None and grade_learning_answer(q, answer, **options).get("status") == "correct"
+            # A result stored by the judge before 2026-11-18 (without reading forms) stays valid: it may
+            # equal either judgement. Nothing stored changes.
+            if checkpoint["guide_correct"] != judged() and checkpoint["guide_correct"] != judged(reading_forms=False):
                 raise ValueError("Practice guide result disagrees with its answer")
 
 

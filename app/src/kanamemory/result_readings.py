@@ -256,19 +256,34 @@ def annotate(question, text):
 
 def annotation_spans(question, text):
     """[(start, end, kana)] that annotate writes inline: the same readings, for a page that sets them above."""
-    if not isinstance(text, str) or not _KANJI.search(text):
-        return []
-    entry = question_entry(question) if isinstance(question, Mapping) else None
-    if entry is not None and text in entry["options"]:
-        return [(start, end, reading) for start, end, reading, _ in entry["options"][text]]
-    if entry is not None:
-        for raw, located in entry["fields"].values():
-            if raw == text:  # the sentence itself: the readings chosen for it, at their own places
-                return [(start, end, reading) for start, end, reading, _ in located
-                        if not _NOTED.match(text, end)]
-    pairs = known_pairs(question)
-    # A text that is one course word (an option of a generated kind) before any word-by-word reading.
-    return ([] if any(surface in text for surface in pairs) else _whole(text, pairs)) or _spans(text, pairs)
+    return annotation_reader(question)(text)
+
+
+def annotation_reader(question):
+    """annotation_spans of one question as a function of the text. Its entry and known words are looked up
+    once, at the first text that needs them, for a caller that reads many texts of the same question (the
+    judge's accepted answers)."""
+    looked_up = {}
+
+    def spans(text):
+        if not isinstance(text, str) or not _KANJI.search(text):
+            return []
+        if "entry" not in looked_up:
+            looked_up["entry"] = question_entry(question) if isinstance(question, Mapping) else None
+        entry = looked_up["entry"]
+        if entry is not None and text in entry["options"]:
+            return [(start, end, reading) for start, end, reading, _ in entry["options"][text]]
+        if entry is not None:
+            for raw, located in entry["fields"].values():
+                if raw == text:  # the sentence itself: the readings chosen for it, at their own places
+                    return [(start, end, reading) for start, end, reading, _ in located
+                            if not _NOTED.match(text, end)]
+        if "pairs" not in looked_up:
+            looked_up["pairs"] = known_pairs(question)
+        pairs = looked_up["pairs"]
+        # A text that is one course word (an option of a generated kind) before any word-by-word reading.
+        return ([] if any(surface in text for surface in pairs) else _whole(text, pairs)) or _spans(text, pairs)
+    return spans
 
 
 def annotate_explanation(question, text):

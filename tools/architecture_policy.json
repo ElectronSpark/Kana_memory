@@ -27,7 +27,7 @@
   "app/src/kanamemory/intro_batch.py": ["__future__", "copy", "datetime", "random", "re", "typing", ".arrangement.model", ".arrangement.rules.gates", ".word_sound_questions"],
   "app/src/kanamemory/answer_result_ui.py": [".multi_cloze", ".result_readings", ".answer_furigana", ".furigana_ui"],
   "app/src/kanamemory/furigana_ui.py": ["__future__", "collections.abc", "math", "re", "unicodedata", ".ui_components", ".text_layout"],
-  "app/src/kanamemory/reading_form_answers.py": ["__future__", "collections.abc", "itertools", "re"],
+  "app/src/kanamemory/reading_form_answers.py": ["__future__", "collections.abc", "re"],
   "app/src/kanamemory/answer_furigana.py": ["__future__", "re", ".", ".reading_form_answers", ".answer_result_ui", ".result_readings", ".learning_questions"],
   "app/src/kanamemory/multi_cloze.py": ["__future__", "copy", "json", "re", "unicodedata"],
   "app/src/kanamemory/multi_cloze_ui.py": ["copy", "unicodedata", "kanamemory.multi_cloze", ".cloze_presentation", ".question_support", ".diagnostic_events"],

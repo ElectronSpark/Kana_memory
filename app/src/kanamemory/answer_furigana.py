@@ -87,8 +87,9 @@ def checked_spans(question, text, form=None):
     """The readings of the question's own answer without a standard spelling, checked by the content's kana.
 
     The content's kana forms are its all-kana accepted answers and answer_reading. One that is a reading of
-    the answer (reading_form_answers.align) decides: readings it confirms stay, kanji words without a
-    reading get its reading, readings it contradicts (着いて read き) give way to it. Without one, the
+    the answer decides (reading_form_answers.shown_readings): readings it confirms stay, a kanji word without
+    a reading gets one only where that kana form fixes it (exactly one way to split it), readings it
+    contradicts (着いて read き) are replaced where it fixes them and removed otherwise. Without one, the
     readings are today's (result_readings.annotation_spans).
     """
     from .learning_questions import _reading_normal

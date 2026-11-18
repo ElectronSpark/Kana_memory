@@ -59,6 +59,7 @@ app/src/kanamemory/answer_speech.py
 tests/test_answer_speech.py
 tests/test_answer_furigana.py
 tests/test_reading_form_answers.py
+tests/test_reading_form_stored_results.py
 tests/test_word_block_structure.py
 app/src/kanamemory/answer_feedback.py
 app/src/kanamemory/answer_input.py

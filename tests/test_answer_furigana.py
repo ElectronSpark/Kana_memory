@@ -173,11 +173,28 @@ def test_without_a_kana_form_of_the_answer_the_readings_are_todays(monkeypatch):
     assert furigana.answer_form(accepted("駅に着いて", "えきについて"), "着いて") == ("着いて", shown)
 
 
-def test_the_kana_forms_align_with_the_text_or_not_at_all():
+def test_the_kana_forms_fix_a_reading_only_when_certain():
     from kanamemory import learning_questions as questions
     from kanamemory import reading_form_answers as rfa
     normal = questions._reading_normal
-    assert rfa.align("学校へ行きます。", "がっこうへいきます", normal) == [(0, 2, "がっこう"), (3, 4, "い")]
-    assert rfa.align("学校へ行きます", "がっこうにいきます", normal) is None
-    assert rfa.align("がっこう", "がっこう", normal) is None  # no kanji: nothing to read
+    assert rfa.certain_readings("学校へ行きます。", [], "がっこうへいきます", normal) == [(0, 2, "がっこう"), (3, 4, "い")]
+    assert rfa.certain_readings("学校へ行きます", [], "がっこうにいきます", normal) is None
+    assert rfa.certain_readings("がっこう", [], "がっこう", normal) == []  # no kanji: nothing to read
     assert rfa.shown_readings("学校", [(0, 2, "がくこう")], [], normal) == [(0, 2, "がくこう")]
+
+
+@pytest.mark.parametrize("answer, kana, given, shown", [
+    # the independent review's wrong additions: a reading is added only when certain
+    ("数学が得意です", "すうがくがとくいです", [(3, 5, "とくい")], [(0, 2, "すうがく"), (3, 5, "とくい")]),
+    ("飲み物の中で、お茶が好きです", "のみもののなかでおちゃがすきです",
+     [(0, 1, "の"), (2, 3, "もの"), (8, 9, "ちゃ"), (10, 11, "す")],
+     [(0, 1, "の"), (2, 3, "もの"), (4, 5, "なか"), (8, 9, "ちゃ"), (10, 11, "す")]),
+    ("他人に話したわけがない", "たにんにはなしたわけがない", [], []),
+    ("この部屋は静かな反面、少し不便です", "このへやはしずかなはんめんすこしふべんです",
+     [(2, 4, "へや"), (5, 6, "しず"), (11, 12, "すこ"), (13, 15, "ふべん")],
+     [(2, 4, "へや"), (5, 6, "しず"), (8, 10, "はんめん"), (11, 12, "すこ"), (13, 15, "ふべん")]),
+    ("練習し直しました", "れんしゅうしなおしました", [(0, 2, "れんしゅう")], [(0, 2, "れんしゅう"), (3, 4, "なお")]),
+])
+def test_added_readings_are_certain(monkeypatch, answer, kana, given, shown):
+    monkeypatch.setattr(furigana, "annotation_spans", lambda question, text: given)
+    assert furigana.answer_form(accepted(answer, kana), form={}) == (answer, shown)
