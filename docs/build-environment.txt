@@ -37,6 +37,22 @@ app/pyproject.toml. The canonical template is the clean commit
 cache lacks the template's empty pip-options.txt; this is not a required patch
 or a claim that the cache is clean. Do not copy that local deletion into source.
 
+How create gets the pinned commit
+Briefcase 0.4.5 accepts template_branch only as a branch name of its cached
+clone (a commit there fails with "Could not find a branch named ...") and
+ignores template_hash for a local template directory. The create stage
+therefore runs tools/build_environment.py --pinned-template <ToolchainRoot>\
+briefcase\pinned-template\briefcase-android-gradle-template --template-cache
+<ToolchainRoot>\briefcase\templates\briefcase-android-gradle-template. It takes
+the commit from the declaration, checks that the cache comes from the declared
+URL and resolves that commit, and writes the commit's files (git archive, the
+clean commit, not the cache's working copy) into the pinned-template directory.
+Then it runs briefcase create android -C template='<that directory>'. No network
+is used while the cache holds the commit and all its files; otherwise the commit
+is fetched by its hash from the template URL, and an unknown commit stops create.
+The pinned-template directory is rewritten on every create; a directory there
+that this step did not write is refused.
+
 Where the toolchain lives
 Keep the toolchain outside the temporary directory. The scripts default to
 %LOCALAPPDATA%\km, and run_app refuses a root inside the temporary directory,

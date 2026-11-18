@@ -34,6 +34,12 @@ it). A different path may be selected with -ToolchainRoot C:\km-demo. Each stage
 must use the same path. The demo uses app-public within that path, separate from
 personal builds. A prepared Python environment can be selected explicitly with
 -Python <python.exe>.
+The create stage writes the pinned Android template commit from Briefcase's
+template cache into ToolchainRoot\briefcase\pinned-template and creates the
+project from that directory (see "How create gets the pinned commit" in
+docs/build-environment.txt). It needs the network only when the cache lacks
+that commit. create does not replace an existing generated project: remove the
+project's build\kanamemory\android directory within app-public (or app) first.
 The APK is written to environment\artifacts. The package ID is
 org.example.demo.kanamemory, so installing the demo cannot overwrite the personal
 org.example.kanamemory installation or its learning records. A demo source tree

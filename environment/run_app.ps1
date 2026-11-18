@@ -492,7 +492,15 @@ try {
         switch ($Stage) {
             'desktop' { & $projectPython -X utf8 -m briefcase dev --no-input }
             'create' {
-                & $projectPython -X utf8 -m briefcase create android --no-input --log
+                # Briefcase 0.4.5 takes template_branch only as a branch name, so the pinned commit is rolled out
+                # from its template cache into a directory and given to it as a local template (see
+                # docs/build-environment.txt); build_environment.py checks the commit.
+                $templateCache = Join-Path $ToolchainRoot 'briefcase\templates\briefcase-android-gradle-template'
+                $pinnedTemplate = Join-Path $ToolchainRoot 'briefcase\pinned-template\briefcase-android-gradle-template'
+                if ($pinnedTemplate.Contains("'")) { throw 'The toolchain path must not contain a single quote.' }
+                & $projectPython -X utf8 $environmentTool --pinned-template $pinnedTemplate --template-cache $templateCache
+                if ($LASTEXITCODE -ne 0) { throw 'The pinned Android template could not be prepared.' }
+                & $projectPython -X utf8 -m briefcase create android --no-input --log -C "template='$pinnedTemplate'"
                 if ($LASTEXITCODE -ne 0) { throw 'Briefcase create failed.' }
                 [void](Remove-StaleGeneratedModules -AppBuildRoot $appBuild -SourcePackage (Join-Path $appSource 'src/kanamemory'))
                 [void](Remove-StaleGeneratedResources -AppBuildRoot $appBuild -SourceResources (Split-Path -Parent $sourceDatabase))

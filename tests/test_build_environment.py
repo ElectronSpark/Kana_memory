@@ -203,6 +203,117 @@ def test_manifest_patch_keeps_one_activity_across_relaunch_and_launcher_intents(
     assert first.count('launchMode') == 1 and first.count('KanaTextShareActivity') == 1
 
 
+needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='the pinned template is rolled out with Git')
+
+
+def _git(cwd, *arguments):
+    import subprocess
+    return subprocess.run(['git', '-C', str(cwd), *arguments], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _template_origin(root):
+    """A small cookiecutter template repository with two commits; returns (origin, first, second)."""
+    origin = root / 'origin'
+    (origin / '{{ cookiecutter.format }}').mkdir(parents=True)
+    _git(origin, 'init', '--quiet')
+    for key, value in (('user.email', 'test@example.org'), ('user.name', 'test'), ('core.autocrlf', 'false')):
+        _git(origin, 'config', key, value)
+    (origin / 'cookiecutter.json').write_text('{"format": "gradle"}\n', 'utf8')
+    (origin / '{{ cookiecutter.format }}/build.gradle').write_text('first\n', 'utf8')
+    _git(origin, 'add', '-A'); _git(origin, 'commit', '--quiet', '-m', 'first')
+    first = _git(origin, 'rev-parse', 'HEAD')
+    (origin / '{{ cookiecutter.format }}/build.gradle').write_text('second\n', 'utf8')
+    _git(origin, 'commit', '--quiet', '-am', 'second')
+    return origin, first, _git(origin, 'rev-parse', 'HEAD')
+
+
+@needs_git
+def test_the_pinned_commit_is_rolled_out_from_the_cache_without_the_network(tmp_path):
+    from tools.build_environment import TEMPLATE_MARKER, pinned_template
+    origin, first, _ = _template_origin(tmp_path)
+    url = origin.as_uri()
+    cache = tmp_path / 'cache'
+    _git(tmp_path, 'clone', '--quiet', url, str(cache))
+    origin.rename(origin.with_name('moved-away'))  # no remote any more: the cache alone must do
+    target = tmp_path / 'km/briefcase/pinned-template/t'
+    info = pinned_template(target, cache, url, first)
+    assert (info['commit'], info['fetched'], info['files']) == (first, False, 2)
+    assert (target / '{{ cookiecutter.format }}/build.gradle').read_text('utf8') == 'first\n'
+    assert (target / TEMPLATE_MARKER).is_file()
+    assert pinned_template(target, cache, url, first)['fetched'] is False  # a second create rolls it out again
+
+
+@needs_git
+def test_a_commit_missing_from_the_cache_is_fetched_by_its_hash_and_a_wrong_one_stops_create(tmp_path):
+    from tools.build_environment import pinned_template
+    origin, first, second = _template_origin(tmp_path)
+    url = origin.as_uri()
+    cache = tmp_path / 'cache'
+    _git(tmp_path, 'clone', '--quiet', '--no-checkout', url, str(cache))
+    _git(origin, 'reset', '--quiet', '--hard', first)  # the newer commit is not on any branch any more
+    _git(cache, 'fetch', '--quiet', '--prune', 'origin')
+    _git(cache, 'update-ref', '-d', 'refs/heads/' + _git(cache, 'symbolic-ref', '--short', 'HEAD'))
+    _git(cache, 'reflog', 'expire', '--expire=now', '--all'); _git(cache, 'gc', '--quiet', '--prune=now')
+    assert second not in _git(cache, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)').split()
+    _git(origin, 'config', 'uploadpack.allowAnySHA1InWant', 'true')
+    info = pinned_template(tmp_path / 'out', cache, url, second)
+    assert info['fetched'] is True
+    assert (tmp_path / 'out/{{ cookiecutter.format }}/build.gradle').read_text('utf8') == 'second\n'
+    wrong = 'f' * 40
+    with pytest.raises(ValueError, match='could not be fetched'):
+        pinned_template(tmp_path / 'out', cache, url, wrong)
+    assert (tmp_path / 'out/{{ cookiecutter.format }}/build.gradle').read_text('utf8') == 'second\n'  # untouched
+    with pytest.raises(ValueError, match='40-digit'):
+        pinned_template(tmp_path / 'out', cache, url, 'main')
+
+
+@needs_git
+def test_a_foreign_cache_or_an_unknown_directory_is_refused(tmp_path):
+    from tools.build_environment import pinned_template
+    origin, first, _ = _template_origin(tmp_path)
+    cache = tmp_path / 'cache'
+    _git(tmp_path, 'clone', '--quiet', origin.as_uri(), str(cache))
+    with pytest.raises(ValueError, match='does not come from'):
+        pinned_template(tmp_path / 'out', cache, 'https://example.org/other-template.git', first)
+    kept = tmp_path / 'kept'
+    kept.mkdir(); (kept / 'note.txt').write_text('not a template', 'utf8')
+    with pytest.raises(ValueError, match='was not written as a pinned template'):
+        pinned_template(kept, cache, origin.as_uri(), first)
+    assert (kept / 'note.txt').read_text('utf8') == 'not a template'
+
+
+@needs_git
+def test_the_command_line_takes_the_commit_from_the_declaration_and_fails_with_its_exit_code(source, tmp_path):
+    import subprocess, sys
+    origin, first, _ = _template_origin(tmp_path / 'repo')
+    cache = tmp_path / 'cache'
+    _git(tmp_path, 'clone', '--quiet', origin.as_uri(), str(cache))
+    declared = contract()['android']
+    for relative, old, new in (('config/build_environment.json', declared['template'], origin.as_uri()),
+                               ('app/pyproject.toml', declared['template'], origin.as_uri())):
+        path = source / relative
+        path.write_text(path.read_text('utf8').replace(old, new), 'utf8')
+    def run(commit):
+        for relative in ('config/build_environment.json', 'app/pyproject.toml'):
+            path = source / relative
+            path.write_text(re.sub(r'[0-9a-f]{40}', commit, path.read_text('utf8')), 'utf8')
+        return subprocess.run([sys.executable, '-X', 'utf8', str(ROOT / 'tools/build_environment.py'), '--root',
+                               str(source), '--pinned-template', str(tmp_path / 'out'), '--template-cache', str(cache)],
+                              capture_output=True, text=True, encoding='utf-8', timeout=120)
+    done = run(first)
+    assert done.returncode == 0 and first in done.stdout and '"fetched": false' in done.stdout
+    failed = run('e' * 40)
+    assert failed.returncode == 1 and 'could not be fetched' in failed.stderr
+
+
+def test_create_gives_briefcase_the_rolled_out_commit_as_a_local_template():
+    runner = (ROOT / 'environment/run_app.ps1').read_text('utf8')
+    prepare = runner.index('$environmentTool --pinned-template $pinnedTemplate --template-cache $templateCache')
+    create = runner.index('briefcase create android --no-input --log -C "template=\'$pinnedTemplate\'"')
+    assert prepare < runner.index("throw 'The pinned Android template could not be prepared.'") < create
+    assert runner.count('briefcase create android') == 1
+
+
 def test_pyproject_renders_single_task_on_fresh_create():
     import tomllib
     android = tomllib.loads((ROOT / 'app/pyproject.toml').read_text('utf8'))['tool']['briefcase']['app']['kanamemory']['android']
