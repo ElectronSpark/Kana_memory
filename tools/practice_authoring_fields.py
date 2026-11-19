@@ -403,3 +403,32 @@ def answer_form_fields(raw, kind, fields, *, key, target_id=None):
         if not _aligned(display, reading):
             _fail(key, f"answer_display {display!r} does not line up with answer_reading {reading!r}")
     return form
+
+
+# The three floors of a lesson's practice (2026-11-09; brief T2 E 2026-11-18): over its templates, at least 3 task
+# families, 2 input modes and 3 context ids. One definition for the whole-course test
+# (tests/test_practice_expansion281_integration.py) and for the staging check of the dependency tool
+# (derive_question_dependencies.py --check-staging), which applies it to the installed templates plus a batch.
+PRACTICE_FLOORS = (("task_families", 3), ("input_modes", 2), ("context_ids", 3))
+
+
+def practice_floor_applies(item) -> bool:
+    """Whether a catalogue lesson is held to the floors: every word lesson and every grammar lesson outside the
+    pronunciation domain (expression lessons included)."""
+    return item.get("family") == "word" or (item.get("family") == "grammar" and item.get("domain") != "pronunciation")
+
+
+def practice_floor_counts(rows) -> dict:
+    """{floor name: count} over a lesson's templates, rows = [(kind, raw template)]: task families (the practice's
+    task_family, else the kind), input modes (input_mode, else choice when it has choices, else text) and the
+    distinct practice context ids."""
+    families = {(raw.get("practice") or {}).get("task_family") or kind for kind, raw in rows}
+    modes = {raw.get("input_mode") or ("choice" if raw.get("choices") else "text") for _kind, raw in rows}
+    contexts = {raw["practice"]["context_id"] for _kind, raw in rows if (raw.get("practice") or {}).get("context_id")}
+    return {"task_families": len(families), "input_modes": len(modes), "context_ids": len(contexts)}
+
+
+def practice_floor_shortfalls(rows) -> list:
+    """[(floor name, count, floor)] of every floor the templates (rows as in practice_floor_counts) do not hold."""
+    counts = practice_floor_counts(rows)
+    return [(name, counts[name], floor) for name, floor in PRACTICE_FLOORS if counts[name] < floor]

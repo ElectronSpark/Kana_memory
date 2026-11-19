@@ -26,7 +26,16 @@ requirements that block the most questions (the lessons to bring forward).
 Runs: the longest run of word lessons and of other lessons in the beginning (in
 lessons and sections); a warning when the word run exceeds 2 x
 MixParams.word_target or the other run 4 x MixParams.nonword_target (the mix
-never breaks up the given beginning). --strict makes warnings fail.
+never breaks up the given beginning). --strict makes warnings fail, and it also
+computes the route_mix plan of the route built with the order (mix_route: the
+readiness of the installed templates and question dependencies, as the app and
+tests/test_route_mix_core_content.py compute it) and fails when a mixable stage
+of the mixed route has a run of WORD_RUN_LIMIT (100) or more consecutive word
+lessons, naming its length and its first and last lesson (mixed_word_runs, the
+measure that test asserts). For an order that is not installed this is exact as
+long as the templates and question_dependencies it is installed with are the
+installed ones: the order changes only the tree; content landing with it changes
+the readiness too, so check it on the tree that holds that content.
 
 The order is read from, in this priority: --order FILE (a .tsv: its ``id``
 column as a flat list; a .json: either form), --namespace FILE (an authored
@@ -176,6 +185,65 @@ def beginning_runs(with_tree) -> dict:
     return best
 
 
+# tests/test_route_mix_core_content.py: on every mixable stage of the mixed route the longest run of consecutive
+# word lessons stays under this many. --strict holds the order it checks to the same limit (mixed_word_runs).
+WORD_RUN_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class WordRun:
+    """The longest run of consecutive word lessons of one stage: its length and its first and last lesson."""
+    stage_id: str
+    length: int
+    first: str | None
+    last: str | None
+
+
+def longest_word_run(sections, stage_id="") -> WordRun:
+    """The longest run of word entries over route_mix Sections, counted as placement.runs counts it (a non-word
+    entry ends a run, section edges do not), with its first and last entry id (the earliest such run)."""
+    best, length, first = WordRun(stage_id, 0, None, None), 0, None
+    for section in sections:
+        for entry, word in zip(section.entries, section.words):
+            if word:
+                length, first = length + 1, first if length else entry
+                if length > best.length:
+                    best = WordRun(stage_id, length, first, entry)
+            else:
+                length = 0
+    return best
+
+
+def mixed_word_runs(mixed, mixable) -> tuple:
+    """WordRun of every mixable stage of a mixed route tree: the measure of tests/test_route_mix_core_content.py
+    (route_mix.placement.section_of over the stage's sections, no library map)."""
+    from kanamemory.route_mix.placement import section_of
+    return tuple(longest_word_run([section_of(section, {}) for section in _stage_sections(mixed, stage_id)], stage_id)
+                 for stage_id in mixable)
+
+
+def _stage_sections(tree, stage_id):
+    return [section for stage in tree["stages"] if stage["id"] == stage_id for unit in stage["units"]
+            for section in unit["sections"]]
+
+
+def mix_route(tree, items, params, library_of=None, readiness=None):
+    """(mixed tree or None, mixable stage ids): the route_mix plan of ``tree`` applied to it, computed as
+    tests/test_route_mix_core_content.py (fixture core_plan) and the app compute it: the readiness of every item the
+    plan reads (sources.needed_items; ``readiness`` given: that one) over the installed templates and question
+    dependencies. None when the plan does not apply to the tree."""
+    from kanamemory.route_mix import sources
+    from kanamemory.route_mix.plan import apply_plan, plan_mix, snapshot
+    detached = snapshot(tree)
+    providers = sources.library_entries(detached, library_of)
+    mixable = sources.mixable_stage_ids(detached)
+    if readiness is None:
+        readiness = sources.read_readiness(sources.needed_items(detached, mixable, providers),
+                                           {item["id"]: item for item in items}, kinds=params.kinds)
+    plan = plan_mix(detached, readiness, mixable=mixable, library_of=providers, key={"test": 1}, params=params)
+    return apply_plan(tree, plan, mixable=mixable, providers=providers), mixable
+
+
 def read_given_readiness(with_tree, items, params):
     """The route_mix readiness of the beginning's lessons (sources.read_readiness, the app's adapter)."""
     from kanamemory.route_mix import sources
@@ -209,16 +277,21 @@ def _installed_library_of():
 class Evaluation:
     """What the check finds in an order: problems (main_route_order.order_problems), the floor rows
     (FloorRow, route order; empty without listed ids), the beginning's runs (beginning_runs; None
-    without listed ids) and the params used."""
+    without listed ids), the params used and, when asked for (mix=True), the longest word run of every mixable
+    stage of the route mixed with the order (mixed_word_runs; () when the plan does not apply, None when not
+    computed)."""
     problems: dict
     rows: tuple
     runs: dict | None
     params: object
+    mixed_runs: tuple | None = None
 
 
 def evaluate(value, items=None, *, kana=None, readiness=None, library_of: Callable | None = None,
-             params=None) -> Evaluation:
-    """The findings of ``check`` (``value`` not None; arguments as there), unformatted."""
+             params=None, mix=False) -> Evaluation:
+    """The findings of ``check`` (``value`` not None; arguments as there), unformatted. mix: also compute the
+    route_mix plan of the route built with the order (mix_route; with a given ``readiness`` that table is the
+    plan's too) and its longest word runs."""
     from kanamemory import main_route_order as given
     from kanamemory.learning_content import learning_items
     from kanamemory.study_path_catalog import _REFERENCE_STAGE, study_path_records
@@ -234,10 +307,15 @@ def evaluate(value, items=None, *, kana=None, readiness=None, library_of: Callab
     if not given.order_ids(value):
         return Evaluation(problems, (), None, params)
     with_tree, without_tree = given_routes(value, items, kana)
+    given_readiness = readiness
     if readiness is None:
         readiness = read_given_readiness(with_tree, items, params)
     rows = tuple(floor_rows(with_tree, without_tree, readiness, params))
-    return Evaluation(problems, rows, beginning_runs(with_tree), params)
+    mixed_runs = None
+    if mix:
+        mixed, mixable = mix_route(with_tree, items, params, library_of, given_readiness)
+        mixed_runs = () if mixed is None else mixed_word_runs(mixed, mixable)
+    return Evaluation(problems, rows, beginning_runs(with_tree), params, mixed_runs)
 
 
 def check(value, items=None, *, kana=None, readiness=None, library_of: Callable | None = None, params=None,
@@ -253,7 +331,7 @@ def check(value, items=None, *, kana=None, readiness=None, library_of: Callable 
     from kanamemory.study_path_catalog import STAGES
     if value is None:
         return 0, [f"{given.ORDER_KEY}: absent (the route is built as before)"]
-    found = evaluate(value, items, kana=kana, readiness=readiness, library_of=library_of, params=params)
+    found = evaluate(value, items, kana=kana, readiness=readiness, library_of=library_of, params=params, mix=strict)
     problems, params = found.problems, found.params
     errors = given.problem_count(problems)
     lines = given.describe_problems(problems)
@@ -279,6 +357,19 @@ def check(value, items=None, *, kana=None, readiness=None, library_of: Callable 
             warnings += 1
             lines.append(f"warning: a run of {others} other lessons, more than 4 x {params.nonword_target} "
                          "(the mix never breaks up the beginning)")
+    if found.mixed_runs == ():
+        errors += 1
+        lines.append("the route_mix plan does not apply to the route built with this order: the longest word run "
+                     "of the mixed route cannot be measured")
+    elif found.mixed_runs:
+        longest = max(found.mixed_runs, key=lambda run: (run.length, -found.mixed_runs.index(run)))
+        lines.append(f"longest run of word lessons on the mixed route: {longest.length} (stage {longest.stage_id}, "
+                     f"{longest.first} … {longest.last}; limit {WORD_RUN_LIMIT})")
+        for run in found.mixed_runs:
+            if run.length >= WORD_RUN_LIMIT:
+                errors += 1
+                lines.append(f"error: stage {run.stage_id} of the mixed route has a run of {run.length} word lessons, "
+                             f"from {run.first} to {run.last} (must stay under {WORD_RUN_LIMIT})")
     if strict:
         errors += warnings
     form = "units" if given.is_structured(value) else "a flat list"

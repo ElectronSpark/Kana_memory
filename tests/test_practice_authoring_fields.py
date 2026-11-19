@@ -390,3 +390,17 @@ def test_the_app_shows_an_accepted_display_form_with_its_readings():
     text, spans = answer_form(question, form=form)
     assert text == "散歩に出かけます。"
     assert [(text[start:end], kana) for start, end, kana in spans] == [("散歩", "さんぽ"), ("出", "で")]
+
+
+def test_practice_floors_count_task_families_input_modes_and_context_ids():
+    from practice_authoring_fields import (PRACTICE_FLOORS, practice_floor_applies, practice_floor_counts,
+                                           practice_floor_shortfalls)
+    assert PRACTICE_FLOORS == (("task_families", 3), ("input_modes", 2), ("context_ids", 3))
+    rows = [("vocab_meaning", {"choices": ["a", "b"], "practice": {"task_family": "word_in_context", "context_id": "c1"}}),
+            ("vocab_meaning", {"choices": ["a", "b"], "practice": {"context_id": "c1"}}),  # no family: the kind
+            ("vocab_recall", {"input_mode": "text", "practice": {"task_family": "recall"}})]
+    assert practice_floor_counts(rows) == {"task_families": 3, "input_modes": 2, "context_ids": 1}
+    assert practice_floor_shortfalls(rows) == [("context_ids", 1, 3)]
+    assert practice_floor_shortfalls(rows[:2]) == [("task_families", 2, 3), ("input_modes", 1, 2), ("context_ids", 1, 3)]
+    assert practice_floor_applies({"family": "word"}) and practice_floor_applies({"family": "grammar", "domain": "expression"})
+    assert not practice_floor_applies({"family": "grammar", "domain": "pronunciation"})

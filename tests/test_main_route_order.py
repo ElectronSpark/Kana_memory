@@ -445,6 +445,37 @@ def test_the_checker_reports_long_runs_and_strict_makes_them_fail(fixture_rules)
     assert check(order, items, readiness=Readiness({}), library_of=lambda cid: None, strict=True)[0] == 0
 
 
+def test_strict_measures_the_longest_word_run_of_the_mixed_route_as_the_core_content_test(fixture_rules, monkeypatch):
+    import check_main_route_order as tool
+    from kanamemory.route_mix.placement import runs, section_of
+    items, order = catalogue(), ["word:駅"]
+    with_tree, _ = tool.given_routes(order, items)
+    mixed, mixable = tool.mix_route(with_tree, items, MixParams(), lambda cid: None, Readiness({}))
+    assert mixed is not None
+    measured = tool.mixed_word_runs(mixed, mixable)
+    # One definition: the length is placement.runs' over the stage's sections, with the run's first and last lesson.
+    for run in measured:
+        sections = [section_of(s, {}) for s in tool._stage_sections(mixed, run.stage_id)]
+        assert run.length == runs(sections)[0]
+    longest = max(measured, key=lambda run: run.length)
+    assert longest.length > 1  # a real run, not one word
+    flat = [e["id"] for s in tool._stage_sections(mixed, longest.stage_id) for e in s["entries"]]
+    stretch = flat[flat.index(longest.first):flat.index(longest.last) + 1]
+    assert len(stretch) == longest.length and all(cid.startswith("word:") for cid in stretch)
+    options = dict(readiness=Readiness({}), library_of=lambda cid: None, params=MixParams())
+    errors, lines = tool.check(order, items, strict=True, **options)
+    assert errors == 0 and (f"longest run of word lessons on the mixed route: {longest.length} (stage "
+                            f"{longest.stage_id}, {longest.first} … {longest.last}; limit 100)") in lines
+    # Not measured without --strict (it computes the plan).
+    assert not any("mixed route" in line for line in tool.check(order, items, **options)[1])
+    # At the limit the order fails, naming the run.
+    monkeypatch.setattr(tool, "WORD_RUN_LIMIT", longest.length)
+    errors, lines = tool.check(order, items, strict=True, **options)
+    assert errors == 1
+    assert (f"error: stage {longest.stage_id} of the mixed route has a run of {longest.length} word lessons, from "
+            f"{longest.first} to {longest.last} (must stay under {longest.length})") in lines
+
+
 def test_a_flat_order_never_merges_grammar_points(fixture_rules):
     items = [*catalogue(), *(grammar(f"extra{n}") for n in range(3))]
     path = build_study_path([], items, main_route_order=[f"grammar:extra{n}" for n in range(3)])
