@@ -39,7 +39,8 @@ class FocusPart:
         self._tilt_box.clear()
         if self._model.offers_tilts(mode):
             self._tilt_box.add(u.label(self._model.tilt_heading, size=15, bold=True), self.tilt,
-                               u.label(self._model.kana_heading, size=15, bold=True), self.kana)
+                               u.label(self._model.kana_heading, size=15, bold=True), self.kana,
+                               u.label(self._model.kana_note, size=13, color=u.MUTED))
         else:
             self._tilt_box.add(u.label(self._model.tilt_note, size=13, color=u.MUTED))
 

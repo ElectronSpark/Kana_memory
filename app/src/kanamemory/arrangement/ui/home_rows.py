@@ -2,8 +2,9 @@
 
 Input: display.HomeRowsModel and callbacks; output: a possibly empty list of
 widgets. home_rows are the breadth rows that stand above the due lines in the
-primary card; invite_rows is the UI5 line (orientation never chosen), kept
-out of the primary card so the home page keeps one primary action;
+primary card; invite_rows is the UI5 card (orientation never chosen: the
+sentence and two plain buttons that store the choice), drawn at the top of
+the primary card (the home keeps one primary button);
 focus_rows is the UI6 focus row (display.FocusRowModel), under every
 orientation and only while a focus is set.
 """
@@ -13,6 +14,7 @@ from collections.abc import Callable
 
 import kanamemory.ui_components as u
 from ..display import FocusRowModel, HomeRowsModel
+from ..model import Orientation
 from .section_note import section_note_rows
 
 
@@ -27,11 +29,21 @@ def home_rows(model: HomeRowsModel, *, on_open_orientation: Callable[[], object]
     return rows
 
 
-def invite_rows(model: HomeRowsModel, *, on_open_orientation: Callable[[], object]) -> list:
-    """The UI5 line while the orientation was never chosen; it opens the orientation screen."""
+def invite_rows(model: HomeRowsModel, *, on_open_orientation: Callable[[], object],
+                on_choose: Callable[[Orientation], object] | None = None) -> list:
+    """The card while the orientation was never chosen (UI5): the sentence, then 改为广度优先 and 保持扎实.
+
+    Each button stores its choice at once (``on_choose``); the sentence opens
+    the orientation screen. Both buttons take a share of the row (Android).
+    """
     if not model.invite or not model.invite_text:
         return []
-    return [u.button(model.invite_text, lambda widget: on_open_orientation(), multiline=True)]
+    rows = [u.button(model.invite_text, lambda widget: on_open_orientation(), multiline=True)]
+    if on_choose is not None:
+        rows.append(u.row(u.button(model.choose_breadth, lambda widget: on_choose(Orientation.BREADTH), flex=1,
+                                   margin_right=8),
+                          u.button(model.keep_thorough, lambda widget: on_choose(Orientation.THOROUGH), flex=1)))
+    return rows
 
 
 def focus_rows(model: FocusRowModel | None, *, on_open_orientation: Callable[[], object],

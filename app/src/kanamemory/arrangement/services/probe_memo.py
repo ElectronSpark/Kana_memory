@@ -30,6 +30,14 @@ class ProbeMemo:
         self._until: datetime | None = None
         self._rearranged: set = set()   # identities a round was already re-arranged for
         self._reviews: tuple | None = None   # (round, since, until) of the last check for outside reviews
+        self._noted: object = None           # the round whose 深度优先 hold line was shown (G3)
+
+    def first_note(self, round_id) -> bool:
+        """True the first time it is asked for round ``round_id`` (never without a round): G3's line once per round."""
+        if round_id is None or round_id == self._noted:
+            return False
+        self._noted = round_id
+        return True
 
     def futile(self, round_id, now: datetime) -> bool:
         """True when a probe at ``now`` in round ``round_id`` would repeat a fruitless one."""

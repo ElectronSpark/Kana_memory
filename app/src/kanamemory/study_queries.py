@@ -274,6 +274,12 @@ class StudyQueries:
         FROM learning_event e JOIN learning_unit u ON u.unit_id=e.unit_id
         WHERE u.content_id=? AND e.role='primary' LIMIT 1""", (cid,)).fetchone()
 
+    def course_has_attempted_check(self, cid: str) -> sqlite3.Row | None:
+        """A finalized answer of this lesson that was not scored (role 'unresolved'): its first check was attempted."""
+        return self._connection.execute("""SELECT 1
+        FROM learning_event e JOIN learning_unit u ON u.unit_id=e.unit_id
+        WHERE u.content_id=? AND e.role='unresolved' LIMIT 1""", (cid,)).fetchone()
+
     def course_pending_drafts(self, cid: str) -> Iterator[sqlite3.Row]:
         return (row for row in self._connection.execute("""SELECT q.draft_json,q.result_json
         FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id

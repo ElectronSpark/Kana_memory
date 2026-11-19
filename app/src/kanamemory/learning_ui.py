@@ -905,7 +905,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             u.button(STUDY_ORIENTATION_TITLE, lambda w: self.show_study_orientation(w)))
 
     @page_view()
-    def show_study_orientation(self, widget=None, *, then=None, **kwargs):
+    def show_study_orientation(self, widget=None, *, then=None, changed=None, **kwargs):
         """The 学习取向 screen (design 12 UI1, D1, D2); ``then``: what to do after 确定 (default: back).
 
         Models from the presenter (with the focus part, UI6), page from
@@ -916,11 +916,24 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         from .domain import _utc
         from .study_path_runtime import StudyPathRuntimeMixin
         presenter = StudyPathRuntimeMixin.study_arrangement(self).presenter
-        model = presenter.orientation_model(_utc(None))
+        model = presenter.orientation_model(_utc(None), changed=changed)
         self.screen("study_orientation", STUDY_ORIENTATION_TITLE, *orientation_page(
             model, focus=presenter.focus_model(),
             on_confirm=lambda orientation, depth, focus: self._confirm_study_orientation(
-                orientation, depth, then, focus=focus)))
+                orientation, depth, then, focus=focus),
+            on_choose=lambda mode: self._choose_study_orientation(mode, then)))
+
+    def _choose_study_orientation(self, mode, then):
+        """A card's button on the 学习方式 screen: store ``mode`` at once (one re-arrangement), show the screen again.
+
+        The same service as the home's never-chosen card (StoreArrangement.choose_orientation); the screen
+        then says 已改为…，从下一题起生效 and the card says 当前使用.
+        """
+        if self.page != "study_orientation":
+            return
+        from .study_path_runtime import StudyPathRuntimeMixin
+        StudyPathRuntimeMixin.study_arrangement(self).choose_orientation(mode)
+        self.show_study_orientation(then=then, changed=mode)
 
     def _confirm_study_orientation(self, orientation, depth, then, *, focus=None):
         """确定 on the orientation screen: the depth (unless kept), the focus, the orientation, then ``then`` or back.
@@ -940,7 +953,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             self._practice_preferences = preferences.apply_kana_depth(depth)
         if focus is not None:
             arrangement.focus.change(focus)
-        preferences.set_orientation(orientation)
+        if orientation is not None:
+            # Since 2026-11-18 the cards store the orientation; 确定 confirms the depth and the focus and never
+            # stores an orientation the learner did not choose.
+            preferences.set_orientation(orientation)
         if then is not None:
             then()
             return

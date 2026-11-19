@@ -103,7 +103,9 @@ class Focus:
 
 @dataclass(frozen=True)
 class Weights:
-    """Level one: new against review. Level two, inside review: course against kana."""
+    """The two settings' parts: new against review (the tilt), course against kana inside review (the kana
+    tilt). rules/shares.unit_weights makes three units side by side of them (new, review x course,
+    review x kana)."""
 
     new: int
     review: int

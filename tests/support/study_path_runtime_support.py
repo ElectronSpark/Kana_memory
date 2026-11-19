@@ -76,7 +76,10 @@ def path_app(learning_app, monkeypatch):
     app = learning_app
     with ContentRepository(CONTENT) as repo:
         app.repo = repo
-        app._test_clock[0] = datetime.now(timezone.utc)
+        # Today's date, at a fixed midday: tests write history relative to this instant ("an hour ago",
+        # "ten minutes ago") and expect it on the same study day; the wall clock made them fail in the
+        # first minutes or hour after UTC midnight (the store's study day is UTC).
+        app._test_clock[0] = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
         monkeypatch.setattr(domain, "_utc", lambda value=None: value or app._test_clock[0])
         bind(app, StudyPathUIMixin)
         bind(app, StudyPathRuntimeMixin)

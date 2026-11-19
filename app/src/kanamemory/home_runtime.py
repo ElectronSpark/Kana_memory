@@ -108,6 +108,12 @@ def run_action(app, action: HomeAction, widget=None, *, open_word_drill: Callabl
         from .study_path_runtime import StudyPathRuntimeMixin
         StudyPathRuntimeMixin.study_arrangement(app).focus.clear()
         return app.refresh_home_actions()
+    if kind is HomeActionKind.CHOOSE_ORIENTATION:
+        # The never-chosen card (design 12 UI5): store the choice at once, one re-arrangement, then the home.
+        from .arrangement.model import Orientation
+        from .study_path_runtime import StudyPathRuntimeMixin
+        StudyPathRuntimeMixin.study_arrangement(app).choose_orientation(Orientation(action.orientation))
+        return app.refresh_home_actions()
     raise ValueError(f"Unknown home action: {kind}")
 
 

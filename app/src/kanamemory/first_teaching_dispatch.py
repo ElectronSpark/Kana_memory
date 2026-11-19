@@ -483,10 +483,10 @@ def _explicit_head(store, learning, intent, services, *, enabled_kinds, kana_kin
 
 def explicit_start_head(store, learning, normal_kana, normal_course, *, enabled_kinds, kana_kinds, now,
                         projection=None):
-    """The explicit-start part of choose_protected on its own: None or a protected (lane, head).
+    """The explicit-start part of choose_protected on its own (breadth first): None or a protected (lane, head).
 
-    Same conditions as there: a pending explicit start, an ordinary head of
-    priority 3 or more, and fewer than two unscored initial checks today.
+    Same conditions as there, except the two-unscored stop (B8, 2026-11-18):
+    a pending explicit start and an ordinary head of priority 3 or more.
     """
     now = _utc(now)
     from .explicit_learning_start import active as explicit_start
@@ -497,8 +497,6 @@ def explicit_start_head(store, learning, normal_kana, normal_course, *, enabled_
     if priority is None or priority[0] < 3:
         return None
     services = _services(store, now)
-    if services.stopped:
-        return None
     return _explicit_head(store, learning, intent, services, enabled_kinds=enabled_kinds,
                           kana_kinds=kana_kinds, now=now, projection=projection)
 
@@ -507,7 +505,7 @@ class ShareProbe(NamedTuple):
     """What share_probe found: a protected (lane, head) or None, and why there is none."""
     found: tuple | None
     waiting: bool   # a started block is inside its bridge wait; it becomes the candidate when ready
-    stopped: bool = False   # two unscored initial checks today: no new content for the day
+    stopped: bool = False   # kept for callers; share_probe no longer stops on unscored checks (B8, 2026-11-18)
 
 
 def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=None,
@@ -516,17 +514,17 @@ def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=N
 
     What _proportional_teaching gives once a block is earned, without the
     review count: first the blocks already started and not yet rated, then
-    fresh candidates of the four rotating pools. None when today's
-    finalized unscored initial checks are two or more, and while a started
-    block is inside its bridge wait (``waiting``). ``skip_teaching_ids``:
+    fresh candidates of the four rotating pools. None while a started
+    block is inside its bridge wait (``waiting``); since 2026-11-18 not
+    stopped by today's unscored initial checks (breadth first only uses it). ``skip_teaching_ids``:
     teaching heads the learner passed over in this run. ``scope``: the
     learner's focus scope, None for none: fresh candidates inside it first
     (_block_head). Reads only.
     """
     now = _utc(now)
     services = _services(store, now)
-    if services.stopped:
-        return ShareProbe(None, False, True)
+    # Design 12 B3/B8 (2026-11-18): under breadth first two unscored first checks no longer stop new
+    # content for the day (an unjudged typed answer is not a reason to stop teaching); 扎实 keeps the stop.
     anchors = _block_anchors(services.service, services.kana, services.ability, services.kana_ability)
     block = _block_head(store, learning, services.service, services.kana, anchors, earned=True,
                         enabled_kinds=enabled_kinds, kana_kinds=kana_kinds, now=now, projection=projection,

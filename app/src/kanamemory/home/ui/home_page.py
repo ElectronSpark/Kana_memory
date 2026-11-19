@@ -18,7 +18,7 @@ from collections.abc import Callable
 import kanamemory.ui_components as u
 from kanamemory.arrangement.ui.home_rows import focus_rows, home_rows, invite_rows
 from ..display import HomeModel
-from ..model import HomeAction
+from ..model import HomeAction, choose_orientation
 
 OnAction = Callable[[HomeAction, object], object]
 
@@ -31,12 +31,15 @@ def draw_home(model: HomeModel, *, action_slot, secondary_slot, stats_label, on_
     def open_orientation():
         return on_action(model.open_orientation, None)
 
+    # The never-chosen card first, so it cannot be overlooked (design 12 UI5, 2026-11-18).
+    card = invite_rows(model.rows, on_open_orientation=open_orientation,
+                       on_choose=lambda mode: on_action(choose_orientation(mode), None))
     # home_rows hands B10's button the note's section id, which model.note_add already carries.
-    card = home_rows(model.rows, on_open_orientation=open_orientation,
-                     on_add_next=lambda section_id: on_action(model.note_add, None))
+    card += home_rows(model.rows, on_open_orientation=open_orientation,
+                      on_add_next=lambda section_id: on_action(model.note_add, None))
     card += focus_rows(model.focus, on_open_orientation=open_orientation,
                        on_cancel=lambda: on_action(model.cancel_focus, None))
-    column = invite_rows(model.rows, on_open_orientation=open_orientation)
+    column = []
     card += [u.label(model.heading, size=22, bold=True, color=u.GREEN),
              u.label(model.hint, size=14, color=u.MUTED),
              u.button(model.primary.caption, press(model.primary.action), primary=True, multiline=True)]

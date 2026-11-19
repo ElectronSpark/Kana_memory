@@ -15,19 +15,32 @@ from .rules.depth import KanaDepth
 
 # Fixed wording (design 12 UI1, UI3, UI4, UI5).
 BREADTH_TITLE = "广度优先"
-BREADTH_TEXT = "每次学习都会穿插新内容（约占一半时间）；复习做不完就往后放一放，不必一次清空。"
-THOROUGH_TITLE = "扎实"
-THOROUGH_TEXT = "先把到期的复习做完，再学新的（原来的方式）。"
+BREADTH_TEXT = "新内容和复习穿插着来；复习做不完也继续学新的。"
+# The learner-facing name of THOROUGH since 2026-11-18 (it reads as the counterpart of 广度优先).
+THOROUGH_TITLE = "深度优先"
+THOROUGH_TEXT = "先把到期的复习做完，再学新的。"
 DEPTH_TITLES = {KanaDepth.RECOGNITION: "只认读", KanaDepth.SPELLING: "认读＋拼写",
                 KanaDepth.HANDWRITING: "认读＋拼写＋手写"}
 KEEP_TITLE = "保持现在的题型设置"
 KEEP_TEXT = "不改动现在的题型开关。"
 INVITE_TEXT = "可以调整学习方式：现在是先复习完再学新的。去看看"
+# The orientation never chosen (stored): said in plain words on the home card and the orientation screen.
+UNCHOSEN_TEXT = "学习方式还没有选。现在按“深度优先”运行：先把到期的复习做完，再学新的。"
+UNCHOSEN_PAGE_TEXT = "还没有选择学习方式。现在按“深度优先”运行：先把到期的复习做完，再学新的。"
+CHOOSE_BREADTH = "改为广度优先"
+KEEP_THOROUGH = "保持深度优先"
+# The orientation screen's two cards (2026-11-18): the one in force says so; the other has its button.
+IN_USE = "当前使用"
+RECOMMENDED = "推荐"
+SWITCH_TO = {"breadth": "改用广度优先", "thorough": "改用深度优先"}
+CHANGED_TEXT = "已改为{title}，从下一题起生效。"
+# 深度优先 holds new lessons back while reviews are due: the rule, said once per round on the practice page.
+THOROUGH_HOLD_TEXT = "深度优先：新课在一轮开始时、或答完 {count} 道到期复习后才开始；已加入 {lessons} 课还没学。"
 NO_NEW_TEXT = "已加入的内容都学过了"
 ADD_NEXT = "加入下一小节"   # the home page's existing caption, followed by " · <section title>"
 ADD_NEXT_AND_START = "加入下一小节并开始"
 REVIEW_FIRST = "先复习"
-PROGRESS_NOTE = "广度优先时复习排得晚是正常的；想少一些，可以放慢加入新小节、停掉不需要的方向，或改用扎实。"
+PROGRESS_NOTE = "广度优先时复习排得晚是正常的；想少一些，可以放慢加入新小节、停掉不需要的方向，或改用深度优先。"
 PROGRESS_HEADING = "时间与进度"
 REVIEWS_HEADING = "复习"
 NO_REVIEWS_TEXT = "还没有复习记录"
@@ -47,7 +60,8 @@ SCOPE_HEADING = "范围"
 TILT_TITLES = {Tilt.ONLY_NEW: "只学新的", Tilt.NEW: "多学新的", Tilt.EVEN: "不偏", Tilt.REVIEW: "多复习",
                Tilt.ONLY_REVIEW: "只复习"}
 KANA_TILT_TITLES = {KanaTilt.LESS: "假名少", KanaTilt.NORMAL: "正常", KanaTilt.MORE: "假名多"}
-TILT_THOROUGH_TEXT = "偏重只在广度优先时起作用；扎实是先把到期的复习做完再学新的，没有份额可调。"
+TILT_THOROUGH_TEXT = "偏重只在广度优先时起作用；深度优先是先把到期的复习做完再学新的，没有份额可调。"
+KANA_SHARE_TEXT = "假名只占自己的那一份；课程复习用不完的时间留给新内容。"
 SCOPE_TEXT = "范围内的先做；范围内都做完才轮到别的，别的复习会排得更晚。"
 CHANGE_TEXT = "改重点会重新排一次当前这一轮。"
 NO_SCOPE_TITLE = "不设范围"
@@ -64,7 +78,7 @@ SCOPE_KIND_TITLES = {"route": "路线", "node": "路线的一部分", "library":
 @dataclass(frozen=True)
 class OrientationOption:
     mode: Orientation
-    title: str   # 广度优先 / 扎实
+    title: str   # 广度优先 / 深度优先
     text: str    # the explanatory sentence of UI1
 
 
@@ -86,9 +100,11 @@ class OrientationModel:
     ``current_depth`` is the level the current switches match, None when none.
     ``depths`` are the three levels and, only when ``current_depth`` is None,
     a last option with level None that keeps the switches. ``preselected``
-    is the chosen orientation, or BREADTH when never chosen; use
-    preselected_depth(mode) for the depth to preselect when the learner picks
-    ``mode`` (None means the keep option).
+    is the orientation in force: the chosen one, or THOROUGH when never chosen
+    (nothing on the screen shows another one as active); use
+    preselected_depth(mode) for the depth to preselect (None means the keep
+    option). ``recommended`` (BREADTH) is marked 推荐 while nothing is chosen;
+    ``notice`` is the confirming line after a card's button stored a choice.
     """
 
     chosen: Orientation | None
@@ -98,6 +114,8 @@ class OrientationModel:
     preselected: Orientation
     breadth_depth: KanaDepth | None
     thorough_depth: KanaDepth | None
+    recommended: Orientation | None = None
+    notice: str | None = None
 
     def preselected_depth(self, mode: Orientation) -> KanaDepth | None:
         return self.breadth_depth if Orientation(mode) is Orientation.BREADTH else self.thorough_depth
@@ -134,7 +152,8 @@ class HomeRowsModel:
     """The arrangement's rows on the home page (UI2, UI3, UI5).
 
     ``invite`` is True when the orientation was never chosen; ``invite_text``
-    is then the UI5 line (it leads to the orientation screen), else None.
+    is then the card's sentence (UNCHOSEN_TEXT), else None; the card offers
+    ``choose_breadth`` and ``keep_thorough``, which store the choice at once.
     Under breadth only: ``progress_line`` (UI2; without its 7-day part when
     the clock window does not cover the 7 days, and None when the route is
     empty as well), ``usage_line`` (UI2, None when all three minutes are 0 or
@@ -148,6 +167,8 @@ class HomeRowsModel:
 
     invite: bool = False
     invite_text: str | None = None
+    choose_breadth: str = CHOOSE_BREADTH
+    keep_thorough: str = KEEP_THOROUGH
     progress_line: str | None = None
     usage_line: str | None = None
     note: SectionNote | None = None
@@ -216,7 +237,8 @@ class FocusModel:
     route page, or a scope that no longer resolves; titled as in
     ``scope_line``), then each enabled route, each usable content library,
     each family; titles are unique (a repeated one carries its kind).
-    ``drop_scope`` is the caption of the page's offer to pick "no scope"
+    ``kana_note`` is the sentence under the kana tilt (B4: kana takes only
+    its own share). ``drop_scope`` is the caption of the page's offer to pick "no scope"
     while the stored scope does not resolve. ``scope_text`` and
     ``change_text`` are the two sentences of UI6. Confirming calls the
     focus service's change() with the picked tilt, kana tilt and scope.
@@ -233,6 +255,7 @@ class FocusModel:
     kana_heading: str = KANA_TILT_HEADING
     scope_heading: str = SCOPE_HEADING
     tilt_note: str = TILT_THOROUGH_TEXT
+    kana_note: str = KANA_SHARE_TEXT
     scope_text: str = SCOPE_TEXT
     change_text: str = CHANGE_TEXT
     drop_scope: str = DROP_SCOPE

@@ -168,21 +168,34 @@ class TaughtRule:
     """Design 12 Q3 for one pass over prerequisites.
 
     Under breadth first a prerequisite whose teaching is done (a scored first
-    check, right or wrong) is met; gates.prerequisite_met decides. The
+    check, right or wrong) is met, and since 2026-11-18 (G2) also one whose
+    guide is complete and whose first check was attempted without a score;
+    gates.prerequisite_met decides. The
     orientation is read from the learner's store at most once per pass, and only
     when some prerequisite is taught but not independently ready.
     """
 
     def __init__(self, learning):
+        self._learning = learning
         self._store = getattr(learning, "store", None)
         self._met = None
 
     def met(self, saved) -> bool:
-        if saved is None or saved.get("stage") != "done":
+        """Taught: its teaching is done (a scored first check), or -- G2, 2026-11-18 -- its guide is complete
+        and its first check was attempted without a score (still asked again as before)."""
+        if saved is None:
+            return False
+        stage = saved.get("stage")
+        if stage != "done" and not (stage in {"bridge", "check"} and self._attempted(saved.get("id"))):
             return False
         if self._met is None:
             self._met = self._store is not None and self._read()
         return self._met
+
+    def _attempted(self, cid) -> bool:
+        queries = getattr(self._learning, "queries", None)
+        probe = getattr(queries, "course_has_attempted_check", None)
+        return bool(cid and probe is not None and probe(cid))
 
     def _read(self) -> bool:
         from .arrangement.rules.gates import prerequisite_met

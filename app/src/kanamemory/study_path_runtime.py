@@ -724,6 +724,30 @@ class StudyPathRuntimeMixin:
         courses = home_service(self).unqueued_courses(projection=read, round_limited=False)
         return bool(courses["ready"] or courses["instruction"] or courses["waiting"])
 
+    def _thorough_hold_notice(self, priority, now, read):
+        """Design 12 G3 under 深度优先 (chosen or never chosen): once per round, on the review page reached,
+        the rule that holds the added, untaught lessons back -- or None.
+
+        Only when the orientation in force is not breadth first, the head is an
+        ordinary due review (tier 3) and lessons are added and not taught yet.
+        The number is the reviews a teaching block needs now (8/16/32/64 by the
+        backlog's age, first_teaching_dispatch.teaching_review_threshold).
+        """
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self)
+        if arrangement.dispatcher.active() or priority is None or priority[0] != 3:
+            return None
+        from .home_runtime import home_service
+        lessons = home_service(self).untaught_lessons(now, projection=read)
+        if not lessons or not arrangement.hold_note_once():
+            return None
+        from .arrangement.display import THOROUGH_HOLD_TEXT, UNCHOSEN_TEXT
+        from .first_teaching_dispatch import teaching_review_threshold
+        text = THOROUGH_HOLD_TEXT.format(count=teaching_review_threshold(now.timestamp() - priority[1]),
+                                         lessons=lessons)
+        if arrangement.preferences.chosen_orientation() is None:
+            text = UNCHOSEN_TEXT + " " + text
+        return {"text": text, "new_ids": frozenset(), "anchor": None}
+
     def _share_dispatch(self, pending, current, normal_kana, kana_priority, course_priority, now, read, skipped,
                         kana_kinds, scope=None, rearrange=True):
         """Breadth-first dispatch (design 12 B2-B5): (protected (lane, head) or None, lane or None).
@@ -907,10 +931,15 @@ class StudyPathRuntimeMixin:
             inside["kana_started"] = opened_block(self.store, normal_kana["question"], now)
         lane = share_lane or self.store.teaching_queries.choose_lane(kana_priority, course_priority,
                            course_started=bool(current and current.get("new_dispatch_continue")), **inside)
+        hold = (StudyPathRuntimeMixin._thorough_hold_notice(
+                    self, kana_priority if lane == "kana" else course_priority, now, read)
+                if lane in {"kana", "course"} and share_lane is None else None)
         if lane == "kana":
             self.resume_practice(preserve_audio=True, **reuse)
+            place_enrollment_notice(self, hold)
         elif lane == "course":
             self.continue_learning(_projection=read)
+            place_enrollment_notice(self, hold)
         else:
             # Design 12 E1: while extra practice is on, an end or "only waiting" outcome is its next step.
             from .extra_practice_runtime import extra_button_rows, take_over

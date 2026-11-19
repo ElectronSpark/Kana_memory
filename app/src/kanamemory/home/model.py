@@ -42,6 +42,7 @@ class HomeActionKind(Enum):
     WORD_DRILL = "word_drill"
     ORIENTATION = "orientation"
     CANCEL_FOCUS = "cancel_focus"
+    CHOOSE_ORIENTATION = "choose_orientation"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ class HomeAction:
     WORD_DRILL    open_home_word_drill() (the only one that checks the page shown)
     ORIENTATION   show_study_orientation()
     CANCEL_FOCUS  the focus service's clear(), then the home redraws
+    CHOOSE_ORIENTATION  store ``orientation`` (the never-chosen card's two buttons) and re-arrange the
+                  main round once (StoreArrangement.choose_orientation), then the home redraws
     """
 
     kind: HomeActionKind
@@ -70,7 +73,13 @@ class HomeAction:
     then: HomeAction | None = None     # PRIMARY: CONTINUE, ADD_SECTIONS or ROUTE_PAGE
     route: RouteFacts | None = None    # PRIMARY: the current route as the refresh read it
     no_new_content: bool = False       # PRIMARY: B10's "nothing new to start" of the refresh
+    orientation: str | None = None     # CHOOSE_ORIENTATION: the Orientation value to store
 
 
 OPEN_ORIENTATION = HomeAction(HomeActionKind.ORIENTATION)
 CANCEL_FOCUS = HomeAction(HomeActionKind.CANCEL_FOCUS)
+
+
+def choose_orientation(mode) -> HomeAction:
+    """The never-chosen card's button for ``mode`` (an arrangement Orientation)."""
+    return HomeAction(HomeActionKind.CHOOSE_ORIENTATION, orientation=getattr(mode, "value", mode))

@@ -100,6 +100,21 @@ class StoreArrangement:
         self.probe_memo.rearranged(identities)
         _restart_main_round(self.store)
 
+    def hold_note_once(self) -> bool:
+        """True the first time it is asked in the current main round (design 12 G3's line, once per round)."""
+        from ..practice_round import round_id
+        return self.probe_memo.first_note(round_id(self.store))
+
+    def choose_orientation(self, mode) -> None:
+        """Store the learner's orientation (the home's never-chosen card) and re-arrange the main round once.
+
+        The kana depth and the focus are left as they are (the orientation
+        screen's 确定 can change those too); the restart is the one a focus
+        change makes, so what is in progress stays first.
+        """
+        self.preferences.set_orientation(mode)
+        _restart_main_round(self.store)
+
     def renew_after_break(self, now, *, leave_alone: Callable[[], bool] = lambda: False) -> bool:
         """Design 12 B11: a round does not outlive its sitting; True when it was re-arranged now.
 

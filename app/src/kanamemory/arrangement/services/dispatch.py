@@ -3,8 +3,9 @@
 Application layer without storage: it joins the learner's preferences, the
 study clock and the share rules, and asks a CandidateSource for the heads.
 The new-content head is expensive to find, so it is asked for only when it
-could be chosen: when no review is waiting, when new content is behind its
-share, or when the focus scope leaves no review candidate inside it.
+could be chosen: when no review is waiting, when new content would go before
+the review units that have a candidate (shares.prefer_new over those units),
+or when the focus scope leaves no review candidate inside it.
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ class ShareDispatcher:
         weights = shares.weights_for(self._preferences.focus())
         usage = self.usage(now)
         reviews = tuple(source.review_candidates())
-        could_win = (not reviews or shares.prefer_new(usage, weights)
+        could_win = (not reviews or shares.prefer_new(usage, weights, (c.unit for c in reviews))
                      or not any(candidate.in_scope for candidate in reviews))
         new = source.new_candidate() if could_win else None
         return shares.decide(usage, weights, (*reviews, *((new,) if new is not None else ())))

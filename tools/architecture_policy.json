@@ -160,7 +160,7 @@
   "app/src/kanamemory/arrangement/services/extra_session.py": ["__future__", "collections.abc", "datetime", "..model", "..ports", "..rules.extra", ".practice_deck", ".practice_sitting"],
   "app/src/kanamemory/arrangement/services/queue_practice.py": ["__future__", "collections", "collections.abc", "dataclasses", "datetime", "..model", "..ports", "..rules.reinforce", ".practice", ".practice_deck", ".practice_sitting"],
   "app/src/kanamemory/arrangement/ui/__init__.py": [],
-  "app/src/kanamemory/arrangement/ui/home_rows.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", ".section_note"],
+  "app/src/kanamemory/arrangement/ui/home_rows.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", "..model", ".section_note"],
   "app/src/kanamemory/arrangement/ui/orientation_page.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", "..model", "..rules.depth", ".focus_part"],
   "app/src/kanamemory/arrangement/ui/focus_part.py": ["__future__", "kanamemory.ui_components", "..display", "..model"],
   "app/src/kanamemory/arrangement/ui/focus_button.py": ["__future__", "collections.abc", "kanamemory.ui_components", "..display", "..model"],

@@ -150,6 +150,10 @@ class HomeOverviewService:
         have no queued question yet, so a running planned round cannot show them (design 12 B5)."""
         return frozenset(self._course_preview(projection=projection, round_limited=False)[1]["unqueued"])
 
+    def untaught_lessons(self, now, projection=None) -> int:
+        """Added lessons (and added abilities) with a queued question still to be taught (counts' "instruction")."""
+        return int(self._learning.counts(self._course_kinds(), now, projection=projection).get("instruction", 0))
+
     def unqueued_due(self, projection=None) -> frozenset[tuple[str, str]]:
         """(content id, ability) of course abilities that are answerable now but have no queued question
         (their question is created at the next collection), so a running planned round cannot serve them

@@ -29,8 +29,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
-from ..display import (BREADTH_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
-                       DIRECTION_TITLES, FOCUS_SET_TEXT, INVITE_TEXT, KANA_TILT_TITLES, KEEP_TEXT, KEEP_TITLE,
+from ..display import (BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
+                       DIRECTION_TITLES, FOCUS_SET_TEXT, INVITE_TEXT, UNCHOSEN_TEXT, KANA_TILT_TITLES, KEEP_TEXT, KEEP_TITLE,
                        NO_REVIEWS_TEXT, NO_SCOPE_TITLE, PASS_RATE_REVIEWS, PLAN_UNCHANGED_TEXT, SCOPE_GONE_TEXT,
                        SCOPE_GONE_TITLE, SCOPE_KIND_TITLES, SCOPE_TEXT, SET_FOCUS, SINGLE_KIND_UNCHANGED_TEXT,
                        THOROUGH_TEXT, THOROUGH_TITLE, TILT_TITLES, DayMinutes, DepthOption, FocusButtonModel,
@@ -176,7 +176,7 @@ class ArrangementPresenter:
 
     # UI1 -------------------------------------------------------------------
 
-    def orientation_model(self, now: datetime) -> OrientationModel:
+    def orientation_model(self, now: datetime, *, changed: Orientation | None = None) -> OrientationModel:
         """The orientation screen with the kana depth choice; the D2 numbers are the cards due at ``now``."""
         chosen = self._preferences.chosen_orientation()
         depth = self._preferences.depth
@@ -199,7 +199,10 @@ class ArrangementPresenter:
             orientations=(OrientationOption(Orientation.BREADTH, BREADTH_TITLE, BREADTH_TEXT),
                           OrientationOption(Orientation.THOROUGH, THOROUGH_TITLE, THOROUGH_TEXT)),
             depths=tuple(options), current_depth=current,
-            preselected=chosen or Orientation.BREADTH,
+            preselected=chosen or Orientation.THOROUGH,
+            recommended=Orientation.BREADTH if chosen is None else None,
+            notice=CHANGED_TEXT.format(title=BREADTH_TITLE if changed is Orientation.BREADTH else THOROUGH_TITLE)
+            if changed is not None else None,
             breadth_depth=KanaDepth.RECOGNITION if chosen is None else current,
             thorough_depth=current)
 
@@ -234,7 +237,7 @@ class ArrangementPresenter:
         """
         chosen = self._preferences.chosen_orientation()
         if chosen is not Orientation.BREADTH:
-            return HomeRowsModel(invite=chosen is None, invite_text=INVITE_TEXT if chosen is None else None)
+            return HomeRowsModel(invite=chosen is None, invite_text=UNCHOSEN_TEXT if chosen is None else None)
         days = self.study_days(now)
         cut = self._events.window_cut(now)
         # The window drops every event at or before its cut: it holds all of a study day after the cut's day.

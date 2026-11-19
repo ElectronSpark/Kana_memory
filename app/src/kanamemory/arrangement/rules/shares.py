@@ -1,21 +1,33 @@
-"""Sharing study time by weight in two levels (design 12 B4, H1).
+"""Sharing study time by weight among three units side by side (design 12 B4, H1).
 
-Pure. Level one: new content against review. Level two, inside review:
-course against kana. At each level the side with the smaller used time per
-weight goes next; a side without a candidate yields everything to the other.
-With a focus scope, the candidates inside the scope are shared first.
+Pure. The two settings give three weights: new content = tilt.new, course
+review = tilt.review x the course share, kana practice = tilt.review x the
+kana share (default 50 : 35 : 15). Among the units that have a candidate,
+the one with the smallest used time per weight goes next (ties: new, then
+course, then kana); a unit without a candidate does not compete, so the
+time it does not need is shared by the others by their own weights -- kana
+never inherits the course's review time. A unit of weight 0 (the two "only"
+tilts) goes only when no unit of positive weight has a candidate. With a
+focus scope, the candidates inside the scope are shared first.
+
+Until 2026-11-18 the time was shared in two levels (new against review,
+then course against kana inside review); with only kana due, half of the
+time became kana (design 12 T3).
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
-from ..model import Candidate, Decision, Focus, KanaTilt, Side, Tilt, Unit, Usage, Weights
+from ..model import Candidate, Decision, Focus, KanaTilt, Tilt, Unit, Usage, Weights
 from .focus import scope_first
 
 # Product parameters (design 12 section 11): starting values.
 TILT_WEIGHTS = {Tilt.ONLY_NEW: (100, 0), Tilt.NEW: (70, 30), Tilt.EVEN: (50, 50),
                 Tilt.REVIEW: (30, 70), Tilt.ONLY_REVIEW: (0, 100)}
 KANA_WEIGHTS = {KanaTilt.LESS: (85, 15), KanaTilt.NORMAL: (70, 30), KanaTilt.MORE: (40, 60)}
+
+# The order of the units for ties.
+ORDER = (Unit.NEW, Unit.COURSE, Unit.KANA)
 
 
 def weights_for(focus: Focus | None = None) -> Weights:
@@ -26,35 +38,45 @@ def weights_for(focus: Focus | None = None) -> Weights:
     return Weights(new, review, course, kana)
 
 
-def prefer_new(usage: Usage, weights: Weights) -> bool:
-    """Would new content go next if both sides had a candidate? (Ties go to new content.)"""
-    if weights.new == 0:
-        return False
-    if weights.review == 0:
-        return True
-    # usage.new / weights.new <= usage.review / weights.review, without dividing
-    return usage.new * weights.review <= usage.review * weights.new
+def unit_weights(weights: Weights) -> dict[Unit, int]:
+    """The three units' weights side by side, as whole numbers (new x 100 : review x course : review x kana)."""
+    return {Unit.NEW: weights.new * (weights.course + weights.kana),
+            Unit.COURSE: weights.review * weights.course,
+            Unit.KANA: weights.review * weights.kana}
+
+
+def _used(usage: Usage, unit: Unit) -> float:
+    return {Unit.NEW: usage.new, Unit.COURSE: usage.course, Unit.KANA: usage.kana}[unit]
+
+
+def choose_unit(usage: Usage, weights: Weights, present: Iterable[Unit]) -> Unit | None:
+    """The unit that goes next among ``present`` (the units with a candidate), or None for none."""
+    present = set(present)
+    units = [unit for unit in ORDER if unit in present]
+    if not units:
+        return None
+    by_unit = unit_weights(weights)
+    pool = [unit for unit in units if by_unit[unit] > 0]
+    if not pool:
+        # Only units of weight 0 are left (an "only" tilt): they share by their own level's weights.
+        by_unit = {Unit.NEW: 1, Unit.COURSE: max(weights.course, 1), Unit.KANA: max(weights.kana, 1)}
+        pool = units
+    best = pool[0]
+    for unit in pool[1:]:
+        # used(unit) / w(unit) < used(best) / w(best), without dividing; equal keeps the earlier unit
+        if _used(usage, unit) * by_unit[best] < _used(usage, best) * by_unit[unit]:
+            best = unit
+    return best
+
+
+def prefer_new(usage: Usage, weights: Weights, reviews: Iterable[Unit] = (Unit.COURSE, Unit.KANA)) -> bool:
+    """Would new content go next if it had a candidate, beside review candidates of ``reviews``?"""
+    return choose_unit(usage, weights, (Unit.NEW, *reviews)) is Unit.NEW
 
 
 def prefer_course(usage: Usage, weights: Weights) -> bool:
-    """Would course review go before kana practice if both had a candidate? (Ties go to the course.)"""
-    if weights.course == 0:
-        return False
-    if weights.kana == 0:
-        return True
-    return usage.course * weights.kana <= usage.kana * weights.course
-
-
-def choose_side(usage: Usage, weights: Weights, *, has_new: bool, has_review: bool) -> Side | None:
-    if has_new and has_review:
-        return Side.NEW if prefer_new(usage, weights) else Side.REVIEW
-    return Side.NEW if has_new else Side.REVIEW if has_review else None
-
-
-def choose_review(usage: Usage, weights: Weights, *, has_course: bool, has_kana: bool) -> Unit | None:
-    if has_course and has_kana:
-        return Unit.COURSE if prefer_course(usage, weights) else Unit.KANA
-    return Unit.COURSE if has_course else Unit.KANA if has_kana else None
+    """Would course review go before kana practice if both had a candidate and new content none?"""
+    return choose_unit(usage, weights, (Unit.COURSE, Unit.KANA)) is Unit.COURSE
 
 
 def decide(usage: Usage, weights: Weights, candidates: Sequence[Candidate]) -> Decision:
@@ -76,9 +98,4 @@ def decide(usage: Usage, weights: Weights, candidates: Sequence[Candidate]) -> D
     eligible = {candidate.unit: candidate for candidate in scope_first(tuple(by_unit.values()))}
     if len(eligible) == 1:
         return Decision(next(iter(eligible.values())), "scope")
-    side = choose_side(usage, weights, has_new=Unit.NEW in eligible,
-                       has_review=Unit.COURSE in eligible or Unit.KANA in eligible)
-    if side is Side.NEW:
-        return Decision(eligible[Unit.NEW], "share")
-    unit = choose_review(usage, weights, has_course=Unit.COURSE in eligible, has_kana=Unit.KANA in eligible)
-    return Decision(eligible[unit], "share")
+    return Decision(eligible[choose_unit(usage, weights, eligible)], "share")
