@@ -1062,6 +1062,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         begin(self.store, restart_finished=widget is not None)
         # Sealed before this action: the queueing below adds nothing.
         sealed_before = sealed(self.store)
+        # A round about to be collected waits for the retired-template pass (retired_template_pass).
+        from .retired_template_pass import round_must_wait
+        if not sealed_before and round_must_wait(self, lambda: self.continue_learning()):
+            return
         enabled = self.learning_preferences()["enabled"]
         if AUDIO_WORD_KIND in enabled:
             self.learning_store.admit_word_listening(enabled_kinds=enabled)

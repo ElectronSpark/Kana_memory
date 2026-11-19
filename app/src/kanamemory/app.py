@@ -346,6 +346,11 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         # One CPU-heavy worker at a time (each holds the GIL in long Python
         # stretches): the reviewed-example index, then the example service
         # (otherwise built on the UI thread by the first example card).
+        # First, before a learner action can begin a round: pending questions of a template the
+        # installed content retired (retired_template_pass; unchanged content: one setting read).
+        # The scan runs on a worker, the replacements as their own task on this connection.
+        from .retired_template_pass import start as replace_retired_templates
+        await replace_retired_templates(self)
         from .learning_conditions import _reviewed_index
         await asyncio.to_thread(_reviewed_index)
         await KanaMemory.prewarm_examples(self)

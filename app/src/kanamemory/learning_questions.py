@@ -376,25 +376,66 @@ def retired_practice_variants(item, templates):
     Retired templates remain reconstructible for saved questions and history.
     Custom lessons and model-authored flags cannot retire local material.
     """
-    from .material_review import item_fingerprint
     if item.get('ai_generated') or not isinstance(templates, dict):
         return frozenset()
     result = set(_cognate_mapping_variants(item, templates))
-    entries = _PRACTICE.get('template_retirements', {}).get(item.get('id'), {})
-    if not entries:
-        return frozenset(result)
-    retired = entries.get(item_fingerprint(item), {})
-    if not isinstance(retired, dict):
-        raise ValueError('Invalid exact template retirement')
-    for kind, hashes in retired.items():
-        if (not isinstance(hashes, list) or any(not isinstance(value, str)
-                or re.fullmatch(r'[0-9a-f]{64}', value) is None for value in hashes)):
-            raise ValueError('Invalid retired template fingerprints')
-        fingerprints = set(hashes)
+    for kind, fingerprints in _exact_retirements(item).items():
         for variant, raw in enumerate(templates.get(kind, [])):
             if _template_fingerprint(raw) in fingerprints:
                 result.add((kind, variant))
     return frozenset(result)
+
+
+def _exact_retirements(item):
+    """kind -> retired raw-template fingerprints of the installed content for this exact lesson
+    (the pack's template_retirements, keyed by lesson id and lesson fingerprint); {} for none."""
+    from .material_review import item_fingerprint
+    if not isinstance(item, dict) or item.get('ai_generated'):
+        return {}
+    entries = _PRACTICE.get('template_retirements', {}).get(item.get('id'), {})
+    if not entries:
+        return {}
+    retired = entries.get(item_fingerprint(item), {})
+    if not isinstance(retired, dict):
+        raise ValueError('Invalid exact template retirement')
+    result = {}
+    for kind, hashes in retired.items():
+        if (not isinstance(hashes, list) or any(not isinstance(value, str)
+                or re.fullmatch(r'[0-9a-f]{64}', value) is None for value in hashes)):
+            raise ValueError('Invalid retired template fingerprints')
+        result[kind] = frozenset(hashes)
+    return result
+
+
+def retirement_ids():
+    """Lesson ids for which the installed content retires any template (a cheap first filter)."""
+    return frozenset(_PRACTICE.get('template_retirements', {}))
+
+
+def template_retired(item, question):
+    """Whether a stored question's own raw template is one the installed content retired for this
+    exact lesson (template_retirements; not the selection-only cognate exclusions).
+
+    Proven only for a question that the lesson's own factory rebuilds exactly
+    (question_dependencies.factory_matches): its frozen practice_source names the template, else
+    the template is the one its variant builds from. Any other question is not retired here.
+    """
+    if not isinstance(question, dict):
+        return False
+    fingerprints = _exact_retirements(item).get(question.get('kind'))
+    if not fingerprints:
+        return False
+    from .question_dependencies import factory_matches
+    if not factory_matches(question, item):
+        return False
+    source = question.get('practice_source')
+    if isinstance(source, dict) and isinstance(source.get('template_sha256'), str):
+        return source['template_sha256'] in fingerprints
+    try:
+        raw = variant_template(item, question['kind'], question['variant'])
+    except (ValueError, KeyError, TypeError, IndexError, ZeroDivisionError):
+        return False
+    return _template_fingerprint(raw) in fingerprints
 
 
 COGNATE_CLASSES = ("S", "P", "D", "E")

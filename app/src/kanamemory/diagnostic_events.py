@@ -36,6 +36,8 @@ OPERATIONS = frozenset({
     "practice_setup_draft",
     # study_path_catalog: the given beginning of the main route lists a lesson before its prerequisite.
     "main_route_order",
+    # retired_template_pass: the start-up replacement of pending questions of a retired template.
+    "retired_template_pass",
 })
 STAGES = frozenset({"play", "restart", "save", "commit", "sync", "refresh", "request", "read", "decode",
                     "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal",

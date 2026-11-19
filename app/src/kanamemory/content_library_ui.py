@@ -38,6 +38,8 @@ import asyncio
 
 from . import content_library_rules as rules
 from . import content_library_signing as signing
+from . import library_restart
+from . import retired_template_pass
 from . import ui_components as u
 from .app_clock import utc_now
 from .content_availability import LIBRARY_CHANGE_NOTE
@@ -51,6 +53,18 @@ RESTART_HOW = "重启指完全关闭应用再打开：电脑上关闭窗口；�
 # Where the platform can restart the process itself (process_restart): the libraries page offers it.
 RESTART_NOW = "立即重启"
 RESTART_NOW_HINT = "可在内容库页点「立即重启」。"
+PENDING_NOTE = "内容库有变更，重启应用后生效；重启前仍按当前内容出题。"
+# After a saved change that needs a restart, the page restarts the app by itself through 立即重启's own
+# path after a short countdown (library_restart.SECONDS) that one button cancels (several changes in a row).
+AUTO_RESTART_NOTE = "变更已保存，{seconds} 秒后自动重启应用。"
+RESTART_LATER = "稍后再重启"
+# One sentence after today's note when the automatic restart did not happen, by why.
+NO_AUTO_RESTART = {"unsupported": "应用没有自动重启：这台设备上应用不能自行重启。",
+                   "blocked": "应用没有自动重启：备份、恢复或练习正在进行。",
+                   "refused": "应用没有自动重启：还有未保存的内容或进行中的操作，应用未能正常关闭。",
+                   "failed": "应用没有自动重启：重启时出错。"}
+# Where the app reports content changes: the start-up pass of retired_template_pass replaced N questions.
+RETIRED_TEMPLATES_REPLACED = "题库已更新：{count} 道待做的题已换成新题。"
 FAMILY_TITLES = {"word": "词汇", "grammar": "语法", "pronunciation": "读音规则", "kana": "假名", "other": "其他"}
 LISTED = 10
 REGISTRY_SIGNATURE_TEXT = {"unsigned": "未签名", "unverified": "签名未验证", "verified": "签名已验证",
@@ -156,22 +170,111 @@ class ContentLibraryUIMixin:
 
     async def restart_for_library_change(self, widget=None, **kwargs):
         """立即重启: close as on a normal exit, then a new process loads the saved libraries."""
+        self._cancel_library_restart(render=False)  # one restart at a time: the countdown ends here
+        outcome, reason = await self._restart_through_close()
+        if outcome == "blocked":
+            self.alert(reason)
+        elif outcome == "unsupported":
+            self.alert(RESTART_HOW)
+        # "refused": the close said why (an unsaved draft, a running backup, ...); nothing was closed
+
+    async def _restart_through_close(self):
+        """The one restart path (立即重启 and the automatic restart): the App's normal close, then the
+        platform's restart. Returns (why it did not restart, the blocking reason): "blocked" (backup,
+        restore or a practice round), "unsupported" (no restart on this platform), "refused" (the close
+        refused; nothing was closed). A platform that refuses after the close ends the app as before."""
         reason = self._content_library_blocked()
         if reason:
-            self.alert(reason)
-            return
+            return "blocked", reason
         if not self._can_restart():
-            self.alert(RESTART_HOW)
-            return
+            return "unsupported", None
         if not self._close_for_restart():
-            return  # the close said why (an unsaved draft, a running backup, ...); nothing was closed
+            return "refused", None
         if self._restart_process():
-            return  # a real restart never returns
+            return "restarted", None  # a real restart never returns
         # The platform refused: the stores are closed, so the app ends here.
         try:
             await self.main_window.dialog(u.toga.InfoDialog("未能重启", "未能自动重启。" + RESTART_HOW))
         finally:
             self.exit()
+        return "ended", None
+
+    # ------------------------------------------------------------ automatic restart (library_restart)
+
+    def _arm_library_restart(self):
+        """After a saved change that needs a restart, on the libraries page just rebuilt for it: start
+        the countdown (a running one starts again). True when it runs; else the page's note says why
+        the app will not restart by itself and the caller says what it said before."""
+        state = library_restart.of(self)
+        self._cancel_library_restart(render=False)
+        state.note = None
+        slot = state.slot
+        if slot is None or self.page != "content_libraries":
+            return False  # nothing pending, or the page was not rebuilt (a backup holds the screen)
+        if not self._can_restart():
+            state.note = NO_AUTO_RESTART["unsupported"]
+            self._render_restart_notice(slot)
+            return False
+        if not callable(getattr(getattr(self, "loop", None), "call_later", None)):
+            return False  # no timer (a fixture without an event loop): today's note and button
+        state.start(self._page_token, slot, self._schedule_library_restart_second)
+        self._render_restart_notice(slot)
+        return True
+
+    def _schedule_library_restart_second(self, countdown):
+        from .draft_debounce import call_later_awake
+        return call_later_awake(self.loop, 1, self._tick_library_restart, countdown)
+
+    def _tick_library_restart(self, countdown):
+        """One second of the countdown. Any screen change but a rebuild of the libraries page, or a
+        closing app, ends it without a restart; at zero the restart takes 立即重启's path."""
+        current = (not getattr(self, "_backup_closing", False) and self.page == "content_libraries"
+                   and self._page_token == countdown.token)
+        step = library_restart.of(self).tick(countdown, current=current,
+                                             schedule=self._schedule_library_restart_second)
+        if step in ("ended", "count"):
+            self._render_restart_notice(countdown.slot)
+        elif step == "restart":
+            self.loop.create_task(self._automatic_library_restart(countdown))
+
+    async def _automatic_library_restart(self, countdown):
+        try:
+            outcome, _ = await self._restart_through_close()
+        except Exception as error:  # noqa: BLE001 - the page keeps today's note and button
+            from .diagnostic_events import record_error
+            record_error("content_library", "restart", error)
+            outcome = "failed"
+        if outcome in NO_AUTO_RESTART:
+            library_restart.of(self).note = NO_AUTO_RESTART[outcome]
+            if not getattr(self, "_backup_closing", False):
+                self._render_restart_notice(countdown.slot)
+
+    def postpone_library_restart(self, widget=None, **kwargs):
+        """稍后再重启: the countdown ends; the note is today's, with 立即重启."""
+        self._cancel_library_restart()
+
+    def _cancel_library_restart(self, *, render=True):
+        countdown = library_restart.of(self).cancel()
+        if countdown is not None and render:
+            # Also a page kept for Back shows today's note, never a countdown that no longer runs.
+            self._render_restart_notice(countdown.slot)
+
+    def _render_restart_notice(self, slot):
+        """The pending-change note: the countdown with 稍后再重启, else today's note (立即重启 where the
+        platform can restart, else how to restart by hand) with the sentence on why it did not restart."""
+        state = library_restart.of(self)
+        slot.clear()
+        if state.countdown is not None and state.countdown.slot is slot:
+            slot.add(self.note(AUTO_RESTART_NOTE.format(seconds=state.countdown.remaining)),
+                     u.button(RESTART_LATER, self.postpone_library_restart, primary=True))
+            return
+        note = state.note or ""
+        if self._can_restart():
+            slot.add(self.note(PENDING_NOTE + note),
+                     u.button(RESTART_NOW, lambda w: self.loop.create_task(self.restart_for_library_change()),
+                              primary=True))
+        else:
+            slot.add(self.note(PENDING_NOTE + note + RESTART_HOW))
 
     def restart_for_pending_library_change(self):
         """At start-up, before any page: the App started again in this process (Android re-created
@@ -255,6 +358,15 @@ class ContentLibraryUIMixin:
 
     @page_view()
     def show_content_libraries(self, widget=None, **kwargs):
+        # A countdown survives only a rebuild of the very page that shows it (a change, a focus button);
+        # coming here from any other page ends it, and the sentence on why it did not restart.
+        state = library_restart.of(self)
+        rebuilt = getattr(self, "page", None) == "content_libraries"
+        if not state.follows(rebuilt=rebuilt, token=self._page_token):
+            self._cancel_library_restart()
+        if not rebuilt:
+            state.note = None
+        state.slot = None
         self._discard_content_library_inspection()
         service = self.content_library_service()
         children = []
@@ -263,16 +375,22 @@ class ContentLibraryUIMixin:
             pending = service.pending_restart()
             mismatch = service.root_mismatch()
         except Exception as error:
+            self._cancel_library_restart(render=False)
             self.screen("content_libraries", "内容库", u.label("无法读取内容库设置：" + _message(error), size=14),
                         u.button("返回", self.go_back))
             return
+        replaced = retired_template_pass.replaced_count(self)
+        if replaced:
+            children.append(self.note(RETIRED_TEMPLATES_REPLACED.format(count=replaced)))
+        slot = None
         if pending:
-            if self._can_restart():
-                children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。"))
-                children.append(u.button(RESTART_NOW, lambda w: self.loop.create_task(self.restart_for_library_change()),
-                                         primary=True))
-            else:
-                children.append(self.note("内容库有变更，重启应用后生效；重启前仍按当前内容出题。" + RESTART_HOW))
+            slot = u.col()
+            if state.countdown is not None:
+                state.countdown.slot = slot
+            self._render_restart_notice(slot)
+            children.append(slot)
+        else:
+            self._cancel_library_restart(render=False)
         if mismatch:
             children.append(self.note("内容库目录与本次启动载入的目录不一致，导入的库暂未载入；请重启应用。"))
         imported = [row for row in rows if row["source_kind"] == "file"]
@@ -314,6 +432,10 @@ class ContentLibraryUIMixin:
         children.append(self.note("库文件只含数据，不含代码；安装与移除在重启后生效，" + LIBRARY_CHANGE_NOTE
                                   + "。已学内容的记录、到期与草稿不随库变化。"))
         self.screen("content_libraries", "内容库", *children)
+        if self.page == "content_libraries":
+            state.slot = slot
+            if state.countdown is not None:
+                state.countdown.token = self._page_token
 
     async def add_content_library(self, widget=None, **kwargs):
         if getattr(self, "_content_library_request", False):
@@ -323,6 +445,7 @@ class ContentLibraryUIMixin:
             self.alert(reason)
             return
         self._content_library_request = True
+        self._cancel_library_restart()  # no restart while the file is being chosen and checked
         token, origin = self._page_token, self.page
         try:
             data = await self.platform.import_library_pack()
@@ -504,9 +627,11 @@ class ContentLibraryUIMixin:
             self.show_content_libraries()
             return
         title = entry["summary"].get("title", entry["library_id"])
-        self.alert(f"已安装 {title}，重启应用后生效。" + self._restart_hint() if entry["enabled"]
-                   else f"已安装 {title}；这个内容库仍保持停用，启用并重启应用后才会载入。")
         self.show_content_libraries()
+        if not entry["enabled"]:  # nothing to restart for: it stays off until enabled
+            self.alert(f"已安装 {title}；这个内容库仍保持停用，启用并重启应用后才会载入。")
+        elif not self._arm_library_restart():
+            self.alert(f"已安装 {title}，重启应用后生效。" + self._restart_hint())
 
     def toggle_content_library(self, library_id, control):
         if getattr(self, "_content_library_reverting", False):
@@ -524,15 +649,19 @@ class ContentLibraryUIMixin:
                 self._content_library_reverting = False
             self.alert(_message(error))
             return
-        self.alert(("已启用，重启应用后载入。" + self._restart_hint() if control.value
-                    else "已停用：" + LIBRARY_CHANGE_NOTE + "。"))
+        enabled = bool(control.value)
         self.show_content_libraries()
+        if not self._arm_library_restart():
+            self.alert(("已启用，重启应用后载入。" + self._restart_hint() if enabled
+                        else "已停用：" + LIBRARY_CHANGE_NOTE + "。"))
 
     async def remove_content_library(self, library_id):
         reason = self._content_library_blocked()
         if reason:
             self.alert(reason)
             return
+        # No restart while the learner decides: the countdown ends here (a removal starts a new one).
+        self._cancel_library_restart()
         token, origin = self._page_token, self.page
         service = self.content_library_service()
         try:
@@ -544,5 +673,6 @@ class ContentLibraryUIMixin:
         except Exception as error:
             self.alert("未能移除内容库：" + _message(error))
             return
-        self.alert("已移除，重启应用后生效。进度记录已保留。" + self._restart_hint())
         self.show_content_libraries()
+        if not self._arm_library_restart():
+            self.alert("已移除，重启应用后生效。进度记录已保留。" + self._restart_hint())

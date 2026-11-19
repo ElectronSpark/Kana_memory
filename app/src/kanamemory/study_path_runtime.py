@@ -26,15 +26,15 @@ def skipped_teaching_ids(app):
     return frozenset(getattr(app, "_guide_skipped_ids", None) or ())
 
 
-def show_continue_wait(app, page, loop):
-    """The short "正在准备题目…" page; after CONTINUE_WAIT_SECONDS it offers retry.
+def show_continue_wait(app, page, loop, *, text="正在准备题目…"):
+    """The short "正在准备题目…" page (``text``: its status line); after CONTINUE_WAIT_SECONDS it offers retry.
 
     The page itself (and so a late worker result) stays valid; only controls
     are added. Returns False when the page could not be shown.
     """
     from . import ui_components as u
     late = u.col()
-    app.screen(page, "继续学习", u.label("正在准备题目…", size=17, color=u.MUTED), late,
+    app.screen(page, "继续学习", u.label(text, size=17, color=u.MUTED), late,
                u.button("回到今日", app.leave_learning))
     if app.page != page:
         return False
@@ -542,6 +542,11 @@ class StudyPathRuntimeMixin:
         StudyPathRuntimeMixin._renew_round_after_break(self)
         from .practice_round import begin, sealed, seal, frozen_priority, native_key, mark_finished
         begin(self.store, restart_finished=not _checkpoint_saved)
+        # A round about to be collected waits for the pass that replaces pending questions of a
+        # retired template (retired_template_pass), so it is collected with the new questions.
+        from .retired_template_pass import round_must_wait
+        if round_must_wait(self, lambda: self.continue_study_path(_checkpoint_saved=True)):
+            return
         StudyPathRuntimeMixin.study_arrangement(self).dispatched(_utc(None))
         # Personal-content head/hold reads share one index (WP7a) up to the
         # queued course questions; writes run in transactions (read live) and

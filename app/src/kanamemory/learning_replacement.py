@@ -142,9 +142,12 @@ class LearningReplacementStore:
             raise ValueError('请先结束正在进行的掌握检查。')
         return item, _source(self.learning, cid, scope)
 
-    def prepare_question(self, question_id, *, now=None, diagnostic_retirement=None, withdrawn=False):
+    def prepare_question(self, question_id, *, now=None, diagnostic_retirement=None, withdrawn=False,
+                         retired_template=False):
         """withdrawn: also accept an unanswered task of a form the app no longer asks
         (learning_questions.withdrawn_task); such a task needs no blocked material to be exchanged.
+        retired_template: also accept an unanswered task whose own raw template the installed content
+        retired for its exact lesson (learning_questions.template_retired; retired_template_pass).
         The receipt and every other check are those of an ordinary replacement."""
         from .learning_store import _utc, _latest_due
         from .learning_questions import build_learning_question
@@ -179,7 +182,10 @@ class LearningReplacementStore:
         if withdrawn:
             from .learning_questions import withdrawn_task
             withdrawn = withdrawn_task(current)
-        if unit['suspended'] or not (diagnostic_retirement or withdrawn
+        if retired_template:
+            from .learning_questions import template_retired
+            retired_template = template_retired(source, json.loads(row['snapshot_json']))
+        if unit['suspended'] or not (diagnostic_retirement or withdrawn or retired_template
                                      or self.learning.content_question_blocked(item, current)):
             raise ValueError('这道题无需替换，或对应能力已暂停。')
         if item['stage'] == 'guide' and item['checkpoint'].get('guide_question'):
@@ -209,6 +215,37 @@ class LearningReplacementStore:
             if original['exposed'] or original['draft'].get('hint_used'):
                 value['carried_help']['assisted'] = True
         return self._prepare(value, before)
+
+    def retired_template_ids(self):
+        """Read only: unanswered pending questions whose own template the installed content retired
+        (learning_questions.template_retired), those without a stored earliest time and then the
+        earliest first (a priority, not a schedule; as LearningStore.withdrawn_pending_ids).
+        prepare_question(retired_template=True) decides each one again with every other check."""
+        from .learning_questions import retirement_ids, template_retired
+        from .ability_teaching import scope_for
+        lessons = retirement_ids()
+        if not lessons:
+            return []
+        sources, found = {}, []
+        for row in self.db.execute(
+                """SELECT q.question_id,q.snapshot_json,u.content_id,u.ability FROM learning_question q
+                   JOIN learning_unit u ON u.unit_id=q.unit_id
+                   WHERE q.status='pending' AND q.result_json IS NULL
+                   ORDER BY q.not_before_utc IS NOT NULL,q.not_before_utc,q.rowid""").fetchall():
+            if row['content_id'] not in lessons:
+                continue
+            key = (row['content_id'], row['ability'])
+            if key not in sources:
+                try:
+                    sources[key] = _source(self.learning, row['content_id'], scope_for(self.db, *key))
+                except (ValueError, KeyError, TypeError):
+                    sources[key] = None  # no readable lesson: prepare_question could not replace it either
+            try:
+                if sources[key] is not None and template_retired(sources[key], json.loads(row['snapshot_json'])):
+                    found.append(row['question_id'])
+            except (ValueError, KeyError, TypeError):
+                continue  # an invalid retirement table or snapshot: not proven retired
+        return found
 
     def prepare_guide(self, content_id, scope=None, *, now=None):
         from .learning_store import _utc
