@@ -16,6 +16,8 @@ OPERATIONS = frozenset({
     "feedback_analysis", "feedback_revision", "feedback_batch", "feedback_impact",
     "feedback_plan", "feedback_support", "tutor_request",
     "diagnostic_mid", "diagnostic_scope", "diagnostic_dialogue", "answer_autoplay",
+    # P1: the quiet automatic start of a question prompt that must be heard.
+    "prompt_autoplay",
     "platform_back", "platform_link", "platform_index", "platform_model",
     "platform_tts", "platform_recording", "feedback_review", "feedback_field",
     "feedback_sources", "feedback_delete",
@@ -35,7 +37,7 @@ OPERATIONS = frozenset({
     # study_path_catalog: the given beginning of the main route lists a lesson before its prerequisite.
     "main_route_order",
 })
-STAGES = frozenset({"play", "save", "commit", "sync", "refresh", "request", "read", "decode",
+STAGES = frozenset({"play", "restart", "save", "commit", "sync", "refresh", "request", "read", "decode",
                     "record_failure", "cancel", "callback", "cleanup", "schedule", "reveal",
                     "submit"})
 ERROR_TYPES = frozenset({"Exception", "RuntimeError", "ValueError", "TypeError",

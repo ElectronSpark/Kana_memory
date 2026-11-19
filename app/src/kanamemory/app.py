@@ -49,7 +49,7 @@ from .word_romaji_answer import analyze_word_romaji
 from .word_romaji_units import compose_romaji_parts, analyze_romaji_parts
 from .spelling_display import build_spelling_comparison
 from .answer_feedback import build_answer_feedback
-from .answer_autoplay import autoplay_answer
+from .answer_autoplay import autoplay_answer, autoplay_prompt
 from .word_spelling_practice import build_spelling_corrections
 from .word_romaji_practice import (build_word_romaji_drill, word_romaji_pool_counts,
     WORD_ROMAJI_COLLECTIONS, WORD_DRILL_DIRECTIONS, WORD_DIRECTION_KINDS)
@@ -659,6 +659,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             if self.answer_revealed:
                 self.question_notice.text = ("已查看答案或学习提示，本题不计入无提示回忆。"
                     if self.question.kind in WORD_PRACTICE_KINDS else "已查看答案或学习提示，本题仅安排再学一次。")
+            # Shown again by navigation: a must-hear prompt not yet heard starts once.
+            KanaMemory._autoplay_question_prompt(self)
         if self.page == "home":
             self.store.practice_lane = "main"
             self.refresh_model_ui()
@@ -3944,6 +3946,7 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                      *conversion,
                      ui.row(ui.button("删除末字", lambda w, question=self.question, **kw: self.delete_word_key() if self.question is question and self.page == "word_question" else None, flex=1, margin_right=6), ui.button("提交答案", lambda w, question=self.question, **kw: self.check_answer(self.word_answer) if self.question is question and self.page == "word_question" else None, flex=1)),
                      keyboard if scroll_page else toga.ScrollContainer(content=keyboard, horizontal=True, style=Pack(flex=1, margin_bottom=6)), scroll=scroll_page)
+        KanaMemory._autoplay_question_prompt(self)
 
     def append_word_key(self, text):
         self.word_answer += text
@@ -4012,6 +4015,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                      self.ink_result_box if scroll_page else toga.ScrollContainer(content=self.ink_result_box, horizontal=False, style=Pack(flex=1))]
         self.screen("free_ink" if free else "ink_question", title, *children, scroll=scroll_page)
         self._redraw_ink()
+        if not free:
+            KanaMemory._autoplay_question_prompt(self)
 
     def _refresh_ink_action(self):
         ready = self.model_state == "ready" and not self._ink_busy
@@ -4203,7 +4208,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         else:
             self.choose_practice_answer(text, question)
 
-    async def play_question_audio(self, widget=None, **kwargs):
+    async def play_question_audio(self, widget=None, *, automatic=False, **kwargs):
+        """The prompt button's play path; automatic=True is its quiet start when shown."""
         question, token = self.question, self._page_token
         self._audio_serial += 1
         serial = self._audio_serial
@@ -4224,8 +4230,30 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
                 self.question_audio_ok = True
                 self._checkpoint()
         except Exception as exc:
-            if token == self._page_token and serial == self._audio_serial:
+            if automatic:
+                # No dialog on each question for a missing voice; the visible
+                # button still reports the usual error when it is tapped.
+                from .diagnostic_events import record_error
+                record_error("prompt_autoplay", "play", exc)
+            elif token == self._page_token and serial == self._audio_serial:
                 self.alert(str(exc))
+
+    def _autoplay_question_prompt(self):
+        """Start a must-hear practice prompt once when shown; its button stays for replays.
+
+        Must hear: the pages that show the sound as the prompt (听音手写假名 on the
+        ink page, 听词选假名 on the word page). Other kinds show the symbol, romaji
+        or meaning and stay silent. Success records what the button records.
+        """
+        question = self.question
+        must_hear = {"kana_handwriting": "ink_question", "word_kana": "word_question"}
+        if (question is None or self.page != must_hear.get(question.kind)
+                or getattr(question, "metadata", {}).get("word_romaji_drill")):
+            return False
+        key = ("practice", getattr(self, "session_id", None), getattr(self, "question_index", None), question.kind)
+        return autoplay_prompt(self, key, lambda: KanaMemory.play_question_audio(self, automatic=True),
+                               heard=lambda: bool(getattr(self, "question_audio_ok", False))
+                               or self.question is not question)
 
     def speak_text(self, text):
         token = self._page_token

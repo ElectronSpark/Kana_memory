@@ -759,6 +759,7 @@ tests/test_ai_form_connection_refresh.py
 tests/test_ai_request_boundary.py
 tests/test_ai_service.py
 tests/test_answer_autoplay.py
+tests/test_prompt_autoplay.py
 tests/test_answer_option_ui.py
 tests/test_append_queue_ui.py
 tests/test_assessment_parts.py

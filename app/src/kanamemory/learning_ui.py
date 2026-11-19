@@ -13,7 +13,7 @@ import random
 import re
 
 from .navigation import page_view
-from .answer_autoplay import autoplay_answer
+from .answer_autoplay import autoplay_answer, autoplay_prompt
 from .answer_speech import clean_utterance, completed_cloze_utterance, pronunciation_utterance
 from .answer_result_ui import answer_furigana_block, answer_text, shown_answer, shown_explanation
 from .learning_content import learning_items, learning_item_views, get_learning_item, learning_item_from_word
@@ -2026,6 +2026,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if self._learning_question_state.get('presented') is not True:
             self.learning_store.save_draft(q['id'], {'presented': True})
             self._learning_question_state['presented'] = True
+        LearningUIMixin._autoplay_learning_prompt(self, q)
 
     def save_learning_input(self, widget=None, **kwargs):
         """Keep the in-memory draft current; persist it at most 0.25 s later.
@@ -2144,12 +2145,41 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         self._edit_learning_parts(None, expected_question)
 
     def play_learning_audio(self, widget=None, **kwargs):
+        play = LearningUIMixin._learning_prompt_play(self)
+        if play is None:
+            return
+        from .draft_debounce import create_task_awake
+        create_task_awake(self.loop, play())  # Started from a native button callback.
+
+    def _autoplay_learning_prompt(self, q):
+        """A listening question's sound is its prompt: start it once when shown.
+
+        Only the kinds whose page shows 播放题目 in place of the prompt; 朗读题干
+        of a visible prompt stays an aid. The button's own path runs quietly.
+        """
+        if not q.get("audio_text") or q.get("kind") not in LISTENING_KINDS:
+            return False
+
+        async def play():
+            run = LearningUIMixin._learning_prompt_play(self, automatic=True)
+            if run is not None:
+                await run()
+        return autoplay_prompt(self, ("learning", q["id"]), play, heard=lambda: bool(self._learning_audio_ok)
+                               or (self._learning_question or {}).get("id") != q["id"])
+
+    def _learning_prompt_play(self, *, automatic=False):
+        """The prompt's play path: the speaker buttons and the automatic start.
+
+        None when nothing can play. automatic=True only keeps a failed playback
+        out of the status line (the learner did not ask for it); a success
+        saves audio_ok exactly as a tap does.
+        """
         q = self._learning_question
         if self.page != "learning_question":
-            return
+            return None
         text = (q.get("audio_text") if q.get("kind") in LISTENING_KINDS else None) or prompt_audio_text(q)
         if not text:
-            return
+            return None
         token = self._page_token
         async def play():
             from .diagnostic_events import record_error
@@ -2159,7 +2189,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 await self.platform.play(text)
             except Exception as exc:
                 record_error("learning_audio", "play", exc)
-                if token == self._page_token:
+                if token == self._page_token and not automatic:
                     self._learning_status.text = "播放失败，请检查日语语音后重试；本题尚未评分。"
                 return
             if token == self._page_token:
@@ -2172,8 +2202,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                     return
                 self._learning_audio_ok = True
                 self._learning_question_state.update(audio_ok=True)
-        from .draft_debounce import create_task_awake
-        create_task_awake(self.loop, play())  # Started from a native button callback.
+        return play
 
     def _learning_instruction_example(self, instruction):
         text = instruction.get("example", "")

@@ -366,7 +366,8 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         children = [context['budget'], self.diagnostic_permission_control(context), u.row(u.button('显示答案', lambda w: self.submit_diagnostic(context, '', revealed=True), compact=True), self.diagnostic_help_controls(context)), prompt]
         children.extend(instruction_widgets(u, q, known))
         if q.get('audio_text'):
-            async def play(widget=None):
+            async def play(widget=None, automatic=False):
+                # automatic: the start when shown; a failure then stays off the status line.
                 if self.page != 'diagnostic_question' or self._diagnostic_context is not context: return
                 from .diagnostic_events import record_error
                 try:
@@ -381,7 +382,8 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
                         except Exception as exc:
                             record_error('diagnostic_audio', 'save', exc)
                             context['status'].text = '播放记录未保存，请重试。'
-                    else: context['status'].text = '播放未完成，可重试。'
+                        else: context['audio_ok'] = True
+                    elif not automatic: context['status'].text = '播放未完成，可重试。'
             children.append(u.speaker_button(play))
         if q.get('input_mode') in {'pitch_fill', 'pitch_identify'}:
             children.append(self.learning_pitch_controls(q, row['draft'],
@@ -420,6 +422,12 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         children.extend([context['status'], u.button('暂停检查', self.diagnostic_back, compact=True)])
         self.screen('diagnostic_question', '检查掌握', *children)
         self._arm_diagnostic_timer(context)
+        if q.get('audio_text'):
+            # The sound is the prompt (the prompt block hides its text): start it once when shown.
+            from .answer_autoplay import autoplay_prompt
+            autoplay_prompt(self, ('diagnostic', identity, row['id']), lambda: play(automatic=True),
+                            heard=lambda: bool(row['draft'].get('audio_ok') or context.get('audio_ok'))
+                            or self._diagnostic_context is not context)
 
     def diagnostic_word_blocks(self, context, labels=None):
         """labels: raw block -> caption with kana (option_labels); drafts and answers keep the raw blocks."""

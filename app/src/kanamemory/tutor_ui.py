@@ -366,6 +366,16 @@ class TutorUIMixin:
             self.tutor_store().save_draft(row_id, {'presented': True})
             self._tutor_answer_state['presented'] = True
             self._tutor_current.setdefault('draft', {})['presented'] = True
+        if q.get("audio_text"):
+            # The sound is the prompt (播放题目): start it once when shown.
+            from .answer_autoplay import autoplay_prompt
+
+            async def play():
+                started = TutorUIMixin.play_tutor_prompt(self, row_id=row_id, automatic=True)
+                if started is not None:
+                    await started
+            autoplay_prompt(self, ("tutor", row_id), play, heard=lambda: bool(self._tutor_answer_state.get("audio_ok"))
+                            or self._tutor_current.get("id") != row_id)
 
     def save_tutor_answer(self, widget=None, **kwargs):
         if self.page != "tutor_question" or (widget is not None and widget is not getattr(self, "_tutor_answer_input", None)):
@@ -440,7 +450,8 @@ class TutorUIMixin:
         self.tutor_store().save_draft(row_id, draft)
         self.show_tutor_question(self._tutor_row(row_id))
 
-    def play_tutor_prompt(self, widget=None, *, row_id, **kwargs):
+    def play_tutor_prompt(self, widget=None, *, row_id, automatic=False, **kwargs):
+        """The prompt's play path; automatic=True (the start when shown) keeps a failure off the status line."""
         if self.page != "tutor_question" or self._tutor_current["id"] != row_id:
             return
         q = self._tutor_current["question"]
@@ -457,7 +468,7 @@ class TutorUIMixin:
                 await self.platform.play(text)
             except Exception as exc:
                 record_error("tutor_audio", "play", exc)
-                if token == self._page_token:
+                if token == self._page_token and not automatic:
                     self._tutor_status.text = "播放失败，本题尚未评分。请检查日语语音后重试。"
                 return
             if token == self._page_token and self.page == "tutor_question":
@@ -469,6 +480,8 @@ class TutorUIMixin:
                     self._tutor_status.text = "语音已播放，但播放状态未保存。请重试；本题尚未评分。"
                     return
                 self._tutor_answer_state.update(audio_ok=True)
+        if automatic:
+            return play()
         self.loop.create_task(play())
 
     def submit_tutor_answer(self, answer, *, revealed=False, row_id=None):
