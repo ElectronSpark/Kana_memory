@@ -82,7 +82,7 @@ class CourseDeckLane:
         return DeckAnswerMode.SELF_CHECK
 
     def texts(self, ref: StateRef, question: Mapping[str, object]) -> DeckTexts:
-        from ...answer_furigana import answer_cells
+        from ...answer_furigana import answer_cells, answer_pitch
         from ...answer_result_ui import answer_text, distinct_explanation
         answer = answer_text(dict(question))
         options = (tuple(question.get("choices") or ())
@@ -90,7 +90,9 @@ class CourseDeckLane:
         # The answer's cells (standard spelling, kana above) are made only when the page shows the answer.
         return DeckTexts(prompt=str(question.get("prompt", "")), task=str(question.get("task") or ""),
                          options=options, answer=str(answer),
-                         answer_cells=lambda shown=dict(question): tuple(answer_cells(shown)),
+                         # The pitch marks follow the result pages' (answer_pitch), read when it is shown.
+                         answer_cells=lambda shown=dict(question): tuple(answer_cells(shown, pitch=answer_pitch(
+                             getattr(self, "_store", None), getattr(self, "_learning", None), shown))),
                          # Deliberate (owner 2026-11-18): compared with the plain answer, an explanation
                          # line that is the answer sentence is dropped; the sentence is shown once, in the
                          # answer line with its readings above (before, the inline-kana answer never matched).

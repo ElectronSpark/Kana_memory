@@ -390,17 +390,14 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         reading = item.get('reading', '')
         if item.get('personal_reading'):
             return '读法待核' if item['personal_reading']['pending'] else reading
-        if not prefs['number']:
-            return reading
-        from .pitch_accent import morae
-        size = len(morae(reading))
-        if not size:
-            return reading
-        options = item.get('accent_options', [])
-        values = list(dict.fromkeys(n for n in options if type(n) is int and 0 <= n <= size)) if isinstance(options, (list, tuple)) else []
-        if not values and type(item.get('accent')) is int and 0 <= item['accent'] <= size:
-            values = [item['accent']]
+        from .pitch_accent import lesson_accents
+        values = lesson_accents(item) if prefs['number'] else ()
         return reading + (' ' + '／'.join(accent_caption(n) for n in values) if values else '')
+
+    def learning_reading_rows(self, item):
+        """The reading line of the 单词 page (reading, pitch mark, speaker), also under the 详细 page's headword."""
+        return [u.row(u.label(self.learning_reading_label(item), size=19, flex=1, text_role="study"),
+            *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))]))] if item.get("reading") else []
 
     def pronunciation_audio_examples(self, item, *, rendered=()):
         """Play only explicit complete teaching examples, outside quiz screens."""
@@ -669,9 +666,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if answer_context and answer_context[0].get('target_id') == item['id']:
             from .semantic_errors import feedback_nodes
             children.extend(feedback_nodes(u, *answer_context))
-        if item.get("reading"):
-            children.append(u.row(u.label(self.learning_reading_label(item), size=19, flex=1, text_role="study"),
-                *([] if item.get('personal_reading', {}).get('pending') else [u.speaker_button(lambda w: self.speak_text(item["reading"]))])))
+        children.extend(self.learning_reading_rows(item))
         children.extend(origin_labels(item))
         # The same known set as the batch card (design 11 section 5, D3): shared
         # examples whose other references are not yet introduced stay hidden.
@@ -2472,6 +2467,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 title='本题语序参考译文（实验）', show_source=True)
         self.screen("learning_feedback_detail", "详细", u.label(item["title"], size=22,
             text_role=lesson_title_role(item)),
+            *self.learning_reading_rows(item),
             *origin_labels(item),
             *error_details,
             *question_reference,

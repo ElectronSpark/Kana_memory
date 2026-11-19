@@ -62,10 +62,13 @@ def answer_furigana_block(app, question, answer=None, *, text_role, size, bold=F
     up here, when the result is shown. Drawn by furigana_ui.cells_widget (one label when nothing has kana).
     size and text_role are the caller's: each page keeps the size its answer label had.
     Both imports stay inside: this module's other helpers are pure and are used without Toga.
+    The pitch marks (answer_furigana.answer_pitch) follow the learner's switches; none without the app.
     """
-    from .answer_furigana import answer_cells
+    from .answer_furigana import answer_cells, answer_pitch
     from .furigana_ui import cells_widget
-    return cells_widget(app, answer_cells(question, answer), size=size, text_role=text_role, bold=bold, **style)
+    pitch = answer_pitch(getattr(app, "store", None), getattr(app, "learning_store", None), question)
+    return cells_widget(app, answer_cells(question, answer, pitch=pitch), size=size, text_role=text_role,
+                        bold=bold, **style)
 
 
 def entered_answer_row(u, text, *, text_role):

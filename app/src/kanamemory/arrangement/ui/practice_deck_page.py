@@ -23,8 +23,8 @@ def _answer(line: str, cells, *, size: int):
     if not line or not callable(cells):
         return u.label(line, size=size, text_role="study")
     shown = tuple(cells())
-    if not any(reading for _, reading in shown):
-        widget = u.label(DECK_ANSWER_PREFIX + "".join(surface for surface, _ in shown), size=size,
+    if not any(cell[1] or cell[2:] for cell in shown):   # (surface, kana) or (surface, kana, pitch)
+        widget = u.label(DECK_ANSWER_PREFIX + "".join(cell[0] for cell in shown), size=size,
                          text_role="study")
         widget._answer_cells = shown
         return widget

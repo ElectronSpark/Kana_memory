@@ -62,6 +62,26 @@ def morae(reading: str) -> tuple[str, ...]:
     return tuple(result)
 
 
+def lesson_accents(item: Mapping | None) -> tuple[int, ...]:
+    """The accent numbers a lesson gives its own reading: accent_options, else accent; () when it has none.
+
+    The one source of the pitch mark beside a lesson's reading: the 单词 and 详细 pages' reading line
+    (learning_reading_label) and a result's answer line (answer_furigana.pitched_cells). A number outside
+    the reading's morae is left out; a personal reading takes none.
+    """
+    if not isinstance(item, Mapping) or item.get("personal_reading"):
+        return ()
+    size = len(morae(item.get("reading", "")))
+    if not size:
+        return ()
+    options = item.get("accent_options", [])
+    values = (tuple(dict.fromkeys(n for n in options if type(n) is int and 0 <= n <= size))
+              if isinstance(options, (list, tuple)) else ())
+    if not values and type(item.get("accent")) is int and 0 <= item["accent"] <= size:
+        values = (item["accent"],)
+    return values
+
+
 def pitch_levels(mora_count: int, position: int) -> tuple[str, ...]:
     """Return one '-' (high) or '_' (low) per mora for a valid accent type."""
     if (type(mora_count) is not int or mora_count < 1 or type(position) is not int

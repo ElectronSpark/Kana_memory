@@ -33,7 +33,10 @@ def _annotation_text(span):
                and (p.get("reading") is None or isinstance(p["reading"], str)
                     and _KANA.fullmatch(p["reading"])) for p in phrases):
             return "｜".join((p.get("reading") or "") + accent_caption(p["accent_number"]) for p in phrases)
-    return (span.get("reading") or "") + accent_caption(span.get("accent_number"))
+    number = span.get("accent_number")
+    # A lesson word with several accents (accent_options) shows them all, as its reading line does.
+    caption = "／".join(map(accent_caption, number)) if isinstance(number, tuple) else accent_caption(number)
+    return (span.get("reading") or "") + caption
 
 
 def _text_width(text, size, scale):
@@ -128,21 +131,38 @@ def furigana_block(app, segments, *, size=20, available_width=None, text_role="s
     return col(*rows, margin_bottom=margin_bottom, **style), lines, available_width, scale
 
 
+def cell_segment(cell):
+    """The furigana_block segment of a cell: (surface, kana) or (surface, kana, pitch).
+
+    pitch (answer_furigana.pitched_cells): accent numbers (one, or a lesson's several), or (kana, number)
+    phrases of a sentence annotation's phrase sequence; drawn after the kana above the surface, as the
+    example sentences draw it.
+    """
+    segment = {"surface": str(cell[0]), "reading": str(cell[1] or "") or None}
+    pitch = tuple(cell[2]) if len(cell) > 2 and cell[2] else ()
+    if pitch and all(type(number) is int for number in pitch):
+        segment["accent_number"] = pitch[0] if len(pitch) == 1 else pitch
+    elif pitch:
+        segment["accent_phrases"] = [{"reading": reading, "accent_number": number} for reading, number in pitch]
+    return segment
+
+
 def cells_widget(app, cells, *, size=20, text_role="study", bold=False, available_width=None, **style):
-    """[(surface, kana or "")] drawn as furigana_block; without any kana, one label as before.
+    """[(surface, kana or "")] or [(surface, kana, pitch)] drawn as furigana_block; without any kana or
+    pitch, one label as before.
 
     widget._answer_cells keeps the cells (for checks).
     """
     from .ui_components import label
 
-    cells = tuple((str(surface), str(reading or "")) for surface, reading in cells)
-    if not any(reading for _, reading in cells):
-        widget = label("".join(surface for surface, _ in cells), size=size, text_role=text_role, bold=bold,
+    cells = tuple((str(cell[0]), str(cell[1] or ""), *([tuple(cell[2])] if len(cell) > 2 and cell[2] else []))
+                  for cell in cells)
+    if not any(cell[1] or len(cell) > 2 for cell in cells):
+        widget = label("".join(cell[0] for cell in cells), size=size, text_role=text_role, bold=bold,
                        **style)
     else:
         margin_bottom = style.pop("margin_bottom", 8)
-        widget, _, _, _ = furigana_block(app, [{"surface": surface, "reading": reading or None}
-                                               for surface, reading in cells],
+        widget, _, _, _ = furigana_block(app, [cell_segment(cell) for cell in cells],
                                          size=size, available_width=available_width, text_role=text_role,
                                          margin_bottom=margin_bottom, bold=bold, **style)
     widget._answer_cells = cells

@@ -8,6 +8,8 @@ beside the template; learning_questions.reviewed_answer_form reads it. It is loo
 result is shown, and never stored in the question snapshot.
 
 Pure: no Toga, platform, network or database. The page draws the cells (question_support.furigana_block).
+The pitch marks (answer_pitch, pitched_cells) read the learner's two switches and the lesson through what
+the caller passes, and the read-only sentence_annotations sidecar, only when a result is shown.
 """
 from __future__ import annotations
 
@@ -104,10 +106,114 @@ def checked_spans(question, text, form=None):
     return reading_form_answers.shown_readings(text, spans, references, _reading_normal)
 
 
-def answer_cells(question, answer=None, *, form=None):
-    """The cells of answer_form."""
+def answer_cells(question, answer=None, *, form=None, pitch=None):
+    """The cells of answer_form; with pitch (answer_pitch), the question's own answer carries its pitch marks."""
     text, spans = answer_form(question, answer, form=form)
-    return furigana_cells(str(text), spans)
+    cells = furigana_cells(str(text), spans)
+    own = answer is None or answer == question.get("answer")
+    return pitched_cells(cells, **pitch) if pitch and own and answers_in_japanese(question) else cells
+
+
+def answer_pitch(store, learning, question):
+    """What may give the answer line its pitch marks, by the learner's switches; None without a store.
+
+    lesson: the question's lesson (learning.get_item); word: the 单词 page's 数字调号 (pitch_display_v1),
+    the switch of its reading line; sentence: the example sentences' 日文数字调号 (prompt_display_v1), the
+    switch of the sentence annotations' marks. Read when the answer is shown.
+    """
+    if not callable(getattr(store, "get_setting", None)):
+        return None
+    from .pitch_display import PITCH_DISPLAY_SETTING, clean_pitch_preferences
+    from .question_support import PROMPT_DISPLAY_SETTING, clean_prompt_preferences
+    target = question.get("target_id") if isinstance(question, dict) else None
+    lesson = (learning.get_item(target) if isinstance(target, str) and callable(getattr(learning, "get_item", None))
+              else None)
+    return {"lesson": lesson,
+            "word": clean_pitch_preferences(store.get_setting(PITCH_DISPLAY_SETTING, {}))["number"],
+            "sentence": clean_prompt_preferences(store.get_setting(PROMPT_DISPLAY_SETTING, {}))["number"]}
+
+
+def pitched_cells(cells, *, lesson=None, word=False, sentence=False):
+    """cells with pitch marks as a third element (furigana_ui.cell_segment); unchanged where there is no data.
+
+    An answer that is the lesson's own word (its title, or its reading when written in kana) takes, with
+    word, the lesson's reading and accents (pitch_accent.lesson_accents, the 单词 page's mark) as one
+    cell, when the cells' kana agree with that reading; never a sentence annotation's. Any other answer,
+    with sentence, takes the marks of sentence_annotations only when the sidecar holds exactly that text
+    (status precomputed, not the dictionary fallback): a word of it becomes one cell where today's cells
+    end at its ends and their kana (a kana cell: itself) are its reading. Anything else keeps today's cells.
+    """
+    from .pitch_accent import lesson_accents
+    cells = [tuple(cell) for cell in cells]
+    text = "".join(cell[0] for cell in cells)
+    if not text:
+        return cells
+    reading = lesson.get("reading") if isinstance(lesson, dict) else None
+    if isinstance(reading, str) and reading and text in (lesson.get("title"), reading):
+        accents = lesson_accents(lesson) if word else ()
+        if accents and "".join(k or s for s, k in cells) == reading:
+            return [(text, "" if reading == text else reading, accents)]
+        return cells
+    return _sentence_cells(text, cells) if sentence else cells
+
+
+def _sentence_cells(text, cells):
+    from .sentence_annotations import sentence_annotation_plan, validated_accent_phrases
+    plan = sentence_annotation_plan(text)
+    if plan.get("status") != "precomputed" or plan.get("text") != text:
+        return cells
+    marks = {}
+    for segment in plan.get("segments", ()):
+        reading, number = segment.get("reading"), segment.get("accent_number")
+        phrases = validated_accent_phrases(segment)
+        if not isinstance(reading, str) or not reading:
+            continue
+        if phrases:
+            mark = tuple((p["reading"], p["accent_number"]) for p in phrases)
+        elif type(number) is int and segment.get("accent_scope") != "phrase_sequence":
+            mark = (number,)
+        else:
+            continue
+        marks[segment["start"]] = (segment["end"], reading, mark)
+    if not marks:
+        return cells
+    # Plain cells (no kana) may be cut at a word's ends: they are drawn character by character anyway.
+    cuts = {end for end, _, _ in marks.values()} | set(marks)
+    split, position = [], 0
+    for surface, kana in cells:
+        pieces = [surface]
+        if not kana:
+            inner = sorted(c - position for c in cuts if position < c < position + len(surface))
+            pieces = [surface[a:b] for a, b in zip([0, *inner], [*inner, len(surface)])]
+        split.extend((piece, kana) for piece in pieces)
+        position += len(surface)
+    out, index, position, changed = [], 0, 0, False
+    while index < len(split):
+        entry = marks.get(position)
+        if entry is not None:
+            end, reading, mark = entry
+            stop, reach = index, position + len(split[index][0])
+            while reach < end and stop + 1 < len(split):
+                stop += 1
+                reach += len(split[stop][0])
+            run = split[index:stop + 1]
+            if reach == end and "".join(k or s for s, k in run) == reading:
+                surface = text[position:end]
+                out.append((surface, "" if reading == surface else reading, mark))
+                index, position, changed = stop + 1, end, True
+                continue
+        out.append(split[index])
+        position += len(split[index][0])
+        index += 1
+    if not changed:
+        return cells
+    merged = []
+    for cell in out:   # rejoin neighbouring plain cells, as furigana_cells gives them
+        if merged and len(cell) == 2 and not cell[1] and len(merged[-1]) == 2 and not merged[-1][1]:
+            merged[-1] = (merged[-1][0] + cell[0], "")
+        else:
+            merged.append(cell)
+    return merged
 
 
 def lookup_answer_form(question):
