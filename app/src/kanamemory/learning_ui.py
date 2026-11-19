@@ -43,7 +43,7 @@ LEARNING_PAGES = LEARNING_ACTIVE | {"learning_wait", "learning_done"}
 LEARNING_PREFS = "learning_preferences_v1"
 PROMPT_PREFS = "prompt_display_v1"
 # The orientation screen (design 12 UI1) and the settings button that opens it.
-STUDY_ORIENTATION_TITLE = "学习取向"
+STUDY_ORIENTATION_TITLE = "学习方式"   # one learner-facing name with the home card (2026-11-18)
 # One queue pass spends at most this long exchanging withdrawn tasks (always at least one): a learner may
 # have dozens queued, each exchange plans a task for its lesson, and the pass runs on the main thread when a
 # round starts. The rest follow at later passes, the soonest answerable first, and one that is reached before
@@ -901,7 +901,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
 
     @page_view()
     def show_study_orientation(self, widget=None, *, then=None, changed=None, **kwargs):
-        """The 学习取向 screen (design 12 UI1, D1, D2); ``then``: what to do after 确定 (default: back).
+        """The 学习方式 screen (design 12 UI1, D1, D2); ``then``: what to do after 确定 (default: back).
 
         Models from the presenter (with the focus part, UI6), page from
         arrangement/ui; this method only hands the widgets to screen().

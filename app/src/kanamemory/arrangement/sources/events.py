@@ -518,10 +518,13 @@ class _Cuts:
 class _Window:
     """The attributed events of one store kept in memory and brought up to date by appended rows."""
 
-    def __init__(self, store, logs: _AnswerLogs, marks: _TeachingMarks):
+    def __init__(self, store, logs: _AnswerLogs, marks: _TeachingMarks,
+                 later: Callable[..., set] = lambda keys, slots, known, appended=(): set()):
         self._store = store
         self._logs = logs
         self._marks = marks
+        self._later = later   # (keys, slots, known, appended) -> the states not their item's first state
+        self._later_states: set = set()   # the later states of the last read
         self._firsts = _FirstRatingsCache(logs)
         self._revision = None
         self._read_at: datetime | None = None
@@ -552,10 +555,15 @@ class _Window:
         self._slots.update(batch.slots)
         changed = self._firsts.refresh(self._keys, self._logs.day(now), since)
         known = self._firsts.known
-        pairs = [(source, raw, attribute([raw], known)[0] if raw.state in changed else event)
+        # Whether a state is its item's first one can change when another state of the item is rated first:
+        # the kept actions of those states are attributed again, as are those whose first rating changed.
+        later = self._later(self._keys, self._slots, known, [raw for _, raw in batch.raw])
+        changed = changed | (later ^ self._later_states)
+        self._later_states = later
+        pairs = [(source, raw, attribute([raw], known, later)[0] if raw.state in changed else event)
                  for source, raw, event in self._pairs]
         pairs += [(source, raw, event) for (source, raw), event
-                  in zip(batch.raw, attribute([raw for _, raw in batch.raw], known))]
+                  in zip(batch.raw, attribute([raw for _, raw in batch.raw], known, later))]
         direct = self._direct + batch.direct
         self._cuts.update(since, [(source, raw.at) for source, raw, _ in pairs] + [(s, e.at) for s, e in direct])
 
@@ -637,15 +645,82 @@ class StoreEventSource:
         self._marks = _TeachingMarks(store, taught_introductions, guide_evidence)
         self._window: _Window | None = None
         self._unit_contents: dict[str, str] = {}   # a unit id is a hash of its content and ability: never changes
+        self._item_firsts: dict[tuple, datetime] = {}   # item -> its earliest formal answer (kept once found)
         self._origins = _ItemOrigins(store, self._marks, self._logs.day)
 
     def _new_window(self) -> _Window:
-        return _Window(self._store, self._logs, self._marks)
+        return _Window(self._store, self._logs, self._marks, self._later_states)
 
     def _fresh_window(self) -> _Window:
         """A window for a full re-read; what is kept of items' origins goes with the old one (an import, a reset)."""
         self._origins.clear()
+        self._item_firsts.clear()
         return self._new_window()
+
+    def _later_states(self, keys: Mapping[str, tuple[str, str]], slots: Mapping[str, tuple[str, str]],
+                      known: Mapping[str, FirstRatings], appended: Iterable[RawEvent] = ()) -> set[str]:
+        """The states that are not their item's first state (design 12 section 3, 2026-11-18).
+
+        The item of a course state is its lesson, of a kana state its (content,
+        script). Its first state is the one whose first formal rating is the
+        item's earliest formal answer; a state is later when the item has an
+        earlier answer than the state's own first rating (or the state has none
+        yet), and every state of an item learned before the log is later.
+        """
+        units = sorted(identity for lane, identity in keys.values() if lane == "course")
+        contents = self._contents(units) if units else {}
+        items = {}
+        for state, (lane, identity) in keys.items():
+            item = (("course", contents[identity]) if lane == "course" and identity in contents
+                    else ("kana", slots[state]) if lane == "kana" and state in slots else None)
+            if item is not None:
+                items[state] = item
+        for raw in appended:
+            # An appended answer can carry an earlier instant than the item's kept first answer (an import, a
+            # backdated finalization): that item is looked up again.
+            item = items.get(raw.state)
+            if raw.formal and item in self._item_firsts and raw.at < self._item_firsts[item]:
+                del self._item_firsts[item]
+        firsts = self._item_first_answers(set(items.values()))
+        later = set()
+        for state, item in items.items():
+            first = firsts.get(item)
+            info = known.get(state)
+            if first is not None and (info is None or info.first > first):
+                later.add(state)
+        return later
+
+    def _item_first_answers(self, items: set[tuple]) -> dict[tuple, datetime]:
+        """{item: its earliest formal answer} (datetime.min when learned before the log); items without one left out.
+
+        A found instant never changes (rows appended later are later), so it is kept; items without an answer
+        are looked up again at the next read.
+        """
+        wanted = items - self._item_firsts.keys()
+        if wanted:
+            queries = self._store.teaching_queries
+            found: dict[tuple, datetime] = {}
+
+            def add(item, value, before_log):
+                if before_log:
+                    found[item] = _EARLIEST
+                elif value:
+                    at = _instant(value)
+                    found[item] = min(at, found.get(item, at))
+            lessons = sorted(identity for lane, identity in wanted if lane == "course")
+            for row in queries.course_content_first_answers(lessons) if lessons else ():
+                add(("course", row["content_id"]), row["at"], bool(row["last_review"]))
+            slots = {identity for lane, identity in wanted if lane == "kana"}
+            kana_contents = sorted({content for content, _ in slots})
+            for row in queries.kana_card_first_answers(kana_contents, WORD_SKILLS) if kana_contents else ():
+                slot = (row["content_id"], row["script"])
+                if slot in slots:
+                    add(("kana", slot), row["at"], bool(row["last_review"]) or (row["reviews"] > 0 and row["at"] is None))
+            if not self._store.in_transaction:
+                self._item_firsts.update(found)
+            return {item: found.get(item, self._item_firsts.get(item)) for item in items
+                    if item in found or item in self._item_firsts}
+        return {item: self._item_firsts[item] for item in items if item in self._item_firsts}
 
     def clock_events(self, now: datetime) -> list[ClockEvent]:
         """Attributed events in [now - LOOKBACK, now], oldest first."""
@@ -727,7 +802,8 @@ class StoreEventSource:
         known = {state: info for state, (info, _) in firsts.items()}
         not_first = {state for state, (_, flag) in firsts.items() if flag}
         marks = self._marks.entries(since, course)
-        events = sorted(attribute([raw for _, raw in batch.raw], known) + [event for _, event in batch.direct]
+        later = self._later_states(batch.keys, batch.slots, known)
+        events = sorted(attribute([raw for _, raw in batch.raw], known, later) + [event for _, event in batch.direct]
                         + self._marks.events(marks, self._logs.day), key=_sort_key)
         learned = _new_learning(known, not_first, batch.keys, batch.slots, marks, now, frozenset(days),
                                 self._contents, self._logs.day, self._first_days)

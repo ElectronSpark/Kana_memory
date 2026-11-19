@@ -8,7 +8,7 @@ midnight; the day totals exist for display only.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from ..model import ClockEvent, FirstRatings, RawEvent, Unit, Usage
@@ -25,24 +25,26 @@ LOOKBACK = timedelta(days=14)
 _REVIEW_UNIT = {"course": Unit.COURSE, "kana": Unit.KANA}
 
 
-def attribute(events: Sequence[RawEvent], firsts: Mapping[str, FirstRatings]) -> list[ClockEvent]:
-    """Give each action its unit (design 12 section 3, "新内容的归属").
+def attribute(events: Sequence[RawEvent], firsts: Mapping[str, FirstRatings],
+              later: Collection[str] = frozenset()) -> list[ClockEvent]:
+    """Give each action its unit (design 12 section 3, "新内容的归属"; since 2026-11-18 new lessons only).
 
-    New content: a teaching mark, anything before the state's first formal
-    rating, that first rating, and the next formal rating on the same study
-    day (the same-day step). Everything later is review of the action's lane.
-    Only a teaching mark is a teaching action for the gap caps: the reading
-    and the guide end at the mark, and the first rating after it is an
-    ordinary answer.
+    New content is learning a new lesson or a new kana: a teaching mark, and
+    on the item's FIRST state anything before that state's first formal
+    rating and that rating. ``later`` names the states that are not their
+    item's first state (an additional ability of a lesson, a kana direction
+    opened later): all of their actions are review of their lane, as are the
+    same-day step and every later rating. Only a teaching mark is a teaching
+    action for the gap caps.
     """
     attributed = []
     for event in events:
         info = firsts.get(event.state)
         unit = _REVIEW_UNIT[event.lane]
-        if event.teaching_mark or info is None or event.at < info.first:
+        if event.teaching_mark:
             unit = Unit.NEW
-        elif event.formal and (event.at == info.first or (
-                info.follow_up is not None and event.at == info.follow_up and event.day == info.day)):
+        elif event.state not in later and (info is None or event.at < info.first
+                                           or (event.formal and event.at == info.first)):
             unit = Unit.NEW
         attributed.append(ClockEvent(event.at, event.day, unit, event.teaching_mark))
     return attributed

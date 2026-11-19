@@ -767,7 +767,7 @@ class StudyPathRuntimeMixin:
         the kinds with a candidate inside it share the time first.
         """
         from .arrangement.model import Unit
-        from .arrangement.sources.candidates import DispatchCandidates, LaneHead, head_member
+        from .arrangement.sources.candidates import DispatchCandidates, LaneHead, head_member, review_head
         from .first_teaching_dispatch import explicit_start_head
         from .practice_round import promote, promote_initial, sealed
         enabled = self.learning_preferences()["enabled"]
@@ -786,7 +786,9 @@ class StudyPathRuntimeMixin:
         normal = self.store.teaching_queries.choose_lane(kana_priority, course_priority,
                      course_started=bool(current and current.get("new_dispatch_continue")))
         priority = kana_priority if normal == "kana" else course_priority if normal == "course" else None
-        if priority is None or priority[0] != 3:
+        # The share rule decides once the normal head is review of its lane (tier 3, or a first check of
+        # something already learned: candidates.review_head, 2026-11-18); tiers 0-2 and new work keep their order.
+        if priority is None or not review_head(normal, normal_kana if normal == "kana" else current, priority):
             return None, None
         arrangement = StudyPathRuntimeMixin.study_arrangement(self)
         source = DispatchCandidates(self.store, self.learning_store, pending=pending,

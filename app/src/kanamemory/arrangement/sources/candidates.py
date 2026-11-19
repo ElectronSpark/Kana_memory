@@ -28,6 +28,26 @@ REVIEW_TIER = 3
 _LANE_UNIT = {"course": Unit.COURSE, "kana": Unit.KANA}
 
 
+def review_head(lane: str, head: dict | None, priority: tuple | None) -> bool:
+    """Whether a lane head is review of its lane for the share rule (design 12 B3, section 3, 2026-11-18).
+
+    An ordinary due review (frozen tier 3), and the first check of something
+    already learned (tier 4): a course question of a lesson whose teaching is
+    done (an additional ability's first check, 「新能力」), or a kana question
+    that is not an introduction (a kana direction opened later). New lessons
+    and new kana come as the new-content candidate instead.
+    """
+    if head is None or priority is None:
+        return False
+    if priority[0] == REVIEW_TIER:
+        return True
+    if priority[0] != 4 or head.get("type") != "question":
+        return False
+    if lane == "course":
+        return (head.get("content") or {}).get("stage") == "done"
+    return True
+
+
 def _everything(unit: Unit, ref) -> bool:
     return True
 
@@ -108,7 +128,7 @@ class DispatchCandidates:
 
     def review_candidates(self) -> tuple[Candidate, ...]:
         return tuple(self._candidate(lane, entry.head) for lane, entry in self._heads.items()
-                     if entry is not None and entry.priority is not None and entry.priority[0] == REVIEW_TIER)
+                     if entry is not None and review_head(lane, entry.head, entry.priority))
 
     def new_candidate(self) -> Candidate | None:
         if not self._new:

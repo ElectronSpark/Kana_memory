@@ -294,7 +294,7 @@ def _kana_scoped(scope):
 
 
 def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds, kana_kinds, now, projection,
-                hold_started=False, skip_teaching_ids=frozenset(), scope=None) -> _Block:
+                hold_started=False, skip_teaching_ids=frozenset(), scope=None, lessons_only=False) -> _Block:
     """The block that runs once one is due.
 
     First the blocks already started and not yet rated: those of the latest
@@ -305,7 +305,13 @@ def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds,
     the learner's process-local passes over a teaching head. ``scope``: the
     learner's focus scope (design 12 H2), None for none: the fresh candidates
     inside it are taught first (in each pool, between the pools and between
-    the lanes); a started block goes on as before.
+    the lanes); a started block goes on as before. ``lessons_only`` (the
+    share rule, 2026-11-18): the fresh candidates are new lessons and new
+    kana only (the introduction pools); an additional ability's first check
+    and a kana direction opened later are review of their lane there. Those
+    with their own introduction or guide, and a continuation after a failed
+    placement, stay reachable: they are introduction-pool rows or started
+    blocks.
     """
     from .first_teaching_kana import probe as kana_probe
     skip = {'skip_teaching_ids': frozenset(skip_teaching_ids)} if skip_teaching_ids else {}
@@ -328,12 +334,13 @@ def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds,
                 return _Block(None, None, None, None, waiting=True)
         # Disabled, deferred or dependency-blocked work must not trap earned
         # service. The ordinary teaching probes still enforce those controls.
+        pools = ({} if lessons_only else
+                 {'include_unassessed': True, 'prefer_unassessed': anchors.prior_course_pool != 'additional'})
         course = learning.current(enabled_kinds, now=now, fair_new=True, teaching_only=True,
-            include_unassessed=True, prefer_unassessed=anchors.prior_course_pool != 'additional',
-            **_shared(projection), **skip, **_scoped(scope))
-        kana = kana_probe(store, kana_kinds, now, new_only=True,
-            include_unassessed=True, prefer_unassessed=anchors.prior_kana_pool != 'additional',
-            **_kana_scoped(scope))
+            **pools, **_shared(projection), **skip, **_scoped(scope))
+        kana_pools = ({} if lessons_only else
+                      {'include_unassessed': True, 'prefer_unassessed': anchors.prior_kana_pool != 'additional'})
+        kana = kana_probe(store, kana_kinds, now, new_only=True, **kana_pools, **_kana_scoped(scope))
         # A new candidate is not an already opened block. Keep genuine
         # continuations together, but let the persisted cursor rotate fresh
         # course/kana work after either lane's previous completion.
@@ -528,7 +535,7 @@ def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=N
     anchors = _block_anchors(services.service, services.kana, services.ability, services.kana_ability)
     block = _block_head(store, learning, services.service, services.kana, anchors, earned=True,
                         enabled_kinds=enabled_kinds, kana_kinds=kana_kinds, now=now, projection=projection,
-                        hold_started=True, skip_teaching_ids=skip_teaching_ids, scope=scope)
+                        hold_started=True, skip_teaching_ids=skip_teaching_ids, scope=scope, lessons_only=True)
     since = anchors.latest if anchors.latest else datetime.min.replace(tzinfo=now.tzinfo)
     found = _protected_block(block, anchors, {'rule': 'time_share', 'service_anchor_utc': since.isoformat()})
     return ShareProbe(found, block.waiting)
