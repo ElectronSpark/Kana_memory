@@ -203,6 +203,38 @@ def test_manifest_patch_keeps_one_activity_across_relaunch_and_launcher_intents(
     assert first.count('launchMode') == 1 and first.count('KanaTextShareActivity') == 1
 
 
+@pytest.mark.parametrize('rendered', [False, True])
+def test_manifest_patch_adds_the_library_file_filters_once(tmp_path, rendered):
+    """A project generated before the .kmlib association gets pyproject's VIEW filters; a fresh create that
+    rendered them (android_manifest_activity_extra_content) keeps them without a second copy (design 08 16.8)."""
+    import tomllib
+    import xml.etree.ElementTree as ET
+    shell = shutil.which('pwsh') or shutil.which('powershell')
+    if shell is None:
+        pytest.skip('PowerShell is required to execute the run_app.ps1 manifest patch')
+    android = '{http://schemas.android.com/apk/res/android}'
+    extra = tomllib.loads((ROOT / 'app/pyproject.toml').read_text('utf8'))['tool']['briefcase']['app']['kanamemory'][
+        'android']['android_manifest_activity_extra_content']
+    text = GENERATED_MANIFEST.format(app_attrs='', activity_attrs='android:launchMode="singleTask"')
+    if rendered:
+        text = text.replace('</intent-filter>\n        </activity>', '</intent-filter>\n' + extra + '        </activity>')
+    first = _patch_manifest(tmp_path, shell, text, 'first')
+    assert _patch_manifest(tmp_path, shell, first, 'second') == first
+
+    def filters(activity):
+        return [(tuple(a.get(f'{android}name') for a in node.findall('action')),
+                 tuple(c.get(f'{android}name') for c in node.findall('category')),
+                 tuple(tuple(sorted(d.items())) for d in node.findall('data')))
+                for node in activity.findall('intent-filter')]
+
+    main, = [a for a in ET.fromstring(first.encode('utf8')).find('application').findall('activity')
+             if a.get(f'{android}name') == 'org.beeware.android.MainActivity']
+    expected = filters(ET.fromstring(f'<activity xmlns:android="{android[1:-1]}">{extra}</activity>'))
+    assert len(expected) == 4 and filters(main)[1:] == expected
+    assert filters(main)[0][0] == ('android.intent.action.MAIN',)
+    assert 'application/zip' not in first
+
+
 needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='the pinned template is rolled out with Git')
 
 

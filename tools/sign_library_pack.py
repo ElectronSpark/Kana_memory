@@ -12,8 +12,11 @@ written into the repository; ``generate-key`` refuses paths inside it.
 
   python tools/sign_library_pack.py generate-key <new key file>
   python tools/sign_library_pack.py public-key <key file>
-  python tools/sign_library_pack.py sign <pack.zip> <signed.zip> --key <key file> [--key-id ID]
-  python tools/sign_library_pack.py verify <pack.zip> [--trusted ID=HEXKEY ...]
+  python tools/sign_library_pack.py sign <pack.kmlib> <signed.kmlib | directory> --key <key file> [--key-id ID]
+  python tools/sign_library_pack.py verify <pack.kmlib> [--trusted ID=HEXKEY ...]
+
+A pack is read by its content, whatever its name (.kmlib, or an older .zip). The signed copy goes to the
+file named (kept as given, .zip too) or, given a directory, to <directory>/<pack name without suffix>.kmlib.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app" / "src"))
 from kanamemory import content_library_rules as rules  # noqa: E402
 from kanamemory import content_library_signing as signing  # noqa: E402
+from kanamemory.library_file_open import EXTENSION as PACK_SUFFIX  # noqa: E402
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
@@ -72,6 +76,8 @@ def describe_key(seed):
 def sign_pack(source, output, seed, *, public_key_id=None):
     """Write a signed copy of a validated pack; other entries are copied byte for byte."""
     source, output = Path(source), Path(output)
+    if output.is_dir():
+        output = output / (source.stem + PACK_SUFFIX)
     if output.exists() or output.resolve() == source.resolve():
         raise ValueError("Choose a new output file")
     rules.validate_library_pack(source)
@@ -79,7 +85,7 @@ def sign_pack(source, output, seed, *, public_key_id=None):
         manifest = json.loads(archive.read(rules.MANIFEST_FILE).decode("utf-8"))
         signed = signing.sign_manifest(manifest, seed, public_key_id=public_key_id)
         output.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(prefix=".signing-", suffix=".zip", dir=output.parent)
+        handle, temporary = tempfile.mkstemp(prefix=".signing-", suffix=PACK_SUFFIX, dir=output.parent)
         os.close(handle)
         try:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as target:

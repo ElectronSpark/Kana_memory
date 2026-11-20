@@ -151,7 +151,7 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
 
 - 库（library）：用户可见的安装单元，有 library_id、标题与来源；同一 library_id 在设备上
   至多一个已安装版本。
-- 包（pack）：库的一个版本文件（ZIP），格式见第 4 节。安装＝校验＋复制到应用私有目录
+- 包（pack）：库的一个版本文件（ZIP，扩展名 .kmlib，旧的 .zip 照常可用，见第 16.8 节），格式见第 4 节。安装＝校验＋复制到应用私有目录
   ＋写注册表；移除＝写注册表＋可选删除文件。
 - 分层（layer）：包内按用途分的文件组：teaching（命名空间 JSON 或教学 sqlite）、lexicon
   （词典/假名 sqlite，首版仅核心库）、annotations（句注/译文 sqlite）、media、review
@@ -1045,3 +1045,35 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
   set_enabled 重试；预检拒绝过深链），改 3 项的目录与孤儿计数断言为新路径；test_content_library_wiring 旁及库不持久化；test_study_path_routes 增 1 项；
   test_content_availability 增 1 项；test_content_library_ui 增文案断言；新文件 tests/test_progress_backup_library_registry.py（4 项）。
   未做：原生；新测试文件未在 demo 导出树运行、未入公开清单；B-17 临时目录清理、B-18 升级回滚未做。
+
+16.8 内容库文件类型 .kmlib（2026-11-20） [I，桌面测试与源码核对；原生未验]
+
+- 扩展名：内容库包的文件扩展名为 .kmlib，文件名形如 KanaMemory-<最低应用版本>-library-<library_id>-<版次>.kmlib。
+  格式不变（仍是第 4 节的 ZIP）。导入按内容认包、不看文件名：名为 .zip 的包（包括已交付的）一直可以导入。
+  tools/package_library_pack.py 给一个目录（缺省为当前目录）时按上式命名（最低应用版本取 --app-min-version，缺省为本应用
+  版本；版次取 --edition，缺省为库版本）；明确给出的输出文件名（包括 .zip）原样使用。tools/sign_library_pack.py 给目录时
+  写 <目录>/<原包名去后缀>.kmlib。应用里点名要选的文件处写“内容库文件（.kmlib，旧的 .zip 也可以）”。
+- 应用内选择（添加内容库）：选择器的类型为 application/octet-stream（提供方对未知扩展名报的类型，.kmlib 即此）、
+  application/zip、application/x-zip-compressed 与本应用的 application/vnd.kanamemory.library（library_file_open.PICKER_TYPES）。
+- Android 关联：MainActivity（singleTask）的 ACTION_VIEW 过滤器（app/pyproject.toml 的 android_manifest_activity_extra_content，
+  新建工程时由模板写入；environment/run_app.ps1 的 Set-KanaAndroidManifest 给此前生成的工程补上同样的过滤器），类别 DEFAULT
+  与 BROWSABLE，scheme content 与 file：(a) 本应用类型 application/vnd.kanamemory.library；(b) application/octet-stream，
+  使文件管理器里点 .kmlib 文件时可选本应用（因此其他未知类型的二进制文件也会列出本应用，打开后说明它不是内容库）；
+  (c) 任何类型或无类型、路径以 .kmlib 结尾（pathSuffix，Android 12 起；pathPattern 每种点数一条，覆盖到 10 个点）。
+  不声明 application/zip，不加权限；演示版与个人版同一配置。
+- 打开：点文件启动或切回应用，进入内容库页并显示该文件的预检，与经“添加内容库”选中该文件后完全相同（同一检查、文字与“安装”按钮，
+  装后照旧自动重启）；打开本身从不安装。文件经内容解析器读入应用缓存，上限与选择器相同（MAX_PACK_BYTES）；file:// 文件
+  不按路径另读，读不了时提示说明。预检页“文件名”为提供方给的显示名。不是内容库的文件：内容库页以文件名开头给出导入时的原有说明。
+  应用正忙（未保存的作答或草稿、备份或恢复、练习轮次、专注页面、离开确认、内容库文件正在选择或检查、自动重启倒计时）时只提示
+  “请先完成当前操作，再重新打开这个内容库文件。”并放弃这次请求。
+- 只处理一次：请求在应用完全启动后（记录已打开、首页已显示）才处理；启动前到达的只保留最新一个。读到请求时即在该 Intent 对象上
+  做标记（library_file_open.HANDLED_EXTRA），同一 Intent 再次送达或系统在同一进程里重建窗口（重建时沿用该 Intent 对象）都视为已处理；
+  从最近任务重新进入（FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY）不处理；安装后的自动重启（KanaRestart）以启动器 Intent 新建任务，
+  不带文件，不会再次显示预检。冷启动读启动 Intent，运行中经 androidx ComponentActivity.addOnNewIntentListener 收到 onNewIntent
+  （BeeWare 模板的 MainActivity 不转发 onNewIntent）。
+- 结构：library_file_open（纯规则：是否为打开内容库文件的请求、显示名、启动前排队与逐个交付、正忙判断与文字）；
+  platform_android.library_file_request（读取 Intent 与提供方显示名的几行）、AndroidPlatform.watch_library_file_requests /
+  read_library_file（KanaBackupDocuments.importUri 复用选择器的有界读取通道；importDocument 带选择器类型）；
+  ContentLibraryUIMixin.open_content_library_file 与“添加内容库”共用 _precheck_content_library_file。
+- 未验（留给设备步骤）：过滤器在各文件管理器中的实际匹配（类型与路径）、onNewIntent 监听、进程被杀后从启动器图标回到
+  旧任务时系统按原 Intent 重建窗口（此时标记不在系统保存的 Intent 上，预检可能再显示一次；不会安装）。

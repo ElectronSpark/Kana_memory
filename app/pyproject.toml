@@ -25,6 +25,68 @@ base_theme = "Theme.MaterialComponents.Light.NoActionBar"
 # One MainActivity per task; launcher/share intents reach it via onNewIntent. configChanges is
 # hard-coded by the template, so environment/run_app.ps1 adds assetsPaths after generation.
 android_manifest_activity_attrs_extra_content = 'android:launchMode="singleTask"'
+# Content library files (.kmlib, design 08 section 16.8): ACTION_VIEW opens them with the app, which shows
+# their precheck (never installs). (a) the app's own type; (b) application/octet-stream, the type providers
+# give an unknown extension; (c) any type, or none, with a path ending in .kmlib (pathSuffix from Android 12;
+# pathPattern matches a fixed number of dots, so one per count). Never application/zip. No permission.
+# environment/run_app.ps1 (Set-KanaAndroidManifest) adds the same filters to a project generated before.
+android_manifest_activity_extra_content = '''
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="application/vnd.kanamemory.library" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="application/octet-stream" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="*/*" />
+    <data android:host="*" />
+    <data android:pathSuffix=".kmlib" />
+    <data android:pathPattern=".*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:host="*" />
+    <data android:pathSuffix=".kmlib" />
+    <data android:pathPattern=".*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+</intent-filter>
+'''
 android_manifest_extra_content = '''
 <queries>
     <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>

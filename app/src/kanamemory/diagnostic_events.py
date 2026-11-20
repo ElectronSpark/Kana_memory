@@ -29,6 +29,8 @@ OPERATIONS = frozenset({
     "learning_submit", "learning_guide", "kana_queue_assembly",
     # Content library registry reconciliation at startup (design 08 §5.6).
     "content_library",
+    # A content library file opened from outside the app (design 08 16.8).
+    "library_file_open",
     # WP7b: tutor/material reference draft and settings-page lock failures.
     "tutor_draft", "material_reference_draft", "ai_settings", "material_selection",
     # F2: debounced AI practice/form, mastery dialogue/scope and setup-page drafts.

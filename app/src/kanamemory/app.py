@@ -321,6 +321,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             register_visibility(lambda visible, at: self.loop.call_soon_threadsafe(
                 KanaMemory._visibility_changed, self, visible, at))
         self._sync_back_handler()
+        # A library file the app was asked to open (Android): its precheck once the app runs (design 08 16.8).
+        self.watch_library_file_requests()
         freeze_startup_heap()
 
     async def on_running(self):

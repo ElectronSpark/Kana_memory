@@ -390,6 +390,77 @@ function Set-KanaAndroidManifest {
     }
     [void]$main[0].SetAttribute('configChanges', $androidNamespace, ($tokens -join '|'))
     [void]$main[0].SetAttribute('launchMode', $androidNamespace, 'singleTask')
+    # Content library files (.kmlib, design 08 16.8): the ACTION_VIEW filters that app/pyproject.toml
+    # (android_manifest_activity_extra_content) renders on a fresh create, word for word (tests compare
+    # them); added here to a project generated before them, which `briefcase update` does not re-render.
+    $libraryFilters = @'
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="application/vnd.kanamemory.library" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="application/octet-stream" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:mimeType="*/*" />
+    <data android:host="*" />
+    <data android:pathSuffix=".kmlib" />
+    <data android:pathPattern=".*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+</intent-filter>
+<intent-filter>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="content" />
+    <data android:scheme="file" />
+    <data android:host="*" />
+    <data android:pathSuffix=".kmlib" />
+    <data android:pathPattern=".*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+    <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\..*\\.kmlib" />
+</intent-filter>
+'@
+    $viewFilters = @($main[0].ChildNodes | Where-Object {
+        $_.LocalName -eq 'intent-filter' -and @($_.ChildNodes | Where-Object {
+            $_.LocalName -eq 'action' -and $_.GetAttribute('name', $androidNamespace) -eq 'android.intent.action.VIEW'
+        }).Count -gt 0
+    })
+    if ($viewFilters.Count -eq 0) {
+        $fragment = [xml]('<filters xmlns:android="' + $androidNamespace + '">' + $libraryFilters + '</filters>')
+        foreach ($filter in @($fragment.DocumentElement.ChildNodes | Where-Object { $_.LocalName -eq 'intent-filter' })) {
+            [void]$main[0].AppendChild($Manifest.ImportNode($filter, $true))
+        }
+    }
 }
 if (-not (Test-Path -LiteralPath $projectPython)) { throw 'Project Python missing. Run the desktop bootstrap first.' }
 if (-not (Test-Path -LiteralPath (Join-Path $appSource 'pyproject.toml'))) { throw 'App pyproject.toml missing.' }

@@ -96,6 +96,61 @@ def _read_library_stream(native, cache_dir, max_bytes):
     return _read_backup_stream(native, cache_dir, max_bytes, binary=True)
 
 
+def library_file_request(intent, resolver):
+    """The library-file request an Android Intent carries (library_file_open.OpenRequest), or None.
+
+    The only lines that read an Intent; the decisions are library_file_open's. A request is marked
+    on the Intent object itself (HANDLED_EXTRA), so a second delivery of that object, and the window
+    Android re-creates around it in this process, read it as handled. The display name comes from
+    the provider (OpenableColumns.DISPLAY_NAME) when it gives one; nothing is read from a file path.
+    """
+    from . import library_file_open as files
+    if intent is None:
+        return None
+    data = intent.getData()
+    try:
+        handled = bool(intent.getBooleanExtra(files.HANDLED_EXTRA, False))
+    except Exception:  # noqa: BLE001 - extras another app sent that cannot be read: not ours
+        handled = False
+    scheme = data.getScheme() if data is not None else None
+    mime_type = intent.getType()
+    if mime_type is None and data is not None and str(scheme or "").lower() == "content":
+        try:
+            mime_type = resolver.getType(data)
+        except Exception:  # noqa: BLE001 - a provider that cannot say its type
+            mime_type = None
+    fields = files.IntentFields(
+        action=_text(intent.getAction()), uri=_text(data.toString()) if data is not None else None,
+        scheme=_text(scheme), mime_type=_text(mime_type), path=_text(data.getPath()) if data is not None else None,
+        flags=int(intent.getFlags()), handled=handled)
+    request = files.classify(fields)
+    if request is None:
+        return None
+    try:
+        intent.putExtra(files.HANDLED_EXTRA, True)
+    except TypeError:  # Intent.putExtra has many overloads: name the boolean one
+        from java import jboolean
+        intent.putExtra(files.HANDLED_EXTRA, jboolean(True))
+    provided = None
+    if request.scheme == "content":
+        cursor = None
+        try:
+            cursor = resolver.query(data, None, None, None, None)
+            if cursor is not None and cursor.moveToFirst():
+                column = cursor.getColumnIndex("_display_name")
+                provided = _text(cursor.getString(column)) if column >= 0 else None
+        except Exception:  # noqa: BLE001 - no name from the provider: the path's last part
+            provided = None
+        finally:
+            if cursor is not None:
+                cursor.close()
+    return files.named(request, provided)
+
+
+def _text(value):
+    return None if value is None else str(value)
+
+
 async def _backup_stream_io(native, function, *args):
     task = asyncio.create_task(asyncio.to_thread(function, native, *args))
     try:
@@ -310,8 +365,10 @@ class AndroidPlatform:
         return True
 
     async def _backup_document(self, data=None, filename=None, *, archive=False, max_bytes=_BACKUP_MAX_BYTES,
-                               binary=False):
-        """Await one native SAF picker. Cancellation never changes learning data."""
+                               binary=False, mime_types=None, uri=None):
+        """Await one native SAF picker (or, with ``uri``, one document the app was asked to open).
+        Cancellation never changes learning data. ``mime_types``: the picker's types (default: the
+        backup import's)."""
         self._check_open()
         if self._backup_native is not None:
             raise PlatformError("请先完成当前的文件选择。")
@@ -342,7 +399,11 @@ class AndroidPlatform:
         self._backup_events = Events()
         native = self._backup_native = c("org.example.kanamemory.KanaBackupDocuments")(activity, self._backup_events)
         try:
-            if data is None:
+            if uri is not None:
+                native.importUri(str(uri))
+            elif data is None and mime_types:
+                native.importDocument("\n".join(mime_types))
+            elif data is None:
                 native.importJson()
             else:
                 native.exportStream(filename, "application/zip" if archive else "application/json")
@@ -485,9 +546,68 @@ class AndroidPlatform:
         return await self._backup_document(max_bytes=MAX_BYTES)
 
     async def import_library_pack(self):
-        """Content library ZIP through the same bounded SAF import channel (binary)."""
+        """Content library file (.kmlib, or an older .zip) through the same bounded SAF import channel (binary)."""
         from .content_library_rules import MAX_PACK_BYTES
-        return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True)
+        from .library_file_open import PICKER_TYPES
+        return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, mime_types=PICKER_TYPES)
+
+    async def read_library_file(self, request):
+        """The bytes of a library file the app was asked to open (library_file_open.OpenRequest): read
+        through the content resolver, bounded like a picked pack. A file URI the app may not read
+        raises PlatformError with library_file_open.FILE_URI_UNREADABLE."""
+        from .content_library_rules import MAX_PACK_BYTES
+        from .library_file_open import FILE_URI_UNREADABLE
+        try:
+            return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, uri=request.uri)
+        except PlatformError as error:
+            if request.scheme == "file" and str(error).startswith("无法读取文件："):
+                raise PlatformError(FILE_URI_UNREADABLE) from error
+            raise
+
+    def watch_library_file_requests(self, receive):
+        """Call once on the UI thread after start-up. ``receive(request, warm)`` gets each request to open
+        a library file (library_file_open.OpenRequest): now the launching intent's (warm False), later
+        each intent delivered to the running activity (onNewIntent, warm True), on the UI thread.
+        Each intent counts once: it is marked when read (library_file_open.HANDLED_EXTRA)."""
+        self._check_open()
+        c = self._jclass
+        activity = c("org.beeware.android.MainActivity").singletonThis
+        if activity is None:
+            raise PlatformError("Android 窗口尚未准备完成。")
+        self.stop_library_file_requests()
+        from java import cast
+        intent_class = c("android.content.Intent")
+        resolver = self._context.getContentResolver()
+        owner = self
+
+        class NewIntents(self._dynamic_proxy(c("androidx.core.util.Consumer"))):
+            def accept(self, intent):
+                if owner._closed or intent is None:
+                    return
+                try:
+                    intent = cast(intent_class, intent)  # Consumer<Intent>.accept declares Object
+                    # The activity's own intent follows the newest delivery, so a window that Android
+                    # re-creates in this process reads the (marked) intent it last handled.
+                    activity.setIntent(intent)
+                    request = library_file_request(intent, resolver)
+                    if request is not None:
+                        receive(request, True)
+                except Exception as exc:
+                    record_error("library_file_open", "callback", exc)
+
+        self._new_intent_listener = NewIntents()
+        self._new_intent_activity = activity
+        activity.addOnNewIntentListener(self._new_intent_listener)
+        request = library_file_request(activity.getIntent(), resolver)
+        if request is not None:
+            receive(request, False)
+
+    def stop_library_file_requests(self):
+        activity = getattr(self, "_new_intent_activity", None)
+        listener = getattr(self, "_new_intent_listener", None)
+        self._new_intent_activity = self._new_intent_listener = None
+        if activity is not None and listener is not None:
+            activity.removeOnNewIntentListener(listener)
 
     def pending_material_shares(self):
         import json
@@ -1440,6 +1560,7 @@ class AndroidPlatform:
         if lifecycle is not None:
             lifecycle.removeObserver(self._activity_observer)
             self._activity_lifecycle = self._activity_observer = None
+        self.stop_library_file_requests()
         preview, self._index_preview = self._index_preview, None
         if preview is not None:
             preview.cancel()

@@ -38,6 +38,7 @@ import asyncio
 
 from . import content_library_rules as rules
 from . import content_library_signing as signing
+from . import library_file_open
 from . import library_restart
 from . import ui_components as u
 from .app_clock import utc_now
@@ -390,7 +391,7 @@ class ContentLibraryUIMixin:
         imported = [row for row in rows if row["source_kind"] == "file"]
         if not imported:
             children.append(self.entry_card(u.label("还没有内容库", size=18, bold=True),
-                                            u.label("导入内容库文件（.zip）后，其课程会与内置内容合并；进度与内容分开保存。", size=13, color=u.MUTED),
+                                            u.label("导入" + library_file_open.FILE_CHOICE + "后，其课程会与内置内容合并；进度与内容分开保存。", size=13, color=u.MUTED),
                                             u.button("添加内容库", self.add_content_library, primary=True)))
         else:
             children.append(u.button("添加内容库", self.add_content_library, primary=True))
@@ -438,11 +439,64 @@ class ContentLibraryUIMixin:
         if reason:
             self.alert(reason)
             return
+        await self._precheck_content_library_file(self.platform.import_library_pack, "导入文件")
+
+    # ------------------------------------------------------------ a library file opened from outside (library_file_open)
+    def watch_library_file_requests(self):
+        """At the end of start-up: the platform reports the files the app is asked to open (the launching
+        intent now, later ones as they arrive); each is handled once the app runs, never earlier."""
+        watch = getattr(getattr(self, "platform", None), "watch_library_file_requests", None)
+        if not callable(watch):
+            return False
+        requests = library_file_open.of(self)
+        try:
+            watch(requests.deliver)
+        except Exception as error:  # noqa: BLE001 - the app runs on without opening files
+            from .diagnostic_events import record_error
+            record_error("library_file_open", "request", error)
+            return False
+        # Started: the first page is shown and the record is open; the loop runs the handler after start-up.
+        self.loop.call_soon(requests.start, self._schedule_library_file_open)
+        return True
+
+    def _schedule_library_file_open(self, request):
+        self.loop.create_task(self.open_content_library_file(request))
+
+    def _library_file_open_busy(self):
+        navigation, root = getattr(self, "navigation", None), getattr(self, "root", None)
+        flush = getattr(self, "flush_drafts", None)
+        return library_file_open.busy(
+            blocked_reason=self._content_library_blocked(),
+            choosing=getattr(self, "_content_library_request", False),
+            countdown=library_restart.of(self).countdown is not None,
+            confirming=getattr(self, "_leave_confirmation_active", False),
+            navigation_hidden=navigation is not None and root is not None and navigation not in root.children,
+            unsaved=callable(flush) and flush() is False)
+
+    async def open_content_library_file(self, request):
+        """A library file the app was asked to open: the content library page with that file's precheck,
+        the state after picking it with 添加内容库 (same inspection, texts and 安装 button). Never installs.
+        While the app cannot leave what it is doing: one notice, and the request is dropped."""
+        if getattr(self, "_backup_closing", False):
+            return
+        if self._library_file_open_busy():
+            self.alert(library_file_open.BUSY_NOTICE)
+            return
+        self.show_content_libraries()
+        if self.page != "content_libraries":
+            self.alert(library_file_open.BUSY_NOTICE)
+            return
+        await self._precheck_content_library_file(lambda: self.platform.read_library_file(request), request.name,
+                                                  file_name=request.name)
+
+    async def _precheck_content_library_file(self, read, source_name, *, file_name=None):
+        """Read one pack file (``read()``: its bytes, None when nothing was chosen), stage and precheck it, show
+        the precheck. ``file_name``: the opened file's name, put before an error message."""
         self._content_library_request = True
         self._cancel_library_restart()  # no restart while the file is being chosen and checked
         token, origin = self._page_token, self.page
         try:
-            data = await self.platform.import_library_pack()
+            data = await read()
             if data is None or self.page != origin or self._page_token != token:
                 return
             service = self.content_library_service()
@@ -450,7 +504,7 @@ class ContentLibraryUIMixin:
             # here; the registry/progress precheck that follows uses the store
             # connection on its owning thread.
             registry = service.registry()
-            staged = await asyncio.to_thread(service.stage_bytes, data, "导入文件", registry=registry)
+            staged = await asyncio.to_thread(service.stage_bytes, data, source_name, registry=registry)
             if self.page != origin or self._page_token != token or self._content_library_blocked():
                 service.discard(staged)
                 return
@@ -464,7 +518,7 @@ class ContentLibraryUIMixin:
             self._content_library_differences = differences
             self.show_content_library_precheck()
         except Exception as error:
-            self.alert("无法读取内容库：" + _message(error))
+            self.alert(library_file_open.with_name(file_name, "无法读取内容库：" + _message(error)))
         finally:
             self._content_library_request = False
 

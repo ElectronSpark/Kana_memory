@@ -85,33 +85,60 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
     }
 
     public void importJson() {
+        importDocument("application/json\napplication/octet-stream\napplication/zip\ntext/plain");
+    }
+
+    /** The picker for one import, offering the given MIME types (one per line). */
+    public void importDocument(String mimeTypes) {
         if (started || finished) throw new IllegalStateException("Document request already used");
         started = true;
+        final String[] types = mimeTypes == null ? new String[0] : mimeTypes.trim().split("\n");
+        if (types.length == 0 || types[0].isEmpty()) throw new IllegalArgumentException("No document type");
         final ContentResolver resolver = activity.getApplicationContext().getContentResolver();
         opener = activity.getActivityResultRegistry().register("kana-import-" + UUID.randomUUID(),
                 new ActivityResultContracts.OpenDocument(), uri -> {
             if (cancelled) return;
             if (uri == null) { complete(null, true, null); return; }
-            new Thread(() -> {
-                if (cancelled) return;
-                String error = null;
-                InputStream input = null;
-                try {
-                    input = resolver.openInputStream(uri);
-                    if (input == null) throw new java.io.IOException("无法读取选中的文件。");
-                    synchronized (streamLock) {
-                        if (cancelled) throw new IOException("文件读取已取消。");
-                        importInput = input;
-                    }
-                } catch (Exception exception) {
-                    closeQuietly(input);
-                    error = "无法读取备份：" + exception.getMessage();
-                }
-                finishFromWorker(error == null ? IMPORT_READY : null, error);
-            }, "KanaBackupImport").start();
+            new Thread(() -> openImport(resolver, uri, "无法读取备份："), "KanaBackupImport").start();
         });
-        try { opener.launch(new String[]{"application/json", "text/plain", "application/octet-stream", "application/zip"}); }
+        try { opener.launch(types); }
         catch (RuntimeException error) { complete(null, false, "无法打开选择文件窗口：" + error.getMessage()); }
+    }
+
+    /**
+     * A document the app was asked to open (ACTION_VIEW, content or file URI): the same bounded
+     * stream as a picked document, read through the content resolver with the permission the
+     * sender granted. A file URI the app may not read fails here; nothing bypasses the resolver.
+     */
+    public void importUri(String uriText) {
+        if (started || finished) throw new IllegalStateException("Document request already used");
+        started = true;
+        final android.net.Uri uri = uriText == null ? null : android.net.Uri.parse(uriText);
+        final String scheme = uri == null ? null : uri.getScheme();
+        if (!"content".equals(scheme) && !"file".equals(scheme)) {
+            complete(null, false, "无法读取这个文件。");
+            return;
+        }
+        final ContentResolver resolver = activity.getApplicationContext().getContentResolver();
+        new Thread(() -> openImport(resolver, uri, "无法读取文件："), "KanaDocumentOpen").start();
+    }
+
+    private void openImport(ContentResolver resolver, android.net.Uri uri, String failure) {
+        if (cancelled) return;
+        String error = null;
+        InputStream input = null;
+        try {
+            input = resolver.openInputStream(uri);
+            if (input == null) throw new java.io.IOException("无法读取选中的文件。");
+            synchronized (streamLock) {
+                if (cancelled) throw new IOException("文件读取已取消。");
+                importInput = input;
+            }
+        } catch (Exception exception) {
+            closeQuietly(input);
+            error = failure + exception.getMessage();
+        }
+        finishFromWorker(error == null ? IMPORT_READY : null, error);
     }
 
     /** Pull exactly one bounded block. No external file path crosses the bridge. */
