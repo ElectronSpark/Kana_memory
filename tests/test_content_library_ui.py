@@ -462,12 +462,3 @@ def test_an_install_that_stays_disabled_does_not_restart(countdown_app):
     app.loop.call_later.assert_not_called()
     app.platform.restart_app.assert_not_called()
     assert "仍保持停用" in app.alert.call_args[0][0]
-
-
-def test_the_libraries_page_reports_replaced_pending_questions_once_there_are_some(library_app):
-    app = library_app
-    app.show_content_libraries()
-    assert "题库已更新" not in text_of(app.body)
-    app._retired_templates_replaced = 4
-    app.show_content_libraries()
-    assert "题库已更新：4 道待做的题已换成新题。" in text_of(app.body)

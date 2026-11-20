@@ -1009,5 +1009,3 @@ app/src/kanamemory/process_restart.py
 app/native/java/org/example/kanamemory/KanaRestart.java
 tests/test_process_restart.py
 app/src/kanamemory/library_restart.py
-app/src/kanamemory/retired_template_pass.py
-tests/test_retired_template_pass.py

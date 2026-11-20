@@ -39,7 +39,6 @@ import asyncio
 from . import content_library_rules as rules
 from . import content_library_signing as signing
 from . import library_restart
-from . import retired_template_pass
 from . import ui_components as u
 from .app_clock import utc_now
 from .content_availability import LIBRARY_CHANGE_NOTE
@@ -63,8 +62,6 @@ NO_AUTO_RESTART = {"unsupported": "应用没有自动重启：这台设备上应
                    "blocked": "应用没有自动重启：备份、恢复或练习正在进行。",
                    "refused": "应用没有自动重启：还有未保存的内容或进行中的操作，应用未能正常关闭。",
                    "failed": "应用没有自动重启：重启时出错。"}
-# Where the app reports content changes: the start-up pass of retired_template_pass replaced N questions.
-RETIRED_TEMPLATES_REPLACED = "题库已更新：{count} 道待做的题已换成新题。"
 FAMILY_TITLES = {"word": "词汇", "grammar": "语法", "pronunciation": "读音规则", "kana": "假名", "other": "其他"}
 LISTED = 10
 REGISTRY_SIGNATURE_TEXT = {"unsigned": "未签名", "unverified": "签名未验证", "verified": "签名已验证",
@@ -379,9 +376,6 @@ class ContentLibraryUIMixin:
             self.screen("content_libraries", "内容库", u.label("无法读取内容库设置：" + _message(error), size=14),
                         u.button("返回", self.go_back))
             return
-        replaced = retired_template_pass.replaced_count(self)
-        if replaced:
-            children.append(self.note(RETIRED_TEMPLATES_REPLACED.format(count=replaced)))
         slot = None
         if pending:
             slot = u.col()
