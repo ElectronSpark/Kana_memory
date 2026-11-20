@@ -396,6 +396,6 @@ def test_precheck_refuses_invalid_signature_with_reason(library_app):
     assert "签名状态：签名无效" in text and "签名无效，不能安装：签名与清单内容不符" in text
     buttons = _buttons(app)
     assert "安装" not in buttons and not any(name.startswith("仍然安装") for name in buttons) and "取消" in buttons
-    app.install_content_library()
+    asyncio.run(app.install_content_library())
     assert "签名无效，不能安装" in app.alert.call_args[0][0]
     assert [e["library_id"] for e in app.store.get_setting(rules.REGISTRY_SETTING)["libraries"]] == [rules.CORE_LIBRARY_ID]

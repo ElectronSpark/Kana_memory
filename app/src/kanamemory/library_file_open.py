@@ -110,15 +110,15 @@ def with_name(name, message):
     return f"{name}：{message}" if name else message
 
 
-def busy(*, blocked_reason=None, choosing=False, countdown=False, confirming=False, navigation_hidden=False,
+def busy(*, blocked_reason=None, choosing=False, working=False, confirming=False, navigation_hidden=False,
          unsaved=False):
     """Whether a request to open a file must be dropped (with BUSY_NOTICE): the guards that stop moving to
     another page today. ``blocked_reason``: the libraries page's own refusal (backup or restore, a practice
-    round, a focused page); ``choosing``: a library file is being chosen or checked; ``countdown``: an
-    automatic restart is counting down; ``confirming``: a leave confirmation is open; ``navigation_hidden``:
-    the page hides the navigation bar (an answer, a lesson, a diagnostic, a report being written);
+    round, a focused page); ``choosing``: a library file is being chosen or checked; ``working``: the
+    libraries page shows its status block (a library file is read, checked or installed); ``confirming``: a
+    leave confirmation is open; ``navigation_hidden``: the page hides the navigation bar (an answer, a lesson, a diagnostic, a report being written);
     ``unsaved``: a draft could not be saved."""
-    return bool(blocked_reason or choosing or countdown or confirming or navigation_hidden or unsaved)
+    return bool(blocked_reason or choosing or working or confirming or navigation_hidden or unsaved)
 
 
 class Requests:

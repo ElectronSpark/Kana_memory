@@ -27,6 +27,13 @@ DEFAULT_SCOPES = ("清音与拨音", "浊音", "半浊音", "拗音")
 
 DEFAULT_CATEGORIES = ("basic", "dakuten", "handakuten", "yoon")
 
+
+def activity_indicator(**kw):
+    """A fake toga.ActivityIndicator: a View marked as a running indicator."""
+    node = View(**kw)
+    node._activity_indicator = True
+    return node
+
 @pytest.fixture
 def setup_app(monkeypatch):
     def fake_diagram(diagram):
@@ -45,6 +52,7 @@ def setup_app(monkeypatch):
     monkeypatch.setattr(app_module.toga, "TextInput", lambda **kw: View(**kw))
     monkeypatch.setattr(app_module.toga, "Switch", lambda text, **kw: View(text=text, **kw))
     monkeypatch.setattr(app_module.toga, "ScrollContainer", ScrollView)
+    monkeypatch.setattr(app_module.toga, "ActivityIndicator", activity_indicator)
     monkeypatch.setattr(app_module, "kana_scope_inventory", lambda *args, scopes, **kw:
         {title: {"total": 0, "learned": 0, "queued": 0, "not_included": 0} for title in scopes})
     app = SimpleNamespace(

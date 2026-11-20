@@ -1,10 +1,13 @@
 """Package runtime resources as a kanamemory-library-pack v1 ZIP (design 08 §4).
 
 The pack file is written as ``.kmlib`` (design 08 section 16.8; the format is the same ZIP): given a
-directory (default: the current one) the tool names it
-KanaMemory-<minimum app version>-library-<library id>-<edition>.kmlib (minimum app version:
---app-min-version, else this app's version; edition: --edition, else the library version). An explicit
-output file name is kept as given, an older ``.zip`` name too.
+directory (default: the current one) the tool names it KanaMemory-<app version>.<edition>-<short id>.kmlib,
+for example KanaMemory-0.36.7.1-core.kmlib: <app version> is this tree's app version (build_info.VERSION),
+<edition> is --edition N (a positive integer), else one more than the highest edition of the files
+KanaMemory-<app version>.*-<short id>.kmlib already in that directory (1 when there is none), and <short id>
+is --short-id, else the part of the library id after its last dot (kanamemory.core -> core). An explicit
+output file name is kept as given, an older ``.zip`` name too. The name changes nothing inside the pack
+(its minimum app version and library_version stay what they are).
 
 The default library is the core library ``kanamemory.core``: the teaching
 database (v1 or v2) is carried once, as teaching/teaching_content.sqlite3, and
@@ -52,6 +55,7 @@ from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import zipfile
@@ -72,12 +76,28 @@ ANNOTATION_FILES = ("sentence_annotations.sqlite3", "natural_translations.sqlite
 REVIEW_FILE = "learning_material_review.json"
 
 
-def pack_file_name(app_min_version, library_id, edition):
-    """The default file name of a pack: KanaMemory-<minimum app version>-library-<library id>-<edition>.kmlib."""
-    for part in (str(app_min_version), str(library_id), str(edition)):
+def short_id(library_id):
+    """The library id's part after its last dot: kanamemory.core -> core, mylibrary -> mylibrary."""
+    return str(library_id).rsplit(".", 1)[-1]
+
+
+def pack_file_name(app_version, edition, short):
+    """The default file name of a pack: KanaMemory-<app version>.<edition>-<short id>.kmlib."""
+    if type(edition) is not int or edition < 1:
+        raise ValueError("The edition is a positive integer")
+    for part in (str(app_version), str(short)):
         if not part or any(ch in part for ch in '/\\:*?"<>|') or not part.isprintable():
             raise ValueError("Not usable in a file name: " + part[:80])
-    return f"KanaMemory-{app_min_version}-library-{library_id}-{edition}{PACK_SUFFIX}"
+    return f"KanaMemory-{app_version}.{edition}-{short}{PACK_SUFFIX}"
+
+
+def next_edition(directory, app_version, short):
+    """One more than the highest edition N of KanaMemory-<app version>.<N>-<short id>.kmlib in ``directory``
+    (1 when there is none)."""
+    pattern = re.compile(re.escape(f"KanaMemory-{app_version}.") + r"([1-9][0-9]*)"
+                         + re.escape(f"-{short}{PACK_SUFFIX}"))
+    found = [int(match.group(1)) for path in Path(directory).iterdir() if (match := pattern.fullmatch(path.name))]
+    return max(found, default=0) + 1
 
 
 def _encoded(value):
@@ -266,7 +286,8 @@ def size_problem(files):
 def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_version=None, title=None,
             extension=False, namespaces=None, include_media=True, description="", rewrite_ids=False,
             depend_on_source=False, optional_references=(), retires=(), aliases=None, overrides=(),
-            sign_seed=None, key_id=None, routes=(), with_sample_route=False, app_min_version=None, edition=None):
+            sign_seed=None, key_id=None, routes=(), with_sample_route=False, app_min_version=None, edition=None,
+            short=None):
     resources, output = Path(resources).resolve(), Path(output).resolve()
     if app_min_version is not None and rules.app_version_key(app_min_version) is None:
         raise ValueError("app_min_version must be a dotted number such as 0.36.0")
@@ -350,7 +371,9 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
     if not rules.VERSION_TEXT.fullmatch(version):
         version = metadata["content_sha256"][:12]
     if to_directory:
-        output = output / pack_file_name(app_min_version or APP_VERSION, library_id, edition or version)
+        label = short or short_id(library_id)
+        output = output / pack_file_name(APP_VERSION, next_edition(output, APP_VERSION, label)
+                                         if edition is None else edition, label)
         if output.exists():
             raise ValueError("Choose a new output file: " + output.name)
     manifest = {
@@ -399,10 +422,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("resources", type=Path, help="Runtime resources directory (content.sqlite3, teaching_content.sqlite3, NOTICE.txt)")
     parser.add_argument("output", type=Path, nargs="?", default=Path("."),
-                        help="Directory for KanaMemory-<app min version>-library-<library id>-<edition>.kmlib "
-                        "(default: the current directory), or a new file name kept as given (an older .zip name "
-                        "too); outside the resources directory")
-    parser.add_argument("--edition", help="Edition in the default file name (default: the library version)")
+                        help="Directory for KanaMemory-<app version>.<edition>-<short id>.kmlib (default: the "
+                        "current directory), or a new file name kept as given (an older .zip name too); outside "
+                        "the resources directory")
+    parser.add_argument("--edition", type=int, help="Edition in the default file name, a positive integer "
+                        "(default: one more than the highest edition of this app version and short id there)")
+    parser.add_argument("--short-id", help="Short id in the default file name (default: the library id after its "
+                        "last dot)")
     parser.add_argument("--library-id", default=rules.CORE_LIBRARY_ID)
     parser.add_argument("--library-version")
     parser.add_argument("--title")
@@ -439,7 +465,7 @@ def main():
                      retires=retires, aliases=aliases, overrides=args.override, sign_seed=seed, key_id=args.key_id,
                      routes=[spec for path in args.route for spec in load_route_specs(path)],
                      with_sample_route=args.sample_route, app_min_version=args.app_min_version,
-                     edition=args.edition)
+                     edition=args.edition, short=args.short_id)
     result.pop("provides")
     print(json.dumps(result, ensure_ascii=False))
 

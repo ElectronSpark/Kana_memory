@@ -19,7 +19,7 @@ import pytest
 from kanamemory import content_library_rules as rules
 from kanamemory import content_pack
 from kanamemory import library_file_open as files
-from kanamemory import library_restart
+from kanamemory import library_activity
 from kanamemory import platform_android as bridge
 from support.app_fixtures import setup_app, question_app  # noqa: F401
 from support.content_library_support import build_core_resources, extension_namespaces, pack_bytes
@@ -92,7 +92,7 @@ def test_requests_wait_for_the_started_app_then_each_is_handled_once():
 
 def test_busy_is_any_guard_that_stops_leaving_the_page():
     assert files.busy() is False
-    for guard in ("choosing", "countdown", "confirming", "navigation_hidden", "unsaved"):
+    for guard in ("choosing", "working", "confirming", "navigation_hidden", "unsaved"):
         assert files.busy(**{guard: True}) is True
     assert files.busy(blocked_reason="备份或恢复进行中") is True
 
@@ -331,14 +331,14 @@ def test_a_file_that_is_not_a_pack_is_reported_with_its_name(library_app):
     app.platform.read_library_file = AsyncMock(return_value=b"not a zip")
     asyncio.run(app.open_content_library_file(_request("notes.bin")))
     assert app.page == "content_libraries"
-    message = app.alert.call_args[0][0]
-    assert message.startswith("notes.bin：无法读取内容库：")
+    assert app.alert.call_args[0][0] == "notes.bin：这不是 KanaMemory 的内容库文件。"
+    assert "正在" not in text_of(app.body)  # the status block went before the message
     app.platform.read_library_file = AsyncMock(side_effect=bridge.PlatformError(files.FILE_URI_UNREADABLE))
     asyncio.run(app.open_content_library_file(_request("a.kmlib")))
     assert app.alert.call_args[0][0] == "a.kmlib：无法读取内容库：" + files.FILE_URI_UNREADABLE
 
 
-@pytest.mark.parametrize("guard", ["backup", "practice", "countdown", "choosing", "confirming", "navigation", "unsaved"])
+@pytest.mark.parametrize("guard", ["backup", "practice", "working", "choosing", "confirming", "navigation", "unsaved"])
 def test_while_the_app_cannot_leave_what_it_is_doing_one_notice_and_the_request_is_dropped(library_app, guard):
     app = library_app
     app.page = "settings_hub"
@@ -346,8 +346,8 @@ def test_while_the_app_cannot_leave_what_it_is_doing_one_notice_and_the_request_
         app._backup_busy = True
     elif guard == "practice":
         app._practice_context = True
-    elif guard == "countdown":
-        library_restart.of(app).countdown = library_restart.Countdown(app._page_token, None)
+    elif guard == "working":
+        library_activity.of(app).begin(library_activity.INSTALLING)
     elif guard == "choosing":
         app._content_library_request = True
     elif guard == "confirming":
@@ -410,23 +410,35 @@ def _tool(name):
     return module
 
 
-def test_the_packaging_tool_names_a_pack_kmlib_by_default_and_keeps_an_explicit_zip_name(tmp_path):
+def test_the_packaging_tool_names_a_pack_by_app_version_edition_and_short_id(tmp_path):
     tool = _tool("package_library_pack")
+    from kanamemory.build_info import VERSION
     resources = build_core_resources(tmp_path / "resources")
     out = tmp_path / "out"
     out.mkdir()
-    result = tool.package(resources, out, library_version="20261120", app_min_version="0.36.6")
-    path = Path(result["path"])
-    assert path.name == "KanaMemory-0.36.6-library-kanamemory.core-20261120.kmlib" and path.parent == out.resolve()
-    assert rules.validate_library_pack(path).manifest["library_id"] == rules.CORE_LIBRARY_ID
-    edition = tool.package(resources, out, library_version="20261120", edition="20261120.2")
-    assert Path(edition["path"]).name == f"KanaMemory-{tool.APP_VERSION}-library-kanamemory.core-20261120.2.kmlib"
+    (out / f"KanaMemory-{VERSION}.3-other.kmlib").write_bytes(b"")  # another library's editions do not count
+    (out / f"KanaMemory-0.1.9-core.kmlib").write_bytes(b"")  # nor another app version's
+    first = Path(tool.package(resources, out, library_version="20261120", app_min_version="0.36.0")["path"])
+    assert first.name == f"KanaMemory-{VERSION}.1-core.kmlib" and first.parent == out.resolve()
+    manifest = rules.validate_library_pack(first).manifest
+    assert manifest["library_id"] == rules.CORE_LIBRARY_ID and manifest["library_version"] == "20261120"
+    assert manifest["requires"]["app_min_version"] == "0.36.0"  # the name changes nothing inside the pack
+    second = Path(tool.package(resources, out, library_version="20261121")["path"])
+    assert second.name == f"KanaMemory-{VERSION}.2-core.kmlib"  # counted: one more than the highest there
+    given = Path(tool.package(resources, out, library_version="20261122", edition=7)["path"])
+    assert given.name == f"KanaMemory-{VERSION}.7-core.kmlib"
+    assert Path(tool.package(resources, out, library_version="20261123")["path"]).name == f"KanaMemory-{VERSION}.8-core.kmlib"
     with pytest.raises(ValueError, match="new output file"):
-        tool.package(resources, out, library_version="20261120", app_min_version="0.36.6")
+        tool.package(resources, out, library_version="20261120", edition=7)
+    short = Path(tool.package(resources, out, library_version="20261120", short="kana")["path"])
+    assert short.name == f"KanaMemory-{VERSION}.1-kana.kmlib"
     explicit = tool.package(resources, tmp_path / "old-name.zip", library_version="20261120")
     assert Path(explicit["path"]).name == "old-name.zip"
-    with pytest.raises(ValueError):
-        tool.pack_file_name("0.36.6", "a/b", "1")
+    assert tool.short_id("kanamemory.core") == "core" and tool.short_id("mylibrary") == "mylibrary"
+    assert tool.short_id("author.n3") == "n3"
+    for edition, label in ((0, "core"), ("2", "core"), (1, "a/b")):
+        with pytest.raises(ValueError):
+            tool.pack_file_name(VERSION, edition, label)
 
 
 def test_the_signing_tool_writes_kmlib_into_a_directory_and_keeps_an_explicit_zip_name(tmp_path):

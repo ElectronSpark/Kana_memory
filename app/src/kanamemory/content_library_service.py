@@ -83,6 +83,34 @@ class PackInspection:
         return self.report.manifest
 
 
+@dataclass(frozen=True)
+class PreparedInstall:
+    """An install up to its registry write (prepare_install): the folder is written, the registry not yet."""
+    inspection: PackInspection
+    base: dict          # the registry the install was prepared against
+    registry: dict      # the registry to write
+    entry: dict
+    target: Path
+
+
+class _RegistryReader:
+    """The store of a snapshot(): one registry read, no write."""
+
+    def __init__(self, registry, data_dir):
+        self._registry = json.loads(json.dumps(registry))
+        self.data_dir = data_dir
+
+    def get_setting(self, key, default=None):
+        return json.loads(json.dumps(self._registry)) if key == rules.REGISTRY_SETTING else default
+
+    def set_setting(self, key, value):
+        raise RuntimeError("A content library snapshot never writes the store")
+
+
+def _no_store_read():
+    raise RuntimeError("A content library snapshot reads no availability")
+
+
 def _no_links(path, root):
     """``path`` (inside ``root``) with no symbolic link at or below the library's own folders.
 
@@ -577,10 +605,7 @@ class ContentLibraryService:
         # The version being replaced does not stay installed. While it is loaded the process catalogue holds
         # its items (the pack then "conflicted" with its own old version); while it is switched off it holds
         # none (every item then counted as new). An id the catalogue serves from another owner still counts.
-        previous = (self._provided_ids(existing) if existing is not None and existing["source"]["kind"] == "file"
-                    and manifest["profile"] != "core" else frozenset())
-        provider = self.availability().catalogue.provider if previous else None
-        own = frozenset(cid for cid in previous if provider(cid) == manifest["library_id"])
+        previous, own = self._previous_and_own(manifest, registry)
         core_fingerprints = {cid: value for cid, value in core_fingerprints.items() if cid not in own}
         installed.update(core_fingerprints)
         for entry in rules.effective_entries(registry):
@@ -619,6 +644,42 @@ class ContentLibraryService:
             if stale:
                 check = replace(check, revision_errors=tuple(sorted({*check.revision_errors, *stale})))
         return check
+
+    def _previous_and_own(self, manifest, registry):
+        """The ids of the version being replaced, and those the running catalogue serves from it."""
+        fixed = getattr(self, "_fixed_own", None)
+        if fixed is not None and fixed[0] == manifest["library_id"]:
+            return fixed[1], fixed[2]
+        existing = rules.registry_entry(registry, manifest["library_id"])
+        previous = (self._provided_ids(existing) if existing is not None and existing["source"]["kind"] == "file"
+                    and manifest["profile"] != "core" else frozenset())
+        provider = self.availability().catalogue.provider if previous else None
+        return previous, frozenset(cid for cid in previous if provider(cid) == manifest["library_id"])
+
+    def snapshot(self, manifest):
+        """A read-only copy of this service for a worker thread, for one pack (``manifest``).
+
+        Everything this pack's precheck and install read from the store (registry, learned ids, the
+        availability of the version being replaced, kana identities) and from the in-memory catalogue
+        is read HERE, on the store's thread; the copy then reads only files. Its registry() is this
+        registry and it never writes: commit_install, on the store's thread, writes the registry.
+        """
+        registry = self.registry()
+        learned = self.learned_ids()
+        kana = self.kana_identities()
+        ids = self.catalogue_ids()
+        fingerprints = self.catalogue_fingerprints()
+        previous, own = self._previous_and_own(manifest, registry)
+        declared = sorted(cid for cid in manifest.get("revisions", {}) if cid in fingerprints)
+        revisions = self.catalogue_revisions(declared) if declared else {}
+        view = ContentLibraryService(_RegistryReader(registry, getattr(self.store, "data_dir", None)), root=self.root,
+                                     catalogue_ids=lambda: ids, catalogue_fingerprints=lambda: fingerprints,
+                                     catalogue_revisions=lambda: revisions, learned_ids=lambda: learned,
+                                     word_exists=self._word_exists, kana_identities=lambda: kana,
+                                     availability=_no_store_read)
+        view._manifests = self._manifests
+        view._fixed_own = (manifest["library_id"], previous, own)
+        return view
 
     def _trial_merge(self, report, registry, archive, catalogue):
         """content_library_merge.offline_merge_problems: the pack over the enabled installed libraries.
@@ -671,9 +732,39 @@ class ContentLibraryService:
         accepted for this library are kept for the ids it still declares.
         A new version of an installed library keeps that library's switch:
         a library the learner turned off stays off after the update.
+
+        prepare_install (files; on a worker with snapshot()) and commit_install
+        (the registry write, on the store's thread) are its two halves.
         """
+        return self.commit_install(self.prepare_install(
+            inspection, accept_missing_references=accept_missing_references, accept_overrides=accept_overrides,
+            now=now))
+
+    def commit_install(self, prepared):
+        """Write the registry prepare_install made (store thread). Refused, and the new folder removed, when the
+        registry changed since it was prepared. The staging folder goes either way."""
+        try:
+            if self.registry() != prepared.base:
+                _remove_tree(self.root, prepared.target)
+                raise ValueError("内容库设置在安装期间有了变化，请重新添加这个内容库文件。")
+            entry = prepared.entry
+            self._manifests.pop((entry["library_id"], entry["content_sha256"]), None)
+            self._write(prepared.registry)
+            return entry
+        finally:
+            self.discard(prepared.inspection)
+
+    def abandon_install(self, prepared):
+        """A prepared install that is not committed: its new folder and the staging go."""
+        _remove_tree(self.root, prepared.target)
+        self.discard(prepared.inspection)
+
+    def prepare_install(self, inspection, *, accept_missing_references=False, accept_overrides=False, now=None):
+        """install() without its registry write: the re-check and the copy into a fresh folder; reads only
+        files on a snapshot(). Returns a PreparedInstall for commit_install; the staging goes on failure."""
         try:
             registry = self.registry()
+            base = json.loads(json.dumps(registry))
             report = rules.validate_library_pack(inspection.archive, registry=registry)  # the staged bytes, re-checked
             if report.manifest != inspection.manifest:
                 raise ValueError("内容库文件在检查后发生了变化，请重新选择。")
@@ -729,11 +820,11 @@ class ContentLibraryService:
             if entry["library_id"] in registry.get("pending_delete", ()):
                 # Reinstalled after a removal: superseded folders go with _remove_superseded.
                 registry = rules.with_pending_delete(registry, drop=(entry["library_id"],))
-            self._manifests.pop((entry["library_id"], entry["content_sha256"]), None)
-            self._write(registry)
-            return entry
-        finally:
+            return PreparedInstall(inspection=inspection, base=base, registry=rules.validate_registry(registry),
+                                   entry=entry, target=target)
+        except BaseException:
             self.discard(inspection)
+            raise
 
     @staticmethod
     def _write_indexes(directory, manifest):

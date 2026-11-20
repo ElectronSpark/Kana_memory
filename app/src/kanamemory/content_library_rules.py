@@ -36,6 +36,7 @@ import hashlib
 import json
 import re
 import zipfile
+import zlib
 
 from . import content_library_signing as signing
 from . import study_routes
@@ -105,6 +106,48 @@ KANA_IDENTITY_PREFIX = "kana:"
 
 class ContentLibraryError(ValueError):
     """The registry, manifest or pack does not have a supported shape."""
+
+
+# What a learner reads when a file they chose cannot be imported (design 08 section 16.8): one short sentence
+# per kind of problem; the importer's own (English) detail goes only to the diagnostic record.
+NOT_A_PACK = "这不是 KanaMemory 的内容库文件。"
+DAMAGED_PACK = "这个内容库文件已损坏或不完整，请重新获取。"
+PART_TOO_LARGE = "这个内容库文件里有超过大小限制的部分，不能导入。"
+NEWER_PACK = "这个内容库文件需要更新版本的应用才能导入，请先更新应用。"
+WRONG_SHAPE = "这个内容库文件的格式不对，不能导入。"
+HOLDS_LEARNER_STATE = "这个内容库文件里含有学习记录，不能导入。"
+FORBIDDEN_FILE = "这个内容库文件里含有不允许的文件（程序、密钥或链接），不能导入。"
+_LEARNER_SENTENCES = (
+    (NOT_A_PACK, ("Not a library pack ZIP file", "Library pack has no manifest.json",
+                  "Library manifest is not valid JSON", "Invalid library manifest")),
+    (DAMAGED_PACK, ("Library file checksum mismatch", "Library file size does not match",
+                    "Library file is larger than its manifest", "Library content checksum does not match",
+                    "Pack files and manifest file table disagree", "Duplicate pack entry",
+                    "Teaching document is not valid JSON", "Library database is not an SQLite file",
+                    "Bad CRC-32", "File is not a zip file", "Truncated file header", "Bad magic number")),
+    (PACK_TOO_LARGE, ("Library pack exceeds its size limit",)),
+    (PART_TOO_LARGE, ("Library file exceeds its size limit", "Teaching namespace exceeds its size limit",
+                      "Library manifest is too large")),
+    (NEWER_PACK, ("Unsupported library pack format", "Unsupported library requirements")),
+    (HOLDS_LEARNER_STATE, ("Learner state must never enter",)),
+    (FORBIDDEN_FILE, ("Library packs cannot contain links", "Executable code or credential material")),
+)
+
+
+def learner_error(error):
+    """The sentence a learner reads for an importer error about their file, or None when ``error`` is not one
+    (a platform or storage failure keeps its own message). A message already in Chinese is kept as it is."""
+    if isinstance(error, (zipfile.BadZipFile, zlib.error, EOFError)) or type(error).__name__ == "DatabaseError":
+        return DAMAGED_PACK  # a damaged archive, or a damaged database inside it (sqlite3.DatabaseError)
+    if not isinstance(error, ValueError):
+        return None
+    text = str(error).strip()
+    if any("一" <= ch <= "鿿" for ch in text):
+        return text.splitlines()[0]
+    for sentence, starts in _LEARNER_SENTENCES:
+        if text.startswith(starts):
+            return sentence
+    return WRONG_SHAPE
 
 
 def _text(value, name, *, allow_empty=False, limit=4096):

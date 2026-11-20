@@ -7,6 +7,7 @@ import pytest
 from kanamemory import content_library_rules as rules
 from kanamemory import content_pack
 from kanamemory import content_library_ui as library_ui
+from kanamemory import library_activity
 from kanamemory.learning_ui import LearningUIMixin
 from support.app_fixtures import setup_app, question_app  # noqa: F401
 from support.content_library_support import build_core_resources, extension_namespaces, pack_bytes
@@ -231,7 +232,7 @@ def test_same_revision_different_content_is_a_package_error(library_app):
     assert "同 ID 冲突" in text and "冲突：grammar:demo:desu（本库声明替代" in text
     assert "包错误：1 项" in text and "包错误：grammar:demo:desu" in text
     assert "安装" not in _buttons(app) and "仍然安装（相关项标为依赖缺失、不可加入）" not in _buttons(app)
-    app.install_content_library()
+    asyncio.run(app.install_content_library())
     assert "包错误" in app.alert.call_args[0][0]
     assert [e["library_id"] for e in app.store.get_setting(rules.REGISTRY_SETTING)["libraries"]] == [rules.CORE_LIBRARY_ID]
 
@@ -257,11 +258,12 @@ def test_restart_now_closes_like_an_exit_then_restarts_the_process(library_app, 
     app = library_app
     app.platform.can_restart = True
     app.platform.restart_app = Mock(return_value=True)  # the fake returns; a real restart never does
+    app._close_for_restart = Mock(return_value=False)  # e.g. an unsaved draft: the automatic restart is refused
     _install(app)
-    assert "可在内容库页点「立即重启」" in app.alert.call_args[0][0]
+    app.platform.restart_app.assert_not_called()
+    assert library_ui.NO_AUTO_RESTART["refused"] in text_of(app.body)
     assert "立即重启" in _buttons(app) and "只切到后台再回来不算重启" not in text_of(app.body)
-    app._close_for_restart = Mock(return_value=False)  # e.g. an unsaved draft: the close refuses
-    asyncio.run(app.restart_for_library_change())
+    asyncio.run(app.restart_for_library_change())  # 立即重启, still refused
     app.platform.restart_app.assert_not_called()
     app._close_for_restart = Mock(return_value=True)
     asyncio.run(app.restart_for_library_change())
@@ -282,183 +284,130 @@ def test_a_refused_restart_says_how_and_ends_the_closed_app(library_app, monkeyp
     from kanamemory import ui_components
     info = Mock(name="InfoDialog")
     monkeypatch.setattr(ui_components.toga, "InfoDialog", info)
-    _install(app)
-    asyncio.run(app.restart_for_library_change())
+    _install(app)  # the automatic restart right after the install
     app.platform.restart_app.assert_called_once_with()
     assert "只切到后台再回来不算重启" in info.call_args[0][1]
     app.main_window.dialog.assert_awaited_once_with(info.return_value)
     app.exit.assert_called_once_with()
 
 
-# --- the automatic restart after a change (a 3-second countdown that 稍后再重启 cancels) ---------------
+# --- the automatic restart after a change: at once, through 立即重启's path -------------------------------
 
 @pytest.fixture
-def countdown_app(library_app, monkeypatch):
-    """A platform that can restart, a timer that fires only when a test says so, a close that saves."""
+def restart_app(library_app, monkeypatch):
+    """A platform that can restart and a close that saves; what the page showed when the app closed."""
     from kanamemory import process_restart
     monkeypatch.setitem(process_restart._STATE, "attempted", False)
     app = library_app
     app.platform.can_restart = True
     app.platform.restart_app = Mock(return_value=True)  # the fake returns; a real restart never does
-    app._close_for_restart = Mock(return_value=True)
-    app.timer_handles = []
+    app.closing_pages = []
 
-    def call_later(delay, callback, *args):
-        handle = Mock(name="handle")
-        app.timer_handles.append(handle)
-        return handle
-    app.loop.call_later = Mock(side_effect=call_later)
-    app.loop.call_soon = Mock()
+    def close():
+        app.closing_pages.append(text_of(app.body))
+        return True
+    app._close_for_restart = Mock(side_effect=close)
     return app
 
 
-def _tick(app, call=None):
-    """Fire one timer callback (the latest one by default)."""
-    delay, callback, *args = (call or app.loop.call_later.call_args).args
-    assert delay == 1
-    callback(*args)
+def _toggle(app, enabled):
+    switch = app.content_library_switches["author.n3"]
+    switch.value = enabled
+    switch.on_change(switch)
 
 
-def _note(seconds):
-    return library_ui.AUTO_RESTART_NOTE.format(seconds=seconds)
-
-
-def test_a_change_restarts_by_itself_after_three_seconds_through_the_restart_now_path(countdown_app):
-    app = countdown_app
-    _install(app)
-    assert app.page == "content_libraries"
-    app.alert.assert_not_called()  # the page says it: no dialog over the countdown and its button
-    assert _note(3) in text_of(app.body) and library_ui.RESTART_LATER in _buttons(app)
-    assert library_ui.RESTART_NOW not in _buttons(app)
-    _tick(app)
-    assert _note(2) in text_of(app.body)
-    _tick(app)
-    assert _note(1) in text_of(app.body)
-    app.platform.restart_app.assert_not_called()
-    _tick(app)
+@pytest.mark.parametrize("change", ["install", "disable", "enable", "remove"])
+def test_each_change_that_needs_a_restart_restarts_at_once(restart_app, change, monkeypatch):
+    app = restart_app
+    if change != "install":
+        app.platform.can_restart = False
+        _install(app)
+        app.platform.can_restart = True
+        app.alert.reset_mock()
+        if change == "remove":  # this process loaded the installed library: removing it needs a restart
+            loaded = app.content_library_service().registry()
+            monkeypatch.setattr(content_pack, "active_registry", lambda: loaded)
+        if change == "enable":
+            app.platform.can_restart = False
+            _toggle(app, False)
+            app.platform.can_restart = True
+            app.alert.reset_mock()
+    if change == "install":
+        _install(app)
+    elif change == "remove":
+        app.main_window.dialog = AsyncMock(return_value=True)
+        asyncio.run(app.remove_content_library("author.n3"))
+    else:
+        _toggle(app, change == "enable")
     app._close_for_restart.assert_called_once_with()  # the App's normal close first, as 立即重启
     app.platform.restart_app.assert_called_once_with()
-    assert app.loop.call_later.call_count == 3
-
-
-def test_restart_later_cancels_and_leaves_today_s_note_and_button(countdown_app):
-    app = countdown_app
-    _install(app)
-    first = app.loop.call_later.call_args
-    click(app, library_ui.RESTART_LATER)
-    app.timer_handles[-1].cancel.assert_called_once_with()
-    text = text_of(app.body)
-    assert library_ui.PENDING_NOTE in text and _note(3) not in text and "没有自动重启" not in text
-    assert library_ui.RESTART_NOW in _buttons(app) and library_ui.RESTART_LATER not in _buttons(app)
-    for _ in range(3):
-        _tick(app, first)  # a timer that was already queued does nothing any more
-    app._close_for_restart.assert_not_called()
-    app.platform.restart_app.assert_not_called()
-    asyncio.run(app.restart_for_library_change())  # 立即重启 is still there and still works
-    app.platform.restart_app.assert_called_once_with()
-
-
-def test_a_second_change_restarts_the_countdown_and_only_one_restart_happens(countdown_app):
-    app = countdown_app
-    _install(app)
-    _tick(app)
-    _tick(app)
-    stale = app.loop.call_later.call_args
-    assert _note(1) in text_of(app.body)
-    switch = app.content_library_switches["author.n3"]
-    switch.value = False
-    switch.on_change(switch)  # disabled: another change that needs a restart
+    assert library_activity.RESTARTING in app.closing_pages[0]  # the notice just before
     app.alert.assert_not_called()
-    app.timer_handles[-2].cancel.assert_called_once_with()
-    assert _note(3) in text_of(app.body)
-    assert sum(view.text == library_ui.RESTART_LATER for view in descendants(app.body)) == 1
-    _tick(app, stale)  # the first countdown's last second: nothing
-    app.platform.restart_app.assert_not_called()
-    for _ in range(3):
-        _tick(app)
-    app.platform.restart_app.assert_called_once_with()
-    _tick(app)  # a late timer after the restart attempt: still one
-    app.platform.restart_app.assert_called_once_with()
-
-
-def test_a_rebuild_keeps_the_countdown_but_leaving_the_page_ends_it(countdown_app):
-    app = countdown_app
-    _install(app)
-    _tick(app)
-    app.show_content_libraries()  # the same page drawn again (a focus button does this): it goes on
-    assert _note(2) in text_of(app.body)
-    _tick(app)
-    assert _note(1) in text_of(app.body)
-    LearningUIMixin.show_settings_hub.__wrapped__(app)  # leaving the page
-    _tick(app)
-    app._close_for_restart.assert_not_called()
-    app.platform.restart_app.assert_not_called()
-    app.show_content_libraries()  # back again: today's note, no countdown
-    assert library_ui.RESTART_NOW in _buttons(app) and _note(3) not in text_of(app.body)
-    assert app.loop.call_later.call_count == 3  # the install, then two seconds; none after leaving
-
-
-def test_removing_stops_the_countdown_while_the_learner_decides(countdown_app):
-    app = countdown_app
-    _install(app)
-    stale = app.loop.call_later.call_args
-    app.main_window.dialog = AsyncMock(return_value=False)  # the removal is not confirmed
-    asyncio.run(app.remove_content_library("author.n3"))
-    assert library_ui.RESTART_NOW in _buttons(app) and _note(3) not in text_of(app.body)
-    for _ in range(3):
-        _tick(app, stale)
-    app.platform.restart_app.assert_not_called()
-    switch = app.content_library_switches["author.n3"]
-    switch.value = False
-    switch.on_change(switch)  # the next change starts a new countdown
-    assert _note(3) in text_of(app.body)
-    for _ in range(3):
-        _tick(app)
-    app.platform.restart_app.assert_called_once_with()
 
 
 @pytest.mark.parametrize("why", ["refused", "blocked"])
-def test_a_refused_or_blocked_automatic_restart_keeps_today_s_note_and_says_why(countdown_app, why):
-    app = countdown_app
-    _install(app)
+def test_a_refused_or_blocked_automatic_restart_keeps_today_s_note_and_says_why(restart_app, why):
+    app = restart_app
     if why == "refused":
         app._close_for_restart = Mock(return_value=False)  # e.g. an unsaved draft: the close refuses
     else:
+        app.platform.can_restart = False
+        _install(app)
+        app.platform.can_restart = True
+        app.alert.reset_mock()
         app._content_library_blocked = Mock(return_value="练习正在进行")
-    for _ in range(3):
-        _tick(app)
+    if why == "refused":
+        _install(app)
+    else:
+        app.show_content_libraries()
+        assert app._begin_library_restart() is True
+        asyncio.run(app._automatic_library_restart())
     app.platform.restart_app.assert_not_called()
     text = text_of(app.body)
     assert library_ui.PENDING_NOTE + library_ui.NO_AUTO_RESTART[why] in text
-    assert library_ui.RESTART_NOW in _buttons(app) and library_ui.RESTART_LATER not in _buttons(app)
+    assert library_ui.RESTART_NOW in _buttons(app) and library_activity.RESTARTING not in text
     app.alert.assert_not_called()
 
 
 def test_without_a_platform_restart_the_page_says_it_did_not_restart_by_itself(library_app):
     app = library_app
     app.platform.can_restart = False
-    app.loop.call_later = Mock()
     _install(app)
-    app.loop.call_later.assert_not_called()
     text = text_of(app.body)
     assert library_ui.NO_AUTO_RESTART["unsupported"] in text and "只切到后台再回来不算重启" in text
-    assert "立即重启" not in _buttons(app) and library_ui.RESTART_LATER not in _buttons(app)
+    assert "立即重启" not in _buttons(app) and library_activity.RESTARTING not in text
     assert "只切到后台再回来不算重启" in app.alert.call_args[0][0]  # today's alert as well
 
 
-def test_an_install_that_stays_disabled_does_not_restart(countdown_app):
-    app = countdown_app
+def test_an_install_that_stays_disabled_does_not_restart(restart_app):
+    app = restart_app
     _install(app)
-    for _ in range(3):
-        _tick(app)
     app.platform.restart_app.reset_mock()
-    app.loop.call_later.reset_mock()
     app.content_library_service().set_enabled("author.n3", False)
     namespaces = extension_namespaces()
     namespaces["lesson"]["_ITEMS"]["grammar:ext:masu"] = dict(namespaces["lesson"]["_ITEMS"]["grammar:ext:masu"],
                                                               revision=2, meaning="动词敬体（修订）")
     app.platform.import_library_pack = AsyncMock(return_value=pack_bytes("author.n3", namespaces, version="20260201"))
     _install(app)
-    app.loop.call_later.assert_not_called()
     app.platform.restart_app.assert_not_called()
     assert "仍保持停用" in app.alert.call_args[0][0]
+
+
+def test_a_removal_with_nothing_pending_does_not_restart(restart_app):
+    app = restart_app
+    app.platform.can_restart = False
+    _install(app)  # installed, never loaded by this process
+    app.platform.can_restart = True
+    app.main_window.dialog = AsyncMock(return_value=True)
+    asyncio.run(app.remove_content_library("author.n3"))
+    app.platform.restart_app.assert_not_called()
+    assert "已移除" in app.alert.call_args[0][0]
+
+
+def test_no_countdown_is_left():
+    import importlib.util
+    assert importlib.util.find_spec("kanamemory.library_restart") is None
+    for name in ("AUTO_RESTART_NOTE", "RESTART_LATER", "postpone_library_restart"):
+        assert not hasattr(library_ui, name) and not hasattr(library_ui.ContentLibraryUIMixin, name)
+    for name in ("_arm_library_restart", "_cancel_library_restart", "_tick_library_restart"):
+        assert not hasattr(library_ui.ContentLibraryUIMixin, name)

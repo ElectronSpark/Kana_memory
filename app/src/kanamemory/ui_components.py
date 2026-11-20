@@ -27,6 +27,7 @@ install_toga_hook()
 
 __all__ = [
     "col", "row", "wrapped", "switch", "selection", "label", "button", "speaker_button",
+    "activity_indicator",
     "GREEN", "INK", "MUTED", "PAPER", "WHITE", "ENTRY_BACKGROUNDS",
     "toga", "Pack", "text_style", "font_scale", "current_platform",
 ]
@@ -44,6 +45,11 @@ def wrapped(text: object, columns: int = 44) -> str:
     # Android wraps native text at its actual allocated width, including font
     # scaling. Keep the desktop preview's existing explicit line breaks.
     return str(text or "") if current_platform == "android" else fixed_wrapped(text, columns)
+
+
+def activity_indicator(**style: Any) -> toga.Widget:
+    """A running indicator for work in progress (Android: an indeterminate ProgressBar)."""
+    return toga.ActivityIndicator(running=True, style=Pack(**style))
 
 
 def switch(*args: Any, style: Any = None, **kwargs: Any) -> toga.Switch:
