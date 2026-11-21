@@ -10,8 +10,9 @@ LearningStore.admit_word_listening按日限量（8词）为已学词追加单位
 stored_enabled_kinds是已存题型设置的唯一解析入口，audio_ready_kinds在无日语语音时只扣除听词选词。
 retired_practice_variants另读word_sound_mix内容包命名空间（config/cognate_words_20261106.json经
 tools/build_word_sound_mix.py生成，绑定id/题头/读音），只排除未来选题，旧题、草稿和历史照旧。
-question_presentation把已知的中文译文提示移入folded_hint并给日文短标签；question_instruction_ui拥有
-折叠控件，展开不写草稿、不算辅助。FSRS参数、辅助证据权重和记录格式未改。
+question_presentation把已知的中文译文提示移入folded_hint并给日文短标签，另给fold_hint（hint_folds决定：只有内容
+标明靠上下文即可作答的题才折叠，内容里还没有这种标记，目前恒为False）；question_instruction_ui在fold_hint为False时
+把译文作为标签下的一行直接显示，为True时给“中文提示”折叠控件，显示或展开都不写草稿、不算辅助。FSRS参数、辅助证据权重和记录格式未改。
 读句选词vocab_context_choice（use，2026-11-07）：题面只有日文句子与日文选项，单空四选一（context_choice）
 或多空共用一组词库（context_word_bank，multi_cloze，一个primary空，其余空为已学词的background）。
 模板来自独立内容命名空间context_choice，按item_fingerprint绑定，practice_templates把它作为独立题型追加，

@@ -118,13 +118,13 @@ S2 S 类题型政策（选题层，learning_questions 的类别规则替代现�
    - 能力权重（选题优先级，不改 FSRS）：读音 40%／听力 30%／用法 20%／理解 10%。
 S3 P 类：vocab_meaning 保留，但干扰项必须与正确项共享 ≥1 个汉字或为同主题近义（防止“排除法”）；usage 译文含目标词时
    同 S 类改假名作答；recall 中文题干退役。
-S4 D 类与 E 类：保留现有题型；译文驱动的 usage/recall 维持（它们训练日文形产出），但译文默认折叠（已实现的展示折叠）。
+S4 D 类与 E 类：保留现有题型；译文驱动的 usage/recall 维持（它们训练日文形产出），译文默认显示，只有内容标明靠上下文即可作答的题才折叠（展示层已有折叠机制，内容里还没有这种标记）。
    假朋友 11 词保留 vocab_zh_ja_contrast 并补齐到每词 2 条。
    ［I，2026-11-09，WP-K2 代码侧：learning_questions.cognate_class 读 word_sound_mix.cognate_words[id].class（id/title/reading
    绑定照旧；已列但无 class 的词按 P）；_cognate_mapping_variants 按类退出选题——S：vocab_meaning 只留一道裸题（prompt＝词本身、
    无 practice，取首个；没有裸题时留排序第一、不需他词的一道，以免理解能力无题），vocab_recall 只留“基本形是”形；P：原规则（两道不需他词的 meaning＋同一 recall 规则）；D/E：不退役。
    批量引入小测（intro_quiz_question，给定已知集时）同样跳过退役变体，故 S 类词的小测即那道裸题。只影响选题；快照、草稿、历史照旧。
-   S2 的能力权重与 V4 无挂钩（见 V4 行）；S3 干扰项、usage 假名作答与 S4 译文折叠属内容侧／已有展示，代码未改。］
+   S2 的能力权重与 V4 无挂钩（见 V4 行）；S3 干扰项、usage 假名作答与 S4 译文的显示或折叠属内容侧／已有展示，代码未改。］
 S5 实施方式：模板原文不改；退出选题走 varied_practice.template_retirements（按 item_fingerprint 绑定）与类别规则；
    “改假名作答”“去译文”“换干扰项”都是新增变体（追加到 templates[kind] 末尾，原变体退役），改绑按 append_history。
    ［I，2026-11-11（0.34.0）：照抄词形模板清零。审计 A 在 0.33.0 的包上仍判 474 个在用模板为“照抄”（86 个词课；其中 472 个所属的词没有
@@ -506,7 +506,7 @@ E7 读音类题的批次稳定（I，2026-11-09，R1）：每批扩充的新词�
 G1 grammar_meaning（1,911 条正确项＝课摘要）：逐变体重写正确项为“该句专属”的中文释义（不得与 meaning/summary 字面相同），
    干扰项取同级别其它语法项的句专属释义；同时按课增加 information_extraction 形（纯日文问句）各 1 条。写入新变体，旧变体退役。
 G2 grammar_cloze：译文仅在“同范式干扰项／范式答案／指示词／题干外内容词”时必需；1,739 条多余译文的模板不改原文，
-   在 question_dependencies 的 "hint_policy" 旁路字段标为 fold_always，由展示层默认折叠（现有折叠机制）。
+   在 question_dependencies 的 "hint_policy" 旁路字段标为 fold_always，由展示层折叠（现有折叠机制；没有标记的题译文默认显示，这种标记还没写进内容）。
 G3 grammar_reorder（1,306 条中文整句题干）：新增“日文线索版”变体（给出首块或前一句日文），中文句改为折叠提示；旧变体退役。
 G4 读音课 62 条中文标签答案改为 IPA／假名行／“／”停顿标记（新变体＋退役）。
 G5 vocab_usage 翻译排序 1,412 条：改“排序＋填空”（目标词块移出词库，由学习者补入）新变体；旧变体退役。

@@ -23,7 +23,7 @@ def test_marked_copula_forms_add_only_their_category(answer, category):
     before = deepcopy(q)
     view = question_presentation(q)
     assert view == {"instruction": "穴埋め · " + category, "target_spans": [],
-                    "folded_hint": "上周不是休息日。", "instruction_role": "ui"}
+                    "folded_hint": "上周不是休息日。", "fold_hint": False, "instruction_role": "ui"}
     assert answer.strip().removesuffix("。") not in view["instruction"] and q == before
 
 
@@ -31,7 +31,7 @@ def test_marked_copula_forms_add_only_their_category(answer, category):
 def test_plain_or_non_copula_answers_keep_the_cue(answer):
     assert copula_form_cue(answer) is None
     assert question_presentation(cloze(answer)) == {
-        "instruction": "穴埋め", "target_spans": [], "folded_hint": "上周不是休息日。",
+        "instruction": "穴埋め", "target_spans": [], "folded_hint": "上周不是休息日。", "fold_hint": False,
         "instruction_role": "study"}
 
 

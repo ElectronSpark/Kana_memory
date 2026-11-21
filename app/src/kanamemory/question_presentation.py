@@ -5,9 +5,10 @@ an annotation/speech authorization: answers never supply highlighting anchors.
 A kind's form_cue may add only a form category of the canonical answer (a
 copula gap's negation/tense), never answer text.
 
-Known Chinese translation cues move to folded_hint, which the screen keeps one
-tap away. The hint is display only: opening it changes no draft, assist flag or
-grade, because the same text was always visible before it was folded.
+Known Chinese translation cues move to folded_hint (the text) under a short
+Japanese cue. The screen shows that text directly under the cue unless fold_hint
+is True; only then is it one tap away. The hint is display only: showing or
+opening it changes no draft, assist flag or grade.
 """
 from collections.abc import Mapping
 import re
@@ -57,8 +58,19 @@ def _folded_translation(question, presentation, task):
     return None
 
 
-def _finish(result):
+def hint_folds(question):
+    """Whether the Chinese hint waits behind a button instead of being shown.
+
+    Folding is for questions the content marks as answerable from the Japanese
+    context alone. The content's marks will be read here; no content carries
+    them yet, so every hint is shown.
+    """
+    return False
+
+
+def _finish(result, question):
     result["instruction_role"] = "study" if result["instruction"] in _JAPANESE_CUES else "ui"
+    result["fold_hint"] = bool(result["folded_hint"]) and hint_folds(question)
     return result
 
 
@@ -70,11 +82,13 @@ def question_presentation(question):
     Valid explicit spans may identify one of several identical occurrences.
     """
     if not isinstance(question, Mapping):
-        return {"instruction": "", "target_spans": [], "folded_hint": "", "instruction_role": "ui"}
+        return {"instruction": "", "target_spans": [], "folded_hint": "", "fold_hint": False,
+                "instruction_role": "ui"}
     task = question.get("task", "")
     task = task if isinstance(task, str) else ""
     kind, prompt = question.get("kind"), question.get("prompt", "")
-    result = {"instruction": task, "target_spans": [], "folded_hint": "", "instruction_role": "ui"}
+    result = {"instruction": task, "target_spans": [], "folded_hint": "", "fold_hint": False,
+              "instruction_role": "ui"}
     if not isinstance(prompt, str):
         return result
     public = (question.get("prompt_visible") is not False
@@ -89,7 +103,7 @@ def question_presentation(question):
         try:
             practice = validate_practice(question, target_id=question.get("target_id"))
         except (ValueError, KeyError, TypeError):
-            return _finish(result)
+            return _finish(result, question)
         # Translation stimuli and category labels are instructions. Their
         # publication anchors must not turn Chinese into Japanese study text.
         result["target_spans"] = practice["target_spans"] if practice and not instruction_prompt else []
@@ -107,11 +121,11 @@ def question_presentation(question):
                 spans = [{"start": start, "end": start + len(word), "quote": word}]
         if spans and all(span["quote"] == word for span in spans):
             result.update(target_spans=spans, instruction=presentation.quoted_cue)
-        return _finish(result)
+        return _finish(result, question)
     if (question.get("input_mode", "choice") == "choice"
             and task in {"选择最符合本题语境的答案。", "选择最符合语境的答案。"}):
         result["instruction"] = ""
-        return _finish(result)
+        return _finish(result, question)
     focused, plain = dict(presentation.focused_tasks), dict(presentation.plain_tasks)
     if result["target_spans"] and task in focused:
         result["instruction"] = focused[task]
@@ -128,7 +142,7 @@ def question_presentation(question):
         cue = presentation.form_cue(question, result["instruction"])
         if cue:
             result["instruction"] = cue
-    return _finish(result)
+    return _finish(result, question)
 
 
 def question_instruction(question):

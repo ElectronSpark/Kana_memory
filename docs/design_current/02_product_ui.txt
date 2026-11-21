@@ -490,7 +490,8 @@ reconcile_session_kinds。此差异是当前行为/待统一边界，不是新�
 听词辨义、短句听力，需用户启用；听词选词默认开启，但设备没有日语语音时不出题。
 读句选词默认开启，设置页“读句选词（无中文）”单独开关；作答后才显示中文译文。
 可见题还取决于模板、音频与前置是否可用。
-填空和按词造句题的中文译文默认折叠在“中文提示”按钮后，展开不算辅助、不影响评分；
+填空和按词造句题的中文译文默认显示：日文短标签下方单独一行；只有内容标明“靠上下文即可作答”的题才折叠在“中文提示”按钮后
+（内容里还没有这种标记，所以目前不折叠任何题）；显示或展开都不算辅助、不影响评分；
 固定作答提示改为日文短标签（読み、意味、書き方等）。
 来源：learning_ui.py show_learning_settings/change_learning_kinds/show_learning_question；
 learning_questions.py DEFAULT_KINDS；app.py _reconcile_practice_kinds。
