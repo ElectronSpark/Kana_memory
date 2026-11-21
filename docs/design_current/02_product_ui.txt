@@ -614,6 +614,11 @@ Android 日文 Locale；不能根据一个共享汉字猜其语言。混合文�
 来源：typography.py configure_text_role/configure_study_ranges；text_layout.py、
 selection_layout.py、sentence_annotation_ui.py；app.py label/button/_update_chrome。
 
+应用图标（演示版与个人版相同）：朱红（#E0452F）印章底上一个白色的「か」，第三笔画成
+顺时针的弧线加箭头，表示“再来一次”（间隔复习）。假名是手绘的单线笔画，不取自字体；
+自适应图标的前景本身就是整块朱红，启动画面底色也是朱红。来源：app/icons（README.txt）、
+tools/render_app_icon.py；app/pyproject.toml 的 icon 与 splash_background_color。
+
 手写使用原生触摸历史采样和当前采样批量交付，浮点轨迹与相对时间保留；取消、
 越界、多指切换不误接笔画。绘图增量维护 Path，避免每帧重建所有旧点，写字
 过程中即时回显，识别不应成为唯一刷新机会。抬笔仍持久化草稿，重启可续写；

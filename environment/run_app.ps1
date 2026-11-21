@@ -527,6 +527,8 @@ if ([IO.Path]::GetFullPath($appBuild) -eq [IO.Path]::GetFullPath($appSource)) {
 New-Item -ItemType Directory -Force -Path $appBuild | Out-Null
 Copy-Item -LiteralPath (Join-Path $appSource 'pyproject.toml') -Destination $appBuild -Force
 Copy-Item -LiteralPath (Join-Path $appSource 'src') -Destination $appBuild -Recurse -Force
+# The launcher icon files that pyproject's icon setting names (icons/kanamemory-<variant>-<size>.png).
+Copy-Item -LiteralPath (Join-Path $appSource 'icons') -Destination $appBuild -Recurse -Force
 if ($developmentIdentity) {
     # The development run: the personal identity goes into the build copy only, as for a personal build.
     & $projectPython -X utf8 $identityTool apply $appBuild --identity-file $developmentIdentity | Out-Null
@@ -615,8 +617,8 @@ try {
             }
             'build' {
                 if (-not (Test-Path -LiteralPath $gradleFile)) { throw 'Run create first.' }
-                # Refresh Python sources/dependencies in an existing generated project.
-                & $projectPython -X utf8 -m briefcase update android -r --no-input --log
+                # Refresh Python sources/dependencies and the icon files in an existing generated project.
+                & $projectPython -X utf8 -m briefcase update android -r --update-resources --no-input --log
                 if ($LASTEXITCODE -ne 0) { throw 'Briefcase update failed.' }
                 [void](Remove-StaleGeneratedModules -AppBuildRoot $appBuild -SourcePackage (Join-Path $appSource 'src/kanamemory'))
                 [void](Remove-StaleGeneratedResources -AppBuildRoot $appBuild -SourceResources (Split-Path -Parent $sourceDatabase))
