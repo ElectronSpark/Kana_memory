@@ -28,9 +28,11 @@ STAGES = {"intro", "guide", "bridge", "check", "done"}
 ALIASES = {"meaning": "understanding", "usage": "use"}
 WORD_LISTENING_ADMISSION = "word_listening_admission_v1"
 WORD_LISTENING_DAILY_LIMIT = 8
-# After teaching, a lesson's first formal question waits RETRIEVAL_DELAY_SECONDS or until another
-# item has a formal answer. A lesson started by probe first (profile evidence probe_v1, 2026-11-21)
-# waits PROBE_RETRIEVAL_DELAY_SECONDS or RETRIEVAL_OTHER_ANSWERS answers of other items instead.
+# After teaching, a lesson's first formal question waits (_retrieval_delay / retrieval_ready):
+# every lesson started under the probe-first flow (profile evidence probe_v1, any route) waits
+# PROBE_RETRIEVAL_DELAY_SECONDS or RETRIEVAL_OTHER_ANSWERS answers of other items. Records of earlier
+# releases (self_report or no profile) and the card batch wait RETRIEVAL_DELAY_SECONDS or until another
+# item has a formal answer.
 RETRIEVAL_DELAY_SECONDS = 60
 PROBE_RETRIEVAL_DELAY_SECONDS = 600
 RETRIEVAL_OTHER_ANSWERS = 3
@@ -232,14 +234,14 @@ def _ability_due(unit, question):
 
 
 def _probe_era(checkpoint):
-    """The probe-first spacing applies (2026-11-21): a scope whose probe failed and was then taught, or
-    an ability opened for an ordinary first check (no guide) after its lesson was taught. A lesson taught
-    because nothing could be probed keeps the earlier spacing."""
+    """The probe-first spacing applies: every lesson or ability started under the probe-first flow
+    (profile evidence probe_v1), whatever its route — probe, failed probe then taught, taught directly
+    because nothing could be probed, or an ordinary first check. Records of earlier releases (evidence
+    self_report, or no profile) and the card batch keep the earlier spacing."""
     if isinstance(checkpoint, str):
         checkpoint = _load(checkpoint) or {}
-    from .probe_rules import is_probe
     profile = (checkpoint or {}).get("initial_familiarity") or {}
-    return profile.get("evidence") == PROBE_EVIDENCE and (is_probe(profile) or "last_checkpoint" not in checkpoint)
+    return profile.get("evidence") == PROBE_EVIDENCE
 
 
 def _retrieval_delay(checkpoint):

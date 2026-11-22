@@ -205,6 +205,19 @@ def taught_not_probed(learning, content_id):
         learning._db.execute("UPDATE learning_content SET checkpoint_json='{}' WHERE content_id=?", (content_id,))
 
 
+def earlier_release_lesson(learning, content_id, *, now=None):
+    """Give an enrolled, untouched lesson the self-rated profile an earlier release saved (every ability "new").
+
+    Such a record keeps the earlier spacing after teaching (60 seconds or one formal answer of another
+    item); a lesson started under probe first waits for three other answers or ten minutes. Tests whose
+    subject is the one-minute bridge wait of a teaching block use it.
+    """
+    item = learning.instruction_item(content_id)
+    abilities = item.get("enrolled_abilities") or [unit["ability"] for unit in item["units"]]
+    learning.set_initial_familiarity(content_id, {ability: "new" for ability in abilities},
+                                     expected_introduction_id=item["introduction_id"], now=now)
+
+
 def earlier_release_batches(app):
     """Let this app open intro batches the way releases before probe first (2026-11-21) did.
 

@@ -325,7 +325,7 @@ def open_scope_in_transaction(learning, content_id, *, instruction_scope, expect
     probe now; nothing written) or {"route": "existing"} (a profile is
     already saved: nothing written).
     """
-    from .learning_store import PROBE_RETRIEVAL_DELAY_SECONDS
+    from .learning_store import _retrieval_delay
     db = learning._db
     row = learning.instruction_row(content_id, instruction_scope)
     if row is None:
@@ -390,9 +390,9 @@ def open_scope_in_transaction(learning, content_id, *, instruction_scope, expect
     if probe_rules.teaching_pending(view.checkpoints) and not view.shown:
         return {"route": "wait"}
     # An ordinary first check: the lesson was taught, or the ability is never probed (listening).
-    _write_profile(db, row, probe_rules.plain_profile(abilities, now), stage="bridge",
-                   guided_at_utc=now.isoformat(),
-                   retrieval_at_utc=(now + timedelta(seconds=PROBE_RETRIEVAL_DELAY_SECONDS)).isoformat())
+    profile = probe_rules.plain_profile(abilities, now)
+    _write_profile(db, row, profile, stage="bridge", guided_at_utc=now.isoformat(),
+                   retrieval_at_utc=(now + timedelta(seconds=_retrieval_delay({"initial_familiarity": profile}))).isoformat())
     _teaching.ready_units(db, learning.instruction_row(content_id, instruction_scope))
     _claim(db, row, now)
     _count_new(db, fair_new)

@@ -397,6 +397,72 @@ def test_nothing_to_probe_teaches_the_lesson(learning_app):
     assert (saved["evidence"], saved["route"], saved["diagnostic_state"]) == ("probe_v1", "full", "not_requested")
 
 
+KANA_IDS = ("kana-3042", "kana-3044", "kana-3046")
+
+
+def _taught(learning, at):
+    learning.advance_instruction(CID, "intro_done", now=at)
+    learning.advance_instruction(CID, "guide_correct", now=at)
+    row = learning.instruction_row(CID)
+    assert row["stage"] == "bridge"
+    return row
+
+
+def _kana_answers(store, count, at):
+    for index in range(count):
+        store.record_review(KANA_IDS[index], "kana_choice", "hiragana", 3, outcome="correct",
+                            now=at + timedelta(seconds=index + 1))
+
+
+def test_a_lesson_taught_directly_waits_for_three_others_or_ten_minutes(stores):
+    store, learning = stores
+    item = learning.instruction_item(CID)
+    opened = learning.open_new_scope(CID, expected_introduction_id=item["introduction_id"],
+                                     enabled_kinds=["vocab_reading_choice"], now=NOW)
+    assert opened["route"] == "teach"
+    row = _taught(learning, NOW)
+    assert row["retrieval_at_utc"] == (NOW + timedelta(minutes=10)).isoformat()
+    _kana_answers(store, 1, NOW)
+    assert not learning.retrieval_ready(row, NOW + timedelta(seconds=61))
+    assert not learning.retrieval_ready(row, NOW + timedelta(minutes=9, seconds=59))
+    _kana_answers(store, 3, NOW + timedelta(seconds=5))
+    assert learning.retrieval_ready(row, NOW + timedelta(seconds=61))
+
+
+def test_a_lesson_taught_directly_is_ready_after_ten_minutes_alone(stores):
+    store, learning = stores
+    item = learning.instruction_item(CID)
+    learning.open_new_scope(CID, expected_introduction_id=item["introduction_id"],
+                            enabled_kinds=["vocab_reading_choice"], now=NOW)
+    row = _taught(learning, NOW)
+    assert not learning.retrieval_ready(row, NOW + timedelta(minutes=9, seconds=59))
+    assert learning.retrieval_ready(row, NOW + timedelta(minutes=10))
+
+
+def test_an_earlier_release_record_keeps_the_earlier_spacing(stores):
+    store, learning = stores
+    item = learning.instruction_item(CID)
+    learning.set_initial_familiarity(CID, {"understanding": "new", "reading": "new", "use": "new"},
+                                     expected_introduction_id=item["introduction_id"], now=NOW)
+    row = _taught(learning, NOW)
+    assert row["retrieval_at_utc"] == (NOW + timedelta(seconds=60)).isoformat()
+    assert not learning.retrieval_ready(row, NOW + timedelta(seconds=59))
+    assert learning.retrieval_ready(row, NOW + timedelta(seconds=60))
+    # One formal answer of another lesson releases it before the minute.
+    learning.enroll(grammar(), now=NOW)
+    other = learning.get_unit(GID, "understanding")
+    with learning._db:
+        learning._db.execute("INSERT INTO learning_question (question_id,unit_id,kind,snapshot_json,status,draft_json,"
+                             "created_at_utc,exposure_group) VALUES (?,?,?,?,?,?,?,?)",
+                             ("q-other", other["unit_id"], "grammar_meaning", "{}", "completed", "{}",
+                              NOW.isoformat(), "g-other"))
+        learning._db.execute("INSERT INTO learning_event (event_id,question_id,unit_id,occurred_at_utc,rating,role,"
+                             "outcome,assisted,result_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                             ("e-other", "q-other", other["unit_id"], (NOW + timedelta(seconds=5)).isoformat(), 3,
+                              "primary", "correct", 0, "{}"))
+    assert learning.retrieval_ready(row, NOW + timedelta(seconds=10))
+
+
 def test_cards_never_offer_i_already_know_it_and_batches_are_not_opened(learning_app):
     app = learning_app
     start(app)
