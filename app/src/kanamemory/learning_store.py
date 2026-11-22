@@ -1171,6 +1171,19 @@ class LearningStore:
                 known=known_ids(self.queries), system_japanese=system_japanese_enabled(self.store),
                 now=now, fair_new=fair_new)
 
+    def open_probe_question(self, content_id, ability, *, enabled_kinds, known, system_japanese_input):
+        """A qualifying probe of a unit whose scope is an OPEN probe, else None (reads only).
+
+        For the queue pass (course_planning.iter_question_plans): after an app
+        start ended the queue, the unit is planned again as a probe, not with
+        its ordinary plan. learning_probe.open_probe_plan decides.
+        """
+        from .learning_probe import open_probe_plan
+        unit = self._db.execute("SELECT * FROM learning_unit WHERE content_id=? AND ability=?",
+                                (content_id, _ability(ability))).fetchone()
+        return open_probe_plan(self, content_id, ability, unit, enabled_kinds=enabled_kinds, known=known,
+                               system_japanese=system_japanese_input)
+
     def probe_head(self, question_id, now=None):
         """A started probe question as a head, in the shape current() gives a question, when it can be
         answered at ``now``; None while a queue guard (an exposure wait, a floor) still holds it (read only)."""
@@ -1638,7 +1651,11 @@ class LearningStore:
                 continue
             qid = _identifier(q.get("id", q.get("question_id", uuid4().hex)))
             from .practice_round import next_question_id
-            qid = next_question_id(self.store, qid)
+            from .learning_replacement import question_receipt
+            # An id exchanged away (its row completed with a replacement receipt) is retired like an
+            # archived one: the unit of a replacement that an app start archived gets a question again.
+            qid = next_question_id(self.store, qid,
+                                   retired=lambda value: question_receipt(self.store, value) is not None)
             if self._db.execute("SELECT 1 FROM learning_question WHERE question_id=?", (qid,)).fetchone():
                 continue
             if not isinstance(q.get("prompt"), str) or not isinstance(q.get("answer"), str):

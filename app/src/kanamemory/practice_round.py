@@ -450,13 +450,18 @@ def _archived_question(store, question_id):
     return archived_question(store, question_id)
 
 
-def next_question_id(store, proposed_id):
+def next_question_id(store, proposed_id, *, retired=None):
     """Avoid reusing a retired ID without inventing a learning attempt.
 
     A repeated proposal stays idempotent within this app round. No question,
     archive receipt, attempt count or scheduler state is written here.
+    ``retired``: the caller's further test of a retired id (the learning
+    store's: exchanged away by a replacement), counted like an archived one.
     """
-    if not _archived_question(store, proposed_id):
+    def gone(question_id):
+        return _archived_question(store, question_id) or (retired is not None and retired(question_id))
+
+    if not gone(proposed_id):
         return proposed_id
     plan = _plan(store, 'main')
     if isinstance(plan, AppRunPlan):
@@ -467,7 +472,7 @@ def next_question_id(store, proposed_id):
             allocated = {}
             store._practice_round_question_ids = allocated
     previous = allocated.get(proposed_id)
-    if previous is None or _archived_question(store, previous):
+    if previous is None or gone(previous):
         suffix = ':round:' + uuid4().hex
         base = proposed_id if len(proposed_id) + len(suffix) <= 1024 else (
             'practice:' + sha256(proposed_id.encode('utf-8')).hexdigest())

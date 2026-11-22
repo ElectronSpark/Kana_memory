@@ -151,6 +151,16 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         if enrolled is not None:
             policy_state["gloss_allowance"] = True
             policy_state["enrolled_ids"] = enrolled
+        # An open probe (design 03, probe first): an app start ended its queued question, so the unit is
+        # planned again as a qualifying probe under its usual id; none now leaves the ordinary plan.
+        # Asked only for an unrated unit, so the pass does not grow with a large record.
+        probe_reader = getattr(learning_store, "open_probe_question", None)
+        if callable(probe_reader) and not (state or {}).get("review_count"):
+            probe = probe_reader(item["id"], ability, enabled_kinds=sorted(enabled - closed_kinds), known=known,
+                                 system_japanese_input=system_japanese_input)
+            if probe is not None:
+                yield CourseQuestionPlan(state, dict(probe, id=f"{item['id']}:{ability}:review:{count}"))
+                continue
         history = learning_store.practice_history(item["id"], ability)
         selected = select_practice_plan(item, ability, kinds, policy_state, history,
                                         templates=templates, shared=True)

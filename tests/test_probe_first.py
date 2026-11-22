@@ -11,13 +11,14 @@ from record_test_support import decode_current, encode_current
 from support.learning_fixtures import learning_app, click
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of
-from kanamemory import probe_rules
+from kanamemory import learning_probe, practice_round, probe_rules
 from kanamemory.arrangement.model import FirstRatings, RawEvent, Unit
 from kanamemory.arrangement.rules.clock import attribute
 from kanamemory.domain import StudyStore
 from kanamemory.learning_questions import PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION
 from kanamemory.learning_store import LearningStore, validate_backup_rows
 from kanamemory.learning_ui import LEARNING_PREFS
+from kanamemory.practice_archive import archive_previous_rounds
 
 CID = "word:synthetic:probe"
 GID = "grammar:synthetic:probe"
@@ -375,6 +376,131 @@ def test_old_self_report_records_stay_valid(stores, tmp_path):
     with StudyStore(tmp_path / "restored", time_zone="UTC") as restored:
         restored.import_backup(store.export_backup())
         assert LearningStore(restored).instruction_item(CID)["checkpoint"]["initial_familiarity"]["evidence"] == "self_report"
+
+
+# An app start ends the queue (practice_archive): an open probe is planned again (2026-11-22)
+
+def restart(app):
+    """What a new app start does: every pending course question is archived, the run's plans are new."""
+    archive_previous_rounds(app.store, now=app._test_clock[0])
+    practice_round.reset(app.store)
+    practice_round.enable(app.store)
+
+
+def queued(app, ability, cid=CID):
+    return [dict(row) for row in app.learning_store._db.execute(
+        """SELECT q.question_id,q.status,q.snapshot_json FROM learning_question q JOIN learning_unit u USING(unit_id)
+        WHERE u.content_id=? AND u.ability=? ORDER BY q.rowid""", (cid, ability))]
+
+
+def pending_probe(app, ability, cid=CID):
+    rows = [row for row in queued(app, ability, cid) if row["status"] == "pending"]
+    assert len(rows) == 1, rows
+    question = json.loads(rows[0]["snapshot_json"])
+    track = probe_rules.track("word", None)
+    assert probe_rules.qualifies(question, track, ability, kana_answer=learning_probe.kana_answer(question))
+    return rows[0]["question_id"]
+
+
+def to_reading_probe(app, kinds=KINDS):
+    start(app, word(), kinds=kinds)
+    answer(app, "词一")
+    click(app, "很轻松")
+    later(app)
+    app.continue_learning()
+    assert app._learning_question["ability"] == "reading"
+    return app._learning_question["id"]
+
+
+def test_an_exchanged_probe_comes_back_as_a_probe_after_a_restart(learning_app):
+    app = learning_app
+    probe = to_reading_probe(app)
+    # The reading probe was exchanged for the unit's first queued question in the same run.
+    assert probe.startswith("replacement:")
+    assert [row["status"] for row in queued(app, "reading")] == ["completed", "pending"]
+    restart(app)
+    app.continue_learning()
+    # Before the fix the unit never got a question again (its old id was taken, not archived).
+    again = pending_probe(app, "reading")
+    assert again.startswith(f"{CID}:reading:review:0:round:")
+    head = app.learning_store.current(KINDS)
+    assert head["question"]["id"] == again and head.get("probe") is True
+    assert app.page == "learning_question" and app._learning_question["id"] == again
+    answer(app, "ごいち")
+    click(app, "很轻松")
+    unit = app.learning_store.get_unit(CID, "reading")
+    assert unit["review_count"] == 1 and json.loads(unit["scheduler_state_json"])["state"] == 2
+    assert [(e["role"], e["rating"], e["ability"]) for e in events(app)][-1] == ("primary", 4, "reading")
+    later(app)
+    app.continue_learning()
+    assert app.page == "learning_question" and app._learning_question["ability"] == "use"
+    validate_backup_rows(app.learning_store._db)
+
+
+def test_a_probe_kept_as_queued_is_planned_again_as_a_probe(learning_app):
+    app = learning_app
+    # Without the reading choice kind the planned reading question is the typed one: kept as the probe.
+    probe = to_reading_probe(app, kinds=[kind for kind in KINDS if kind != "vocab_reading_choice"])
+    assert probe == f"{CID}:reading:review:0"
+    # The learner turns the choice kind on; the ordinary reading plan is now a choice (no probe).
+    app.store.set_setting(LEARNING_PREFS, {"enabled": KINDS, SOUND_PREFERENCE_VERSION: PREFERENCE_VERSION})
+    restart(app)
+    app.continue_learning()
+    # Before the fix the re-created question was the ordinary choice plan.
+    again = pending_probe(app, "reading")
+    assert json.loads(queued(app, "reading")[-1]["snapshot_json"])["kind"] == "vocab_reading"
+    assert app.learning_store.current(KINDS)["question"]["id"] == again
+
+
+def test_an_exchanged_round_copy_is_planned_again_as_a_probe(learning_app):
+    app = learning_app
+    start(app)
+    answer(app, "词一")
+    click(app, "很轻松")
+    restart(app)   # the reading question of the first run is archived before its probe opens
+    later(app)
+    app.continue_learning()
+    probe = app._learning_question["id"]
+    assert app._learning_question["ability"] == "reading" and probe.startswith("replacement:")
+    exchanged = json.loads(queued(app, "reading")[-1]["snapshot_json"])["replacement_of"]
+    assert ":round:" in exchanged
+    restart(app)
+    app.continue_learning()
+    # Before the fix the re-created question was the ordinary choice plan.
+    again = pending_probe(app, "reading")
+    assert app.learning_store.current(KINDS)["question"]["id"] == again
+
+
+def test_declining_a_re_created_probe_writes_the_failed_diagnostic(learning_app):
+    app = learning_app
+    to_reading_probe(app)
+    restart(app)
+    app.continue_learning()
+    # Before the fix there was no question to decline.
+    again = pending_probe(app, "reading")
+    before = app.learning_store.get_unit(CID, "reading")
+    app.learning_store.decline_probe(again, now=app._test_clock[0])
+    saved, stage = profile(app, ability="reading")
+    assert stage == "intro" and saved["diagnostic_state"] == "needs_teaching" and saved["probe_declined"] is True
+    last = events(app)[-1]
+    assert (last["role"], last["outcome"], last["rating"], last["ability"]) == ("unresolved", "unresolved", None, "reading")
+    unit = app.learning_store.get_unit(CID, "reading")
+    assert (unit["scheduler_state_json"], unit["review_count"]) == (before["scheduler_state_json"], 0)
+    validate_backup_rows(app.learning_store._db)
+
+
+def test_no_second_question_while_a_replacement_is_pending(learning_app):
+    app = learning_app
+    probe = to_reading_probe(app)
+    app._queue_missing_learning_questions()
+    assert [row["question_id"] for row in queued(app, "reading") if row["status"] == "pending"] == [probe]
+    restart(app)
+    app.continue_learning()
+    # Before the fix no question came back after the restart; once one has, further passes add none.
+    again = pending_probe(app, "reading")
+    app._queue_missing_learning_questions()
+    app._queue_missing_learning_questions()
+    assert [row["question_id"] for row in queued(app, "reading") if row["status"] == "pending"] == [again]
 
 
 def test_new_content_attribution_covers_probe_failure_teaching_and_first_rating():

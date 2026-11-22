@@ -240,6 +240,27 @@ def plan_probe(learning, source, ability: str, *, enabled_kinds, known, system_j
     return None
 
 
+def open_probe_plan(learning, content_id, ability, unit, *, enabled_kinds, known, system_japanese: bool):
+    """A qualifying probe of ``ability`` when its scope is an open probe, else None (reads only).
+
+    Open: the scope's profile is a probe's, its diagnostic is active and the
+    unit is unrated (LearningStore._initial_diagnostic). The queue pass plans
+    such a unit with this question under the unit's usual id, so a probe whose
+    queued question an app start archived comes back as a probe; None leaves
+    the ordinary plan. ``unit``: the unit's saved row (None: not enrolled).
+    """
+    if unit is None or unit["review_count"]:
+        return None
+    row = learning.ability_instruction_row(content_id, ability)
+    profile = (_load(row["checkpoint_json"]) or {}).get("initial_familiarity") if row is not None else None
+    if not (probe_rules.is_probe(profile) and learning._initial_diagnostic(row, unit)):
+        return None
+    from .personal_content_versions import teaching_source, resolve
+    source = resolve(learning.store, teaching_source(_load(row["content_json"])))
+    return plan_probe(learning, source, ability, enabled_kinds=enabled_kinds, known=known,
+                      system_japanese=system_japanese)
+
+
 def pending_qualifies(learning, source, ability, pending, *, enabled_kinds, known, system_japanese: bool) -> bool:
     """Whether the unit's queued, untouched question can be the probe as it stands."""
     question = json.loads(pending["snapshot_json"])
