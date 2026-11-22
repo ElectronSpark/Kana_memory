@@ -1229,24 +1229,22 @@ class LearningStore:
     def probe_result_reduced(self, question_id, *, enabled_kinds):
         """Whether the right answer to ``question_id`` gets the reduced result page (reads only).
 
-        probe_rules.reduced_result: the question is itself a probe (the first
-        answer of an ability opened as a probe) and another ability of the same
-        lesson can still be probed now (a qualifying probe exists for it).
+        probe_rules.reduced_result: the lesson is still probing and another
+        ability of it than the question's own has a probe open or one that can
+        be opened now, whether or not the question is itself a probe.
         """
         from .learning_probe import LessonView, next_probe_available
-        from .probe_rules import is_probe, reduced_result
+        from .probe_rules import reduced_result
         from .course_planning import known_ids
         from .answer_input import system_japanese_enabled
         unit = self._db.execute("""SELECT u.* FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
             WHERE q.question_id=?""", (question_id,)).fetchone()
-        content = self.ability_instruction_row(unit["content_id"], unit["ability"]) if unit is not None else None
-        if content is None:
-            return False
-        profile = (_load(content["checkpoint_json"]) or {}).get("initial_familiarity")
-        if not (is_probe(profile) and self._initial_diagnostic(content, unit)):
+        if unit is None:
             return False
         view = LessonView(self, unit["content_id"])
-        return reduced_result(answered_is_probe=True, next_probe_available=next_probe_available(
+        if not view.probing:
+            return False
+        return reduced_result(lesson_probing=True, next_probe_available=next_probe_available(
             self, view, unit["ability"], enabled_kinds=list(enabled_kinds), known=known_ids(self.queries),
             system_japanese=system_japanese_enabled(self.store)))
 

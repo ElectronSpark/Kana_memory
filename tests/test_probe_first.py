@@ -272,7 +272,7 @@ def test_an_item_with_one_probe_only(learning_app):
     assert [(e["role"], e["rating"]) for e in events(app)] == [("primary", 3)]
 
 
-def test_result_page_is_reduced_only_for_a_probe_with_a_next_probe_available(learning_app):
+def test_result_page_is_full_when_no_next_probe_is_available(learning_app):
     app = learning_app
     # The next ability has no qualifying probe now (reading not strict, use absent): the full page.
     start(app, word(reading_strict=False, use=False))
@@ -281,25 +281,109 @@ def test_result_page_is_reduced_only_for_a_probe_with_a_next_probe_available(lea
     assert app.page == "learning_feedback" and "词一的说明" in text_of(app.body)
 
 
-def test_a_later_review_of_a_passed_ability_gets_the_full_page(learning_app):
-    app = learning_app
-    start(app)
-    probe = answer(app, "词一")
-    store = app.learning_store
-    assert store.probe_result_reduced(probe["id"], enabled_kinds=KINDS)   # reading can still be probed
+def pending_review(app, ability="understanding"):
+    row = app.learning_store._db.execute("""SELECT q.question_id FROM learning_question q JOIN learning_unit u
+        USING(unit_id) WHERE u.content_id=? AND u.ability=? AND q.status='pending'""", (CID, ability)).fetchone()
+    assert row is not None
+    return row["question_id"]
+
+
+def due_review(app, item=None):
+    """Pass the understanding probe with 记住了, then show its due review (ten minutes on)."""
+    start(app, *([item] if item else []))
+    answer(app, "词一")
     click(app, "记住了")
     later(app)
-    pending = store._db.execute("""SELECT q.question_id FROM learning_question q JOIN learning_unit u USING(unit_id)
-        WHERE u.content_id=? AND u.ability='understanding' AND q.status='pending'""", (CID,)).fetchone()
-    assert pending is not None
-    # Its later review is not a probe, though the reading probe is still open to come.
-    assert not store.probe_result_reduced(pending["question_id"], enabled_kinds=KINDS)
+    app.continue_learning()
+    q = app._learning_question
+    assert app.page == "learning_question" and q["kind"] == "vocab_meaning" and q["id"] == pending_review(app)
+    assert app.learning_store.get_unit(CID, "understanding")["review_count"] == 1
+    return q
+
+
+def full_page(app):
+    return "词一的说明" in text_of(app.body)
+
+
+def assert_reduced_page(app):
+    shown = text_of(app.body)
+    assert app.page == "learning_feedback" and "记住了" in shown
+    assert "词一的说明" not in shown and "ごいち" not in shown
+
+
+# Before 2026-11-22 the page was reduced only for a probe: a due review's full page gave the
+# answer of the reading probe still to come away.
+
+def test_a_due_review_answered_right_is_reduced_while_the_next_probe_can_be_opened(learning_app):
+    app = learning_app
+    due_review(app)
+    # The reading probe is not opened yet, but a qualifying one exists now.
+    assert profile(app, ability="reading")[0] is None
+    answer(app, "词一")
+    assert_reduced_page(app)
+
+
+def test_a_due_review_answered_right_is_reduced_while_the_next_probe_is_open(learning_app):
+    app = learning_app
+    store = app.learning_store
+    due_review(app)
+    scope = store.ability_instruction_scope(CID, "reading")
+    opened = store.open_new_scope(CID, instruction_scope=scope, enabled_kinds=KINDS, now=app._test_clock[0],
+                                  expected_introduction_id=store.instruction_item(CID, scope)["introduction_id"])
+    assert opened["route"] == "probe"
+    assert learning_probe.LessonView(store, CID).abilities()["reading"] == {"active": True, "rated": False}
+    answer(app, "词一")
+    assert_reduced_page(app)
+
+
+def test_a_due_review_answered_wrong_gets_the_full_page(learning_app):
+    app = learning_app
+    review = due_review(app)
+    assert app.learning_store.probe_result_reduced(review["id"], enabled_kinds=KINDS)
+    # The learner needs the right answer: the full page, though the reading probe is still to come.
+    answer(app, "别的词")
+    assert app.page == "learning_feedback" and full_page(app)
+
+
+def test_a_due_review_gets_the_full_page_when_no_further_probe_can_be_opened(learning_app):
+    app = learning_app
+    # Reading has no qualifying probe (not strict) and use has none at all.
+    review = due_review(app, word(reading_strict=False, use=False))
+    assert not app.learning_store.probe_result_reduced(review["id"], enabled_kinds=KINDS)
+    answer(app, "词一")
+    assert app.page == "learning_feedback" and full_page(app)
+
+
+def test_after_all_probes_every_question_of_the_lesson_gets_the_full_page(learning_app):
+    app = learning_app
+    start(app)
+    asked = [answer(app, "词一")]
+    click(app, "很轻松")
+    for kind, value in (("vocab_reading", "ごいち"), ("vocab_usage", "ごいち")):
+        later(app)
+        app.continue_learning()
+        assert app._learning_question["kind"] == kind
+        asked.append(answer(app, value))
+        click(app, "很轻松")
+    assert all(app.learning_store.get_unit(CID, ability)["review_count"] == 1
+               for ability in ("understanding", "reading", "use"))
+    assert not any(app.learning_store.probe_result_reduced(q["id"], enabled_kinds=KINDS) for q in asked)
+
+
+def test_a_taught_lesson_never_gets_the_reduced_page(learning_app):
+    app = learning_app
+    start(app)
+    probe = answer(app, "别的词")   # the failed probe: the lesson is taught from now on
+    assert app.page == "learning_feedback" and full_page(app)
+    assert profile(app)[0]["diagnostic_state"] == "needs_teaching"
+    assert not learning_probe.LessonView(app.learning_store, CID).probing
+    assert not app.learning_store.probe_result_reduced(probe["id"], enabled_kinds=KINDS)
 
 
 def test_pure_reduced_result_needs_both_conditions():
-    assert probe_rules.reduced_result(answered_is_probe=True, next_probe_available=True)
-    assert not probe_rules.reduced_result(answered_is_probe=True, next_probe_available=False)
-    assert not probe_rules.reduced_result(answered_is_probe=False, next_probe_available=True)
+    assert probe_rules.reduced_result(lesson_probing=True, next_probe_available=True)
+    assert not probe_rules.reduced_result(lesson_probing=True, next_probe_available=False)
+    assert not probe_rules.reduced_result(lesson_probing=False, next_probe_available=True)
     abilities = {"understanding": {"rated": False}, "reading": {"rated": False}, "use": {"rated": True}}
     assert probe_rules.other_probe_candidates("word", abilities, "understanding", probing_now=True) == ("reading",)
     assert probe_rules.other_probe_candidates("word", abilities, "understanding", probing_now=False) == ()

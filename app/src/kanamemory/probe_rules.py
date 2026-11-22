@@ -231,9 +231,12 @@ def other_probe_candidates(track_name: str | None, abilities: Mapping[str, Mappi
                  if ability in abilities and ability != answered and not abilities[ability].get("rated"))
 
 
-def reduced_result(*, answered_is_probe: bool, next_probe_available: bool) -> bool:
+def reduced_result(*, lesson_probing: bool, next_probe_available: bool) -> bool:
     """A right answer's result page is reduced (no reading, meaning or notes) only when BOTH hold:
-    the answer is itself a probe (an ability's first answer, opened as a probe), and another
-    ability of the same lesson can still be probed now (a qualifying probe exists for it).
-    In every other case the full result page is shown."""
-    return answered_is_probe and next_probe_available
+    the lesson is still probing (never taught, no probe failed), and another ability of the
+    same lesson than the answered one still has a probe that is open (active, unrated) or can
+    be opened now (a qualifying probe exists for it). The answered question may be a probe or
+    any later question of the lesson, such as a due review of an ability that passed its probe.
+    In every other case the full result page is shown; a wrong or revealed answer always gets
+    the full page (the caller asks only for a right one)."""
+    return lesson_probing and next_probe_available

@@ -2345,9 +2345,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         assisted = result.get("assisted", False)
         if (correct and not assisted and result.get("outcome") == "correct"
                 and self.learning_store.probe_result_reduced(q["id"], enabled_kinds=self.learning_preferences()["enabled"])):
-            # Probe first (2026-11-21): a right answer to a probe, while another ability of the lesson can
-            # still be probed now, shows only that it is right and the ratings: no reading, meaning, notes
-            # or examples for that next probe. Every other result page is the full one.
+            # Probe first (2026-11-21): a right answer to any question of a lesson (a probe or a later
+            # review), while another ability of it has a probe open or can be probed now, shows only that
+            # it is right and the ratings: no reading, meaning, notes or examples for that next probe.
+            # Every other result page is the full one, a wrong or revealed answer's included.
             self.screen("learning_feedback", "作答结果", build_answer_feedback(result),
                 u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
                     for title, rating in [("再学一次", "again"), ("有些困难", "hard")]]),
