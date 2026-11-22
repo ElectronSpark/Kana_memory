@@ -1234,62 +1234,43 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             due = datetime.fromisoformat(due)
         return "下次复习：" + app_clock.localize(due).strftime("%m月%d日 %H:%M:%S")
 
-    def show_learning_familiarity(self, item):
-        from .assessment_policy import teaching_allowed
-        if not teaching_allowed(item, store=self.store):
-            return self.show_learning_instruction(item)
-        available = {KIND_ABILITIES[k] for k in self.learning_preferences()['enabled'] if k in KIND_ABILITIES}
-        admitted = [unit['ability'] for unit in item['units']]
-        current = getattr(self, '_learning_current', None) or {}
-        chosen_ability = ((current.get('question') or {}).get('ability')
-                          if current.get('content', {}).get('introduction_id') == item['introduction_id'] else None)
-        if chosen_ability not in available or chosen_ability not in admitted:
-            chosen_ability = next((a for a in admitted if a in available), admitted[0])
-        item = self.learning_store.prepare_initial_familiarity(item['id'],
-            expected_introduction_id=item['introduction_id'], instruction_scope=item.get('instruction_scope'), ability=chosen_ability)
-        self._learning_item = item
-        labels = {"understanding": "词义" if item["family"] == "word" else "理解规则",
-                  "reading": "读音", "use": "提取与使用", "listening": "听辨理解", "application": "应用规则"}
-        abilities = [unit['ability'] for unit in item['units']]
-        levels = dict(item.get('checkpoint', {}).get('familiarity_draft', {}))
-        ability = next(a for a in abilities if a not in levels)
-        state = {'content_id': item['id'], 'introduction_id': item['introduction_id'],
-                 'instruction_scope': item.get('instruction_scope'), 'ability': ability, 'levels': levels, 'busy': False}
-        self._learning_familiarity_state = state
-        children = [u.label(item["title"], size=24, bold=True, text_role=lesson_title_role(item)),
-                    u.label(labels.get(ability, ability), size=18, bold=True)]
+    def open_new_learning_scope(self, item):
+        """Probe first (design 02 section 4, 2026-11-21): start a scope that has no profile, without a page of its own.
 
-        def begin(level):
-            if (self.page != 'learning_familiarity' or getattr(self, '_learning_familiarity_state', None) is not state
-                    or state['busy'] or self._learning_item['introduction_id'] != state['introduction_id']
-                    or self._learning_item.get('instruction_scope') != state['instruction_scope']):
+        The store decides and writes (LearningStore.open_new_scope): a probe
+        question is shown at once when it can be answered now; teaching shows
+        this lesson's introduction; an ordinary first check, or a probe that has
+        to wait for a queue guard, goes back to the dispatcher; an ability with
+        no qualifying probe yet is passed over in this process (it is offered
+        again later, as an unavailable guide is).
+        """
+        from .new_dispatch import enabled as fair_enabled
+        store = self.learning_store
+        scope = item.get("instruction_scope")
+        try:
+            opened = store.open_new_scope(item["id"], instruction_scope=scope,
+                expected_introduction_id=item["introduction_id"],
+                enabled_kinds=self.learning_preferences()["enabled"], fair_new=fair_enabled(self))
+        except (ValueError, KeyError) as exc:
+            self.alert("暂时不能开始这一项，原有进度已保存：" + str(exc))
+            return
+        route = opened["route"]
+        if route == "probe":
+            head = store.probe_head(opened["question_id"])
+            if head is not None:
+                self._learning_current = head
+                self.show_learning_question(head)
                 return
-            state['busy'] = True
-            chosen = {**levels, ability: level}
-            if set(chosen) != set(abilities):
-                try:
-                    saved = self.learning_store.save_familiarity_draft(item['id'], chosen,
-                        expected_introduction_id=state['introduction_id'], instruction_scope=state['instruction_scope'])
-                    self.show_learning_familiarity(saved)
-                finally:
-                    state['busy'] = False
-                return
-            from .new_dispatch import enabled as fair_enabled
-            try:
-                saved = self.learning_store.set_initial_familiarity(item['id'], chosen,
-                    expected_introduction_id=state['introduction_id'], title_answer_exposed=item.get('domain') == 'pronunciation',
-                    fair_new=fair_enabled(self), instruction_scope=state['instruction_scope'])
-            finally:
-                state['busy'] = False
-            if saved["stage"] == "intro":
-                self.show_learning_instruction(saved)
-            elif study_path_available(self):
-                self.continue_study_path(_checkpoint_saved=True)
-            else:
-                self.continue_learning()
-        children.extend(u.button(caption, lambda w, value=value: begin(value))
-                        for caption, value in [('初学', 'new'), ('有印象', 'some'), ('已熟悉', 'familiar')])
-        self.screen("learning_familiarity", "开始前", *children)
+        elif route in {"teach", "existing"}:
+            self.show_learning_instruction(store.instruction_item(item["id"], scope))
+            return
+        elif route == "wait":
+            skipped = getattr(self, "_guide_skipped_ids", None)
+            if not isinstance(skipped, set):
+                skipped = self._guide_skipped_ids = set()
+            # Process-local, per scope: the lesson's other work goes on; after a restart it is tried again.
+            skipped.add((item["id"], scope))
+        self.continue_added_learning()
 
     def _learning_guide_controls(self, question, draft, known_ids=None):
         """Use the independent task's controls while keeping all work exposure-only.
@@ -1538,12 +1519,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             # the single-item guide: the open batch owns both.
             self.show_intro_batch()
             return
-        # Batch items always have initial_familiarity once their card is done,
-        # so they never reach the picker below. A failed "我已经会了" check
-        # (route full, diagnostic_state needs_teaching, stage intro again)
-        # deliberately falls back to this ordinary intro -> guide route.
+        # Probe first (design 02 section 4, 2026-11-21): no self-rating page. A scope
+        # without a profile is started by the store: a probe question, teaching
+        # (this page) or an ordinary first check. A failed probe (route full,
+        # diagnostic_state needs_teaching, stage intro again) falls back to the
+        # ordinary intro -> guide route below, as a failed "我已经会了" check did.
         if enrolled and stage == "intro" and not familiarity:
-            self.show_learning_familiarity(item)
+            self.open_new_learning_scope(item)
             return
         # Familiarity belongs to each ability; reopening the same overview does
         # not. Keep the first introduction and every frozen guide/draft intact.
@@ -1921,14 +1903,25 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         self._learning_parts = list(parts)
         # Secondary help follows the answering area: hint, card, AI, and
         # "show answer" last, so active recall starts from the task itself.
-        actions = [u.button("再看讲解", self.learning_hint, compact=True, font_size=12, flex=1)]
-        batch_hints, batch_actions = self.intro_batch_question_help(current)
-        actions.extend(batch_actions)
-        actions.append(u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(
-            source="learning", question_id=qid), compact=True, font_size=12, flex=1))
-        actions.append(u.button("显示答案", self.reveal_learning_answer, compact=True, font_size=12, flex=1))
+        probe = bool(current.get("probe"))
+        if probe:
+            # A probe (probe first, 2026-11-21) shows no aid on the item itself: no explanation,
+            # no AI, no reading or spoken prompt; 「还不会」 answers it without guessing.
+            from .probe_rules import bare_view
+            shown = bare_view(q)
+            batch_hints, actions = [], [
+                u.button("还不会", lambda w, qid=q["id"]: self.decline_learning_probe(question_id=qid), flex=1),
+                u.button("显示答案", self.reveal_learning_answer, compact=True, font_size=12, flex=1)]
+        else:
+            shown = q
+            actions = [u.button("再看讲解", self.learning_hint, compact=True, font_size=12, flex=1)]
+            batch_hints, batch_actions = self.intro_batch_question_help(current)
+            actions.extend(batch_actions)
+            actions.append(u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(
+                source="learning", question_id=qid), compact=True, font_size=12, flex=1))
+            actions.append(u.button("显示答案", self.reveal_learning_answer, compact=True, font_size=12, flex=1))
         prompt_speaker = ([u.speaker_button(self.play_learning_audio, "朗读题干")]
-                          if prompt_audio_text(q) else [])
+                          if prompt_audio_text(shown) else [])
         # One read per question: unmet-word glosses and the kana of unlearned words share it.
         from .course_planning import known_ids
         known = known_ids(self.store.queries)
@@ -1944,7 +1937,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 prompt = prompt_view(self, u, q, self._learning_question_state,
                     clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), known_ids=known)
             else:
-                prompt = self._learning_prompt_block(q, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), size=20, known_ids=known)
+                prompt = self._learning_prompt_block(shown, clean_prompt_preferences(self.store.get_setting(PROMPT_PREFS, {})), size=20, known_ids=known)
             children.append(prompt)
         # The submit path records the plan of the prompt this page drew (none: the plain plan as before).
         self._learning_prompt_known = (q, known if prompt is not None else None)
@@ -2026,7 +2019,19 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if self._learning_question_state.get('presented') is not True:
             self.learning_store.save_draft(q['id'], {'presented': True})
             self._learning_question_state['presented'] = True
-        LearningUIMixin._autoplay_learning_prompt(self, q)
+        if not probe:
+            LearningUIMixin._autoplay_learning_prompt(self, q)
+
+    def decline_learning_probe(self, widget=None, *, question_id=None, **kwargs):
+        """「还不会」: the probe's failed-diagnostic record without an answer; the lesson is taught next."""
+        if self.page != "learning_question" or (self._learning_question or {}).get("id") != question_id:
+            return
+        try:
+            self.learning_store.decline_probe(question_id)
+        except (ValueError, KeyError) as exc:
+            self._learning_status.text = "暂未保存：" + str(exc)
+            return
+        self.continue_added_learning()
 
     def save_learning_input(self, widget=None, **kwargs):
         """Keep the in-memory draft current; persist it at most 0.25 s later.
@@ -2338,6 +2343,17 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         self._learning_feedback_view_result = (q['id'], deepcopy(result))
         correct = result.get("correct", False)
         assisted = result.get("assisted", False)
+        if (correct and not assisted and result.get("outcome") == "correct"
+                and self.learning_store.probe_result_reduced(q["id"], enabled_kinds=self.learning_preferences()["enabled"])):
+            # Probe first (2026-11-21): a right answer to a probe, while another ability of the lesson can
+            # still be probed now, shows only that it is right and the ratings: no reading, meaning, notes
+            # or examples for that next probe. Every other result page is the full one.
+            self.screen("learning_feedback", "作答结果", build_answer_feedback(result),
+                u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
+                    for title, rating in [("再学一次", "again"), ("有些困难", "hard")]]),
+                u.row(*[u.button(title, lambda w, rating=rating, qid=q["id"]: self.finish_learning_question(rating, question_id=qid), flex=1, multiline=True)
+                    for title, rating in [("记住了", "good"), ("很轻松", "easy")]]))
+            return
         speaker = self._learning_answer_speaker(q)
         entered = result.get("answered_text", result.get("answer", ""))
         from .word_blocks import structure_diagnostic

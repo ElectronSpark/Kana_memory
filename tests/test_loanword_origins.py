@@ -22,6 +22,16 @@ from support.app_fixtures import question_app as question_app, setup_app as setu
 from support.fake_ui import text_of
 from support.learning_fixtures import NOW, click, learning_app as learning_app
 
+
+@pytest.fixture(autouse=True)
+def _earlier_release(request):
+    """The card batches these flows open are those of an earlier release (probe first opens none)."""
+    from support.learning_fixtures import earlier_release_batches
+    for name in ("learning_app", "path_app"):
+        if name in request.fixturenames:
+            earlier_release_batches(request.getfixturevalue(name))
+
+
 _ROOT = Path(__file__).resolve().parents[1]
 _SPEC = importlib.util.spec_from_file_location("build_teaching_content", _ROOT / "tools/build_teaching_content.py")
 _BUILDER = importlib.util.module_from_spec(_SPEC)

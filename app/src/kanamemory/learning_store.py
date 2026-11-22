@@ -18,6 +18,7 @@ from .learning_dispatch_types import LearningCurrent
 
 from .domain import ALGORITHM_VERSION, _utc
 from . import ability_teaching as _teaching
+from .probe_rules import EVIDENCE as PROBE_EVIDENCE, DECLINED_KEY
 
 SCHEMA_VERSION = 1
 TABLES = ("learning_meta", "learning_content", "learning_unit", "learning_question", "learning_event")
@@ -27,7 +28,12 @@ STAGES = {"intro", "guide", "bridge", "check", "done"}
 ALIASES = {"meaning": "understanding", "usage": "use"}
 WORD_LISTENING_ADMISSION = "word_listening_admission_v1"
 WORD_LISTENING_DAILY_LIMIT = 8
+# After teaching, a lesson's first formal question waits RETRIEVAL_DELAY_SECONDS or until another
+# item has a formal answer. A lesson started by probe first (profile evidence probe_v1, 2026-11-21)
+# waits PROBE_RETRIEVAL_DELAY_SECONDS or RETRIEVAL_OTHER_ANSWERS answers of other items instead.
 RETRIEVAL_DELAY_SECONDS = 60
+PROBE_RETRIEVAL_DELAY_SECONDS = 600
+RETRIEVAL_OTHER_ANSWERS = 3
 FEEDBACK_COOLDOWN_SECONDS = 60
 # An unscored (unresolved) answer is a queue pause, never an FSRS update:
 # re-asking within a minute only repeats the same unscorable attempt.
@@ -37,6 +43,8 @@ UNRESOLVED_RETRY_SECONDS = 4 * 3600
 RETRY_COOLDOWN_MAX_SECONDS = 36 * 3600
 MAX_JSON_BYTES = 2 * 1024 * 1024
 FAMILIARITY_LEVELS = {"new", "some", "familiar"}
+# initial_familiarity.evidence: an earlier self-rating, or a probe (2026-11-21).
+PROFILE_EVIDENCE = frozenset({"self_report", PROBE_EVIDENCE})
 
 
 class _ExposureTimes(dict):
@@ -221,6 +229,21 @@ def _ability_due(unit, question):
     if free and due and probe:
         return min(datetime.fromisoformat(value).astimezone(timezone.utc) for value in (due, probe)).isoformat()
     return due
+
+
+def _probe_era(checkpoint):
+    """The probe-first spacing applies (2026-11-21): a scope whose probe failed and was then taught, or
+    an ability opened for an ordinary first check (no guide) after its lesson was taught. A lesson taught
+    because nothing could be probed keeps the earlier spacing."""
+    if isinstance(checkpoint, str):
+        checkpoint = _load(checkpoint) or {}
+    from .probe_rules import is_probe
+    profile = (checkpoint or {}).get("initial_familiarity") or {}
+    return profile.get("evidence") == PROBE_EVIDENCE and (is_probe(profile) or "last_checkpoint" not in checkpoint)
+
+
+def _retrieval_delay(checkpoint):
+    return PROBE_RETRIEVAL_DELAY_SECONDS if _probe_era(checkpoint) else RETRIEVAL_DELAY_SECONDS
 
 
 def _independent_retrieval(question):
@@ -1126,6 +1149,94 @@ class LearningStore:
                 completed(db, "course")
         return self.instruction_item(content_id, instruction_scope)
 
+    # Probe first (design 02 section 4, 2026-11-21): probe_rules decides, learning_probe
+    # reads and writes inside the transactions opened here.
+
+    def open_new_scope(self, content_id, *, expected_introduction_id, enabled_kinds, instruction_scope=None,
+                       now=None, fair_new=False):
+        """Start an introduction scope that has no profile yet: a probe, teaching or an ordinary first check.
+
+        The result is learning_probe.open_scope_in_transaction's: route "probe"
+        (with the question id), "teach", "check", "wait" (no qualifying probe
+        now; nothing written) or "existing" (nothing written).
+        """
+        from .learning_probe import open_scope_in_transaction
+        from .course_planning import known_ids
+        from .answer_input import system_japanese_enabled
+        now = _utc(now)
+        with self._db:
+            self._transaction()
+            return open_scope_in_transaction(self, content_id, instruction_scope=instruction_scope,
+                expected_introduction_id=expected_introduction_id, enabled_kinds=list(enabled_kinds),
+                known=known_ids(self.queries), system_japanese=system_japanese_enabled(self.store),
+                now=now, fair_new=fair_new)
+
+    def probe_head(self, question_id, now=None):
+        """A started probe question as a head, in the shape current() gives a question, when it can be
+        answered at ``now``; None while a queue guard (an exposure wait, a floor) still holds it (read only)."""
+        now = _utc(now)
+        q = self.get_question(question_id)
+        if q is None:
+            raise KeyError(question_id)
+        joined = self._db.execute("""SELECT u.*,q.draft_json,q.result_json,q.not_before_utc FROM learning_question q
+            JOIN learning_unit u ON u.unit_id=q.unit_id WHERE q.question_id=?""", (question_id,)).fetchone()
+        due = self.effective_question_due(dict(joined), self.get_question(question_id), now)
+        if due and datetime.fromisoformat(due) > now:
+            return None
+        scope = self.ability_instruction_scope(q["target_id"], q["ability"])
+        return {"content": self.instruction_item(q["target_id"], scope), "question": q, "draft": q["draft"],
+                "result": q["result"], "type": "question", "stage": "check", "probe": True}
+
+    def decline_probe(self, question_id, now=None):
+        """「还不会」 on an open probe: the failed-diagnostic record without an answer, plus probe_declined.
+
+        One transaction: the first answer is frozen as revealed (no rating, no
+        FSRS write), the profile records the decline and the event is finalized.
+        """
+        from .probe_rules import DECLINED_KEY
+        now = _utc(now)
+        with self._db:
+            self._transaction()
+            row = self._db.execute("SELECT * FROM learning_question WHERE question_id=?", (question_id,)).fetchone()
+            if row is None:
+                raise KeyError(question_id)
+            unit = self._db.execute("SELECT * FROM learning_unit WHERE unit_id=?", (row["unit_id"],)).fetchone()
+            content = self.ability_instruction_row(unit["content_id"], unit["ability"])
+            if row["status"] != "pending" or row["result_json"] is not None or not self._initial_diagnostic(content, unit):
+                raise ValueError("This question is not an open probe")
+            result = self._submit_in_transaction(question_id, "", None, outcome="revealed", now=now)
+            if not result.get("diagnostic_needs_teaching"):
+                raise ValueError("This question is not an open probe")
+            content = self.ability_instruction_row(unit["content_id"], unit["ability"])
+            checkpoint = _load(content["checkpoint_json"])
+            checkpoint["initial_familiarity"][DECLINED_KEY] = True
+            _teaching.update(self._db, content, checkpoint_json=_dump(checkpoint))
+            return self._finalize_in_transaction(question_id, None, now=now)
+
+    def probe_result_reduced(self, question_id, *, enabled_kinds):
+        """Whether the right answer to ``question_id`` gets the reduced result page (reads only).
+
+        probe_rules.reduced_result: the question is itself a probe (the first
+        answer of an ability opened as a probe) and another ability of the same
+        lesson can still be probed now (a qualifying probe exists for it).
+        """
+        from .learning_probe import LessonView, next_probe_available
+        from .probe_rules import is_probe, reduced_result
+        from .course_planning import known_ids
+        from .answer_input import system_japanese_enabled
+        unit = self._db.execute("""SELECT u.* FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
+            WHERE q.question_id=?""", (question_id,)).fetchone()
+        content = self.ability_instruction_row(unit["content_id"], unit["ability"]) if unit is not None else None
+        if content is None:
+            return False
+        profile = (_load(content["checkpoint_json"]) or {}).get("initial_familiarity")
+        if not (is_probe(profile) and self._initial_diagnostic(content, unit)):
+            return False
+        view = LessonView(self, unit["content_id"])
+        return reduced_result(answered_is_probe=True, next_probe_available=next_probe_available(
+            self, view, unit["ability"], enabled_kinds=list(enabled_kinds), known=known_ids(self.queries),
+            system_japanese=system_japanese_enabled(self.store)))
+
     def ensure_prerequisites(self, catalogue=None, now=None):
         """Append missing prerequisites of already enrolled, untouched lessons.
 
@@ -1444,7 +1555,7 @@ class LearningStore:
                 _teaching.update(self._db, row, stage='guide')
             elif checkpoint in {"guide_correct", "bridge"} and row["stage"] == "guide":
                 _teaching.update(self._db, row, stage='bridge', guided_at_utc=now.isoformat(),
-                    retrieval_at_utc=(now+timedelta(seconds=RETRIEVAL_DELAY_SECONDS)).isoformat())
+                    retrieval_at_utc=(now+timedelta(seconds=_retrieval_delay(draft))).isoformat())
                 _teaching.ready_units(self._db, row)
                 if fair_new:
                     from .new_dispatch import completed
@@ -1463,12 +1574,36 @@ class LearningStore:
         """
         if row["retrieval_at_utc"] and datetime.fromisoformat(row["retrieval_at_utc"]) <= now:
             return True
+        if not row["guided_at_utc"]:
+            return False
+        if _probe_era(row["checkpoint_json"]):
+            # Probe first (2026-11-21): three answers of other items (course or kana).
+            return self.other_answers_since(row["content_id"], datetime.fromisoformat(row["guided_at_utc"]),
+                                            limit=RETRIEVAL_OTHER_ANSWERS) >= RETRIEVAL_OTHER_ANSWERS
         # An intervening independent target, rather than another tap in this
         # same lesson, provides the alternative interleaving opportunity.
-        return bool(row["guided_at_utc"] and self._db.execute("""SELECT 1 FROM learning_event e
+        return bool(self._db.execute("""SELECT 1 FROM learning_event e
             JOIN learning_unit u ON u.unit_id=e.unit_id WHERE u.content_id<>?
             AND e.role='primary' AND e.occurred_at_utc>? LIMIT 1""",
             (row["content_id"], row["guided_at_utc"])).fetchone())
+
+    def other_answers_since(self, content_id, since, *, limit=RETRIEVAL_OTHER_ANSWERS):
+        """Answers of other items after ``since``, counted up to ``limit`` (read only).
+
+        Course answers of other lessons (rated or not) and kana answers, by the
+        instant they were finalized. The spacing of probe_rules reads it.
+        """
+        since = _utc(since).isoformat()
+        course = self._db.execute("""SELECT COUNT(*) FROM (SELECT 1 FROM learning_event e
+            JOIN learning_unit u ON u.unit_id=e.unit_id WHERE u.content_id<>?
+            AND julianday(COALESCE(json_extract(e.result_json,'$.finalized_at_utc'),e.occurred_at_utc))>julianday(?)
+            LIMIT ?)""", (content_id, since, limit)).fetchone()[0]
+        if course >= limit:
+            return course
+        kana = self._db.execute("""SELECT COUNT(*) FROM (SELECT 1 FROM review_event
+            WHERE julianday(COALESCE(json_extract(review_log_json,'$.finalized_at_utc'),occurred_at_utc))>julianday(?)
+            LIMIT ?)""", (since, limit - course)).fetchone()[0]
+        return course + kana
 
     def append_questions(self, questions, now=None, *, exposure_tables=None):
         """``exposure_tables``: exposure_tables() of the queue pass this append belongs to."""
@@ -2112,7 +2247,9 @@ class LearningStore:
                     for pool, head in service_heads.items()}}
 
         from .practice_round import freeze_course_rows
+        from .learning_probe import GateReader
         gate_closed = self._batch_gate_reader(enabled_kinds)
+        probe_gate = GateReader(self, now)
         for row in freeze_course_rows(self.store, self.dispatch_pending(enabled_kinds, projection=projection),
                                       service_priority):
             content_row = content_row_for(row)
@@ -2120,6 +2257,12 @@ class LearningStore:
                 continue
             if gate_closed(row):
                 # 四之二: a later ability of a batch item is not yet open.
+                continue
+            held = probe_gate(row, content_row)
+            if held is not None:
+                # Probe first (2026-11-21): an earlier probe is open, teaching comes first, or the spacing waits.
+                if held != "hold" and not teaching_only:
+                    waiting.append(held)
                 continue
             teaching_stages = {"intro", "guide", "bridge", "check"} if teaching_content_ids is not None else {"intro", "guide"}
             if teaching_only and (content_row["stage"] not in teaching_stages and not unassessed(row)
@@ -2148,7 +2291,8 @@ class LearningStore:
                 # feedback must be saved before returning to that introduction.
                 return {**result, "type": "question", "stage": "check"}
             if content["stage"] in {"intro", "guide"}:
-                if content["id"] in skip_teaching_ids:
+                # A whole lesson (its id) or one of its scopes ((id, scope): no qualifying probe yet).
+                if content["id"] in skip_teaching_ids or (content["id"], scope) in skip_teaching_ids:
                     continue
                 if teaching_only:
                     due = self.effective_question_due(row, q, now, exposure_times=exposure_times)
@@ -2174,6 +2318,8 @@ class LearningStore:
             if unassessed(row):
                 result.update(protected_unassessed_ability=True, service_reason="first_ability_check",
                               new_dispatch_continue=False)
+            if q["result"] is None and self._initial_diagnostic(content_row, row):
+                result["probe"] = True   # its page shows no aid on the item itself (probe_rules)
             head = {**result, "type": "question", "stage": "check"}
             if not include_unassessed:
                 return head
@@ -2263,6 +2409,8 @@ class LearningStore:
         from .answer_input import available, system_japanese_enabled
         system_input = system_japanese_enabled(self.store)
         gate_closed = self._batch_gate_reader(enabled_kinds)
+        from .learning_probe import GateReader
+        probe_gate = GateReader(self, now)
         for row in visible.values():
             if gate_closed(row):
                 # Not yet open (四之二): neither ready, waiting nor disabled.
@@ -2295,6 +2443,14 @@ class LearningStore:
                 continue
             if row["result_json"] is not None and _load(row["result_json"]).get("initial_diagnostic"):
                 counts["ready"] += 1
+                continue
+            held = probe_gate(row, content)
+            if held == "hold":
+                continue   # not yet open (probe first): neither ready, waiting nor disabled
+            if held is not None:
+                counts["waiting"] += 1
+                if counts["next_due_at_utc"] is None or held < counts["next_due_at_utc"]:
+                    counts["next_due_at_utc"] = held
                 continue
             if content["stage"] in {"intro", "guide"}:
                 teaching.add((content["content_id"], scope))
@@ -2798,7 +2954,7 @@ def validate_backup_rows(db):
             profile = checkpoint["initial_familiarity"]
             abilities = set(_teaching.abilities(db, row))
             if (not isinstance(profile, dict) or profile.get("version") != 1
-                    or profile.get("evidence") != "self_report" or not isinstance(profile.get("levels"), dict)
+                    or profile.get("evidence") not in PROFILE_EVIDENCE or not isinstance(profile.get("levels"), dict)
                     or set(profile["levels"]) != abilities
                     or any(not isinstance(value, str) or value not in FAMILIARITY_LEVELS for value in profile["levels"].values())
                     or profile.get("route") not in {"full", "compact", "diagnostic"}
@@ -2811,7 +2967,10 @@ def validate_backup_rows(db):
             _utc(datetime.fromisoformat(profile["selected_at_utc"]))
             if "title_answer_exposed" in profile and type(profile["title_answer_exposed"]) is not bool:
                 raise ValueError("Invalid diagnostic title exposure")
-            if "source" in profile and (profile["source"] != intro_batch.CARD_SOURCE
+            if DECLINED_KEY in profile and (profile[DECLINED_KEY] is not True
+                    or profile["diagnostic_state"] != "needs_teaching" or profile["evidence"] != PROBE_EVIDENCE):
+                raise ValueError("Invalid declined probe")
+            if "source" in profile and (profile["evidence"] != "self_report" or profile["source"] != intro_batch.CARD_SOURCE
                     or set(profile["levels"].values()) - {"new", "familiar"}
                     or len(set(profile["levels"].values())) != 1):
                 raise ValueError("Invalid introduction card self-report")

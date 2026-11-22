@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from support.learning_fixtures import learning_app, click
+from support.learning_fixtures import learning_app, click, earlier_release_batches
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of, descendants
 from support.learning_practice_policy_support import raw
@@ -17,6 +17,13 @@ from kanamemory.course_planning import iter_question_plans
 from kanamemory.intro_batch_ui import CARD_BUTTON, intro_quiz_question
 from kanamemory.learning_questions import PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION
 from kanamemory.learning_ui import LEARNING_PREFS
+
+
+@pytest.fixture(autouse=True)
+def _earlier_release(learning_app):
+    """These cards and quizzes belong to batches an earlier release opened (probe first opens none)."""
+    earlier_release_batches(learning_app)
+
 
 CID = "word:synthetic:r1"
 KINDS = ["vocab_meaning", "vocab_reading_choice", "vocab_reading", "vocab_usage", "grammar_meaning"]

@@ -202,33 +202,9 @@ class IntroBatchUIMixin:
                 self.show_intro_batch()
                 return True
             return False
-        if kind != "instruction":
-            return False
-        content = current.get("content") or {}
-        if (content.get("instruction_scope") is not None or content.get("family") not in intro_batch.SIZE_RANGES
-                or content.get("stage") != "intro" or (content.get("checkpoint") or {}).get("initial_familiarity")):
-            return False
-        candidates = self.learning_store.intro_batch_candidates(enabled, content["id"], fair_new=self._intro_batch_fair())
-        # Only items whose batch quiz can actually be presented join a batch.
-        def quizzable(cid):
-            # The batch teaches the easiest admitted ability first (as start_intro_batch).
-            item = self.learning_store.instruction_item(cid)
-            admitted = item.get("enrolled_abilities") or [unit["ability"] for unit in item["units"]]
-            try:
-                first = intro_batch.first_ability(item["family"], admitted)
-            except ValueError:
-                return False
-            return intro_quiz_question(item, enabled, ability=first, known_background_ids=known) is not None
-        known = self._intro_batch_known_ids(candidates)
-        candidates = [cid for cid in candidates if quizzable(cid)]
-        if not candidates or candidates[0] != content["id"]:
-            return False
-        try:
-            self.learning_store.start_intro_batch(candidates, family=content["family"])
-        except ValueError:
-            return False
-        self.show_intro_batch()
-        return True
+        # Probe first (2026-11-21): no new batch is opened for new items any more. The batch rules,
+        # store methods and pages stay (dormant) so that a batch saved by an earlier release finishes.
+        return False
 
     def show_intro_batch(self, widget=None, **kwargs):
         state = self.learning_store.intro_batch()
@@ -279,7 +255,6 @@ class IntroBatchUIMixin:
             u.label(f"第 {index + 1} / {len(state['entries'])} 项", size=13, color=u.MUTED),
             *self.intro_batch_review_hint(), *self._intro_card_body(item, origin=True),
             u.button("下一项", lambda w: self.choose_intro_card("next", expected=expected), primary=True),
-            u.button("我已经会了", lambda w: self.choose_intro_card("known", expected=expected)),
             u.button("稍后再学", self.leave_learning))
 
     def _intro_card_body(self, item, *, origin=False):

@@ -111,9 +111,10 @@ vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还
 
 5. 首次教学、前置与题型变化
 
-[I] 首次熟悉度new/some/familiar分别影响完整介绍、精简回顾或满足未曝光条件的实际诊断。自报熟悉不会直接写FSRS成功或解锁前置。词汇/语法按已加入能力分别选择；部分已知部分未知仍介绍所需内容。全部能力熟悉且没有暴露答案，才走可用的直接诊断。诊断失败/揭示返回教学，不制造“已有成熟记忆遗忘”；真正独立成功只给本次受测能力正式评分。
+[I；2026-11-21，试探优先，合成存储与fake UI测试，原生未验] 课程新项（词汇、语法、读音规则）不再自报熟悉度：未开始的介绍范围由LearningStore.open_new_scope（规则在probe_rules，读写在learning_probe）打开。可以试探时写initial_familiarity {version 1, evidence "probe_v1", levels {该能力: familiar}, route diagnostic, diagnostic_state active, selected_at_utc}，阶段check，单元instruction_ready，队里放一道合格试探题（原排的题不合格时按替换回执换题）；形状与旧“已熟悉→诊断”相同，只是evidence不同，也不写title_answer_exposed。答对＝该能力第一次正式复习（评分照常，新卡FSRS照旧）；答错、揭示、辅助或「还不会」（LearningStore.decline_probe，另记probe_declined: true）＝原诊断失败路径：事件role unresolved、无评分、不写FSRS，证据exposure，档案route full、diagnostic_state needs_teaching、阶段回intro。讲解显示过（任一范围有instruction_exposed_at_utc、引导、批卡或旧自报new/some）之后，其余能力按普通第一次检查打开（plain档案：probe_v1、levels new、route full、not_requested，阶段bridge）；未讲解且没有试探失败时，后面的能力依次再试探。一项一个合格试探题都没有时写plain档案并讲解。旧记录的self_report档案与路线不变，校验器两种evidence都接受，probe_declined只能与needs_teaching同在。
+旧记录：首次熟悉度new/some/familiar分别影响完整介绍、精简回顾或满足未曝光条件的实际诊断。自报熟悉不会直接写FSRS成功或解锁前置。诊断失败/揭示返回教学，不制造“已有成熟记忆遗忘”；真正独立成功只给本次受测能力正式评分。
 
-[I] 课程阶段intro → guide → bridge/check → done分离曝光、引导和首个独立检查。新内容的一组讲解/引导/首检受保护，避免要求用户从前置清单逐项寻找入口；实际出现哪些页面由保存的阶段与当前可用题型共同决定。假名熟悉度按内容×字形保存，不以认识平假名替代片假名。
+[I] 课程阶段intro → guide → bridge/check → done分离曝光、引导和首个独立检查（试探题直接是check）。2026-11-21起，引导结束（bridge）后的第一道正式题要等别的项答过3道（课程或假名作答）或过10分钟（RETRIEVAL_DELAY_SECONDS=600、RETRIEVAL_OTHER_ANSWERS=3，原为60秒或别的项1道）；同一项两道试探之间同样等3道或10分钟（learning_probe.GateReader，计入等待）。新内容的一组讲解/引导/首检受保护，避免要求用户从前置清单逐项寻找入口；实际出现哪些页面由保存的阶段与当前可用题型共同决定。假名熟悉度按内容×字形保存，不以认识平假名替代片假名。
 
 [I] learning_dependencies.independent_ready_ids要求历史真实无辅助正确primary事件及rating>1，能力限定理解/应用/读法/运用。后来忘记或暂停不撤销已经获得的前置资格，不把高级复习重新锁死。explicit acknowledgement与真实成功是不同事实。validate_catalog拒绝缺失依赖及环；effective_dependencies只为与已审目录精确匹配、未受保护的内容叠加当前依赖。已有评分、真实草稿及冻结结果保留其原路线，避免内容更新重写进行中的练习。
 

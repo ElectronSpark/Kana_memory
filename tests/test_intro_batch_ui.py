@@ -3,12 +3,19 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from support.learning_fixtures import learning_app, click
+from support.learning_fixtures import learning_app, click, earlier_release_batches
 from support.app_fixtures import question_app, setup_app
 from support.fake_ui import text_of, descendants
 from kanamemory import intro_batch
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_ui import LEARNING_PREFS
+
+
+@pytest.fixture(autouse=True)
+def _earlier_release(learning_app):
+    """These cards and quizzes belong to batches an earlier release opened (probe first opens none)."""
+    earlier_release_batches(learning_app)
+
 
 KINDS = ["vocab_meaning", "grammar_meaning", "pronunciation_rule"]
 
@@ -78,7 +85,9 @@ def test_known_writes_diagnostic_profile_and_skips_quiz(learning_app):
     app = learning_app
     start(app, [word(1), word(2)])
     now = app._test_clock[0]
-    click(app, "我已经会了")
+    # Probe first: the card no longer offers it; a saved batch can still hold this choice.
+    assert "我已经会了" not in text_of(app.body)
+    app.choose_intro_card("known", expected=dict(app._intro_card_entry))
     item = app.learning_store.instruction_item("word:synthetic:w1")
     profile = item["checkpoint"]["initial_familiarity"]
     assert profile["route"] == "diagnostic" and profile["levels"] == {"understanding": "familiar"}
@@ -136,14 +145,16 @@ def test_saved_familiarity_keeps_old_intro(learning_app):
     assert app.learning_store.intro_batch() is None
 
 
-def test_pronunciation_item_keeps_picker(learning_app):
+def test_pronunciation_item_starts_with_a_probe(learning_app):
     app = learning_app
     cid = "grammar:synthetic:sound"
     item = {**grammar(), "id": cid, "content_id": cid, "domain": "pronunciation",
             "question_templates": {"pronunciation_rule": [{**choice("合成", "规则", "别的")[0],
                                                            "text_roles": {"prompt": "study", "answer": "ui"}}]}}
     start(app, [item])
-    assert app.page == "learning_familiarity"
+    # Probe first (2026-11-21): no picker and no batch; the rule's first question is its probe.
+    assert app.page == "learning_question" and app._learning_question["kind"] == "pronunciation_rule"
+    assert checkpoint(app, cid)["initial_familiarity"]["evidence"] == "probe_v1"
     assert app.learning_store.intro_batch() is None
 
 

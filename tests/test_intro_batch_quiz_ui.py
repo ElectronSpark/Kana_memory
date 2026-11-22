@@ -1,7 +1,8 @@
 """Batch quiz (批小测) in the native controller (synthetic lessons only)."""
+import pytest
 from datetime import datetime, timedelta
 
-from support.learning_fixtures import learning_app, click, finish_guided_learning
+from support.learning_fixtures import learning_app, click, finish_guided_learning, earlier_release_batches
 from support.app_fixtures import question_app, setup_app  # noqa: F401 (fixtures used by learning_app)
 from support.fake_ui import text_of
 from kanamemory import intro_batch
@@ -9,6 +10,13 @@ from kanamemory.intro_batch_ui import QUIZ_PAUSED
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_questions import PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION
 from kanamemory.learning_ui import LEARNING_PREFS
+
+
+@pytest.fixture(autouse=True)
+def _earlier_release(learning_app):
+    """These cards and quizzes belong to batches an earlier release opened (probe first opens none)."""
+    earlier_release_batches(learning_app)
+
 
 KINDS = ["vocab_meaning", "grammar_meaning"]
 

@@ -21,10 +21,15 @@ MAX_REVIEWS_PER_TEACHING_BLOCK = 64
 BRIDGE_MARGIN_SECONDS = 30
 
 
+# The minute an open block may still wait for its next step (a new kana's wait after its
+# introduction). Since 2026-11-21 a course lesson's first question after teaching waits for
+# three answers of other items or ten minutes on purpose: that is not "going on".
+BLOCK_STEP_SECONDS = 60
+
+
 def bridge_wait() -> timedelta:
     """How far ahead an open teaching block still counts as going on."""
-    from .learning_store import RETRIEVAL_DELAY_SECONDS
-    return timedelta(seconds=RETRIEVAL_DELAY_SECONDS + BRIDGE_MARGIN_SECONDS)
+    return timedelta(seconds=BLOCK_STEP_SECONDS + BRIDGE_MARGIN_SECONDS)
 
 
 def teaching_review_threshold(overdue_seconds):
@@ -71,6 +76,11 @@ def guide_evidence(row, checkpoint) -> GuideEvidence:
                          or profile.get('diagnostic_state') == 'needs_teaching')
     exposure = checkpoint.get('instruction_exposed_at_utc')
     guide_checkpoint = checkpoint.get('last_checkpoint') in {'guide_correct','bridge'}
+    # Probe first (2026-11-21): an ability opened for an ordinary first check after its lesson was
+    # taught uses guided_at_utc as the spacing anchor only; only a guide it went through is one.
+    from .probe_rules import EVIDENCE as PROBE_EVIDENCE
+    if profile.get('evidence') == PROBE_EVIDENCE and not guide_checkpoint:
+        diagnostic_anchor = True
     # A failed diagnostic switches route to full but retains its earlier
     # title-exposure anchor. That anchor still is not a completed guide.
     if checkpoint.get('last_checkpoint') == 'check' and exposure and row['guided_at_utc']:

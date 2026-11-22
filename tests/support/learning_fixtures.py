@@ -192,3 +192,56 @@ def ready(app, kind, *, item_id=None):
 def legacy_dump(store):
     return {name: [tuple(row) for row in store._db.execute("SELECT * FROM " + name + " ORDER BY rowid")]
             for name in ("study_card", "study_session", "review_event", "session_checkpoint", "session_answer", "word_spelling_attempt")}
+
+
+def taught_not_probed(learning, content_id):
+    """Make an enrolled, untouched lesson one that is taught rather than probed (probe first, 2026-11-21).
+
+    Its introduction carries no probe permission (supports_initial_familiarity), as a lesson saved
+    by an older release: starting it shows the explanation and the guide, as every new lesson did
+    before probe first. Tests of the teaching block and its time share use it.
+    """
+    with learning._db:
+        learning._db.execute("UPDATE learning_content SET checkpoint_json='{}' WHERE content_id=?", (content_id,))
+
+
+def earlier_release_batches(app):
+    """Let this app open intro batches the way releases before probe first (2026-11-21) did.
+
+    Probe first no longer opens a card batch for a new lesson; a batch an earlier release
+    saved must still finish. The batch tests build such records through the earlier
+    opening rule (the same store calls: intro_batch_candidates, start_intro_batch) and
+    then drive the unchanged resume, card, quiz and ability pages.
+    """
+    from kanamemory import intro_batch
+    from kanamemory.intro_batch_ui import intro_quiz_question
+    real = app.route_intro_batch
+
+    def route(current, enabled):
+        store = app.learning_store
+        content = (current or {}).get("content") or {}
+        if (store.intro_batch() is None and (current or {}).get("type") == "instruction"
+                and content.get("instruction_scope") is None and content.get("family") in intro_batch.SIZE_RANGES
+                and content.get("stage") == "intro" and not (content.get("checkpoint") or {}).get("initial_familiarity")):
+            candidates = store.intro_batch_candidates(enabled, content["id"], fair_new=app._intro_batch_fair())
+            known = app._intro_batch_known_ids(candidates)
+
+            def quizzable(cid):
+                item = store.instruction_item(cid)
+                admitted = item.get("enrolled_abilities") or [unit["ability"] for unit in item["units"]]
+                try:
+                    first = intro_batch.first_ability(item["family"], admitted)
+                except ValueError:
+                    return False
+                return intro_quiz_question(item, enabled, ability=first, known_background_ids=known) is not None
+            candidates = [cid for cid in candidates if quizzable(cid)]
+            if candidates and candidates[0] == content["id"]:
+                try:
+                    store.start_intro_batch(candidates, family=content["family"])
+                except ValueError:
+                    return real(current, enabled)
+                app.show_intro_batch()
+                return True
+        return real(current, enabled)
+    app.route_intro_batch = route
+    return app

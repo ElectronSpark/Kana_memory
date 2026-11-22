@@ -29,6 +29,7 @@ app/src/kanamemory/admission_runtime.py
 app/src/kanamemory/ai_connection.py
 app/src/kanamemory/ai_credentials.py
 app/src/kanamemory/ai_materials.py
+app/src/kanamemory/learning_probe.py
 app/src/kanamemory/material_workflow.py
 app/src/kanamemory/material_budget.py
 app/src/kanamemory/material_verification.py
@@ -58,6 +59,7 @@ app/src/kanamemory/answer_autoplay.py
 app/src/kanamemory/answer_speech.py
 tests/test_answer_speech.py
 tests/test_answer_furigana.py
+tests/test_probe_first.py
 tests/test_reading_form_answers.py
 tests/test_reading_form_stored_results.py
 tests/test_word_block_structure.py
@@ -66,6 +68,7 @@ app/src/kanamemory/answer_input.py
 app/src/kanamemory/ability_teaching.py
 app/src/kanamemory/answer_input_ui.py
 app/src/kanamemory/kana_keyboard_ui.py
+app/src/kanamemory/probe_rules.py
 app/src/kanamemory/romaji_input.py
 app/src/kanamemory/romaji_input_ui.py
 app/src/kanamemory/assessment_policy.py
@@ -392,6 +395,7 @@ tools/evaluate_tutor_api.py
 tools/export_clean_source.py
 tools/package_content_bundle.py
 tools/package_library_pack.py
+tools/probe_readiness.py
 tools/public_source_files.txt
 
 app/src/kanamemory/legacy_record_conversion.py

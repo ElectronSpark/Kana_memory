@@ -210,6 +210,53 @@ class LearningReplacementStore:
                 value['carried_help']['assisted'] = True
         return self._prepare(value, before)
 
+    def exchange_in_transaction(self, question_id, question, *, now=None):
+        """Exchange an untouched queued task for ``question`` inside the caller's transaction; the new id.
+
+        For the probe of a new lesson (design 02 section 4): the unit's planned
+        task is not a qualifying probe. The receipt is that of any replacement
+        (the old row kept, its queue ownership ended, the new task taking its
+        earliest time and any help flag), so validate_database checks it the
+        same way. ``question`` is built from the lesson's current teaching
+        source; nothing is rated or scheduled here.
+        """
+        from .learning_store import _utc, _latest_due, _dump
+        from .learning_dependencies import has_started_answer
+        from .assessment_contract import for_question
+        if not self.db.in_transaction:
+            raise RuntimeError('Replacement requires a transaction')
+        if question_receipt(self.store, question_id):
+            raise ValueError('这道旧题已保留在替换记录中，请继续新的题目。')
+        row = self.db.execute('SELECT * FROM learning_question WHERE question_id=?', (question_id,)).fetchone()
+        if (not row or row['status'] != 'pending' or row['result_json'] is not None
+                or has_started_answer(json.loads(row['draft_json']))):
+            raise ValueError('只能替换尚未作答的待答题。')
+        unit = self.db.execute('SELECT * FROM learning_unit WHERE unit_id=?', (row['unit_id'],)).fetchone()
+        from .ability_teaching import scope_for
+        scope = scope_for(self.db, unit['content_id'], unit['ability'])
+        source = _source(self.learning, unit['content_id'], scope)
+        q = deepcopy(question)
+        if q.get('target_id') != unit['content_id'] or q.get('ability') != unit['ability'] or q.get('guided') is not False:
+            raise ValueError('替代题不属于这一项能力。')
+        q['id'] = q['question_id'] = 'replacement:' + uuid4().hex
+        q['replacement_of'] = question_id
+        q['assessment_contract'] = for_question(q)
+        now = _utc(now)
+        value = {'version': 1, 'type': 'question', 'content_id': unit['content_id'], 'scope': scope,
+                 'created_at': now.isoformat(), 'before': dict(row), 'source': source, 'question': q,
+                 'not_before_utc': _latest_due(row['not_before_utc'], self.learning.question_not_before(unit, q)),
+                 'carried_help': {k: True for k in ('assisted', 'hint_used', 'answer_revealed')
+                                  if json.loads(row['draft_json']).get(k)}}
+        event = _receipt(value)
+        self.db.execute("UPDATE learning_question SET status='completed' WHERE question_id=?", (question_id,))
+        added = self.learning._append_questions_in_transaction(q, now=datetime.fromisoformat(event['created_at']))
+        if added != [q['id']]:
+            raise ValueError('新题未能入队，原题继续保留。')
+        self.db.execute('UPDATE learning_question SET not_before_utc=?,draft_json=? WHERE question_id=?',
+                        (event['not_before_utc'], _dump(event['carried_help']), q['id']))
+        _write(self.db, question_key(question_id), event)
+        return q['id']
+
     def prepare_guide(self, content_id, scope=None, *, now=None):
         from .learning_store import _utc
         from .learning_questions import build_learning_question, KIND_ABILITIES, LISTENING_KINDS

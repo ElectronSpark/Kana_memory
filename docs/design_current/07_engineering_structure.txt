@@ -278,6 +278,7 @@ question_support只读升级有精确本地身份的旧题展示，不改题面�
 不改学习单位、队列、评分或记录格式；引导内讲解按需展开，冻结题/草稿恢复照旧。
 具体同版边界及验证见docs/shared_intro_0294.txt。
 
+试探优先 [I；2026-11-21，合成存储与fake UI测试，原生未验]：probe_rules为纯规则（pure_imports登记，只用标准库）：试探的能力顺序与题型、一道题能否作试探题（不带引导、答案明确、不放宽依赖）、档案形状（probe_profile/plain_profile）、讲解是否已显示、间隔（别的项3道或10分钟）、结果页何时精简（reduced_result：答的这道本身是试探题，且同一项另有能力此刻有合格的试探题，两者都成立才精简，其余一律完整结果页）与题页的无辅助显示副本（bare_view）。learning_probe是LearningStore一侧的读写：LessonView/GateReader（current与counts每一趟只读一次，按住还不该开的介绍范围或计入等待）与open_scope_in_transaction（在LearningStore.open_new_scope开的事务里写档案、阶段、ready、放题；原排题不合格时用LearningReplacementStore.exchange_in_transaction按普通替换回执换题）。LearningStore新增open_new_scope、probe_head、decline_probe、probe_result_reduced、other_answers_since；retrieval_ready改为别的项3道或RETRIEVAL_DELAY_SECONDS（600）。页面learning_ui.open_new_learning_scope／decline_learning_probe只调用这些方法；“开始前”页面（show_learning_familiarity）删除，intro_batch_ui.route_intro_batch不再开新批（已开的批照常走完）。first_teaching_dispatch.guide_evidence把probe_v1普通首检的guided_at_utc只当间隔锚点；bridge_wait固定为60秒加余量。只读清点工具tools/probe_readiness.py。
 四之二批量引入（休眠，未接UI）：intro_batch为纯规则（批量设置/状态形状/eligible/卡片与小测转移），
 intro_batch_state只在调用方事务内读写批游标与批量设置并做备份交叉校验；事务所有者为LearningStore，
 小测只写检查点intro_batch与标记intro_route，不写learning_question/learning_event或调度字段。
