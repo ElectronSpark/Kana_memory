@@ -49,6 +49,7 @@ CACHES = {
     "content_pack.py::_mirror": "the registry mirror, by path and stamp; clear_cache",
     "content_pack.py::_layers_for": "the checked library layers of the frozen registry; clear_cache",
     "content_pack.py::_pack_manifest": "a pack's manifest, by path and stamp; clear_cache",
+    "content_pack.py::_teaching_sha256": "the bundled teaching database's content_sha256, by path and stamp; clear_cache",
     "content_pack.py::_frozen": "the registry this process started with; clear_cache",
     "content_pack.py::_effective": "the effective catalogue itself; clear_cache",
     "content_pack.py::_built_token": "the token of the last catalogue built; compared, never served",

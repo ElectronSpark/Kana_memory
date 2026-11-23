@@ -11,6 +11,7 @@ from kanamemory import content_library_rules as rules
 from kanamemory.course_prerequisites import active_rules
 from kanamemory.knowledge_graph import alias_relations, validate_relations
 from support.content_library_support import CORE_ITEMS, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 CORE = merge.CORE_LIBRARY_ID
 

@@ -17,6 +17,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from app_build_identity import load_identity, read_identity_file, verify_apk
+sys.path.insert(0, str(ROOT / 'app/src'))
+from kanamemory.content_library_rules import BUNDLED_STAMP_FILE
+from kanamemory.content_pack import bundled_stamp
 from inspect_app_apk import inspect_python_module
 
 # The personal profile has no fixed package: it is the one of its build identity file (--identity-file).
@@ -74,6 +77,11 @@ def verify(apk, app_source, aapt, *, profile, identity_file=None):
     resources = module_root / 'resources'
     expected_resources = {p.relative_to(source_root).as_posix(): sha(p)
                           for p in resources.rglob('*') if p.is_file()}
+    # Design 08 section 5.7: the bundled content's version stamp is an ordinary resource; one that does not
+    # belong to the bundled teaching database would be ignored by the app, so the audit refuses it.
+    stamp = bundled_stamp(resources)
+    if (resources / BUNDLED_STAMP_FILE).is_file() and stamp is None:
+        raise ValueError('The bundled library stamp does not belong to the bundled teaching database')
     metadata = expected_metadata(app_source, identity)
     with zipfile.ZipFile(apk) as outer:
         with zipfile.ZipFile(BytesIO(outer.read('assets/chaquopy/app.imy'))) as inner:
@@ -103,6 +111,7 @@ def verify(apk, app_source, aapt, *, profile, identity_file=None):
         'identity': identity, 'apk_sha256': fingerprint, 'apk_bytes': apk.stat().st_size,
         'python_modules': len(checks), 'module_checks': checks,
         'resource_sha256': actual_resources, 'demo_content_boundary_checked': profile == 'demo',
+        'bundled_library_stamp': stamp,
         'complete_application_inventory_checked': True,
         'build_metadata_sha256': {name: hashlib.sha256(value).hexdigest() for name, value in metadata.items()},
         'device_touched': False, 'build_performed': False,

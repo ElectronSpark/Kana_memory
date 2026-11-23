@@ -426,8 +426,75 @@ def active_registry():
             registry = _mirror(str(path), stat.st_mtime_ns, stat.st_size)
         except OSError:
             registry = None
+    if registry is not None:
+        # Section 5.7: newer bundled content wins over an older imported core pack before anything is loaded;
+        # the service's startup_sync then saves the same change (bundled_core_replacement).
+        replaced = bundled_core_replacement(registry, root)
+        if replaced is not None:
+            registry = replaced[0]
     _frozen.append(registry)
     return registry
+
+
+@lru_cache(maxsize=4)
+def _teaching_sha256(path, modified_ns, size):
+    del modified_ns, size
+    try:
+        with closing(_connect(path)) as connection:
+            row = connection.execute("SELECT value FROM metadata WHERE key='content_sha256'").fetchone()
+    except (OSError, sqlite3.Error):
+        return None
+    return row[0] if row and isinstance(row[0], str) else None
+
+
+def bundled_teaching():
+    """(folder, teaching database) of the bundled content whose stamp counts: the KANAMEMORY_TEACHING_PACK
+    override when set (isolated builds and tests serve that database in place of the resources), else the
+    runtime resources."""
+    configured = os.environ.get("KANAMEMORY_TEACHING_PACK")
+    if configured:
+        return Path(configured).parent, Path(configured)
+    return _resources(), _resources() / "teaching_content.sqlite3"
+
+
+def bundled_stamp(resources=None):
+    """The valid stamp of the bundled content (content_library_rules.bundled_stamp), or None.
+
+    It counts only for the teaching database actually bundled beside it: a stale or malformed stamp, or none,
+    is None, never an error.
+    """
+    if resources is not None:
+        folder, teaching = Path(resources), Path(resources) / "teaching_content.sqlite3"
+    else:
+        folder, teaching = bundled_teaching()
+    try:
+        value = json.loads((folder / library_rules.BUNDLED_STAMP_FILE).read_text("utf-8"))
+        stat = teaching.stat()
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return library_rules.bundled_stamp(value, _teaching_sha256(str(teaching), stat.st_mtime_ns, stat.st_size))
+
+
+def installed_version_scheme(entry, root):
+    """version_scheme of an installed library's manifest, or None when it cannot be read."""
+    try:
+        manifest = json.loads((Path(root) / entry["path"] / library_rules.MANIFEST_FILE).read_text("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError, TypeError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("library_version") != entry["library_version"]:
+        return None
+    return manifest.get("version_scheme")
+
+
+def bundled_core_replacement(registry, root):
+    """content_library_rules.core_reverted_to_bundled for this app's bundled stamp and the installed core pack."""
+    entry = library_rules.registry_entry(registry, library_rules.CORE_LIBRARY_ID)
+    if entry is None or entry["source"]["kind"] != "file" or root is None:
+        return None
+    stamp = bundled_stamp()
+    if stamp is None:
+        return None
+    return library_rules.core_reverted_to_bundled(registry, stamp, installed_version_scheme(entry, root))
 
 
 class LibraryLayer:
@@ -1450,6 +1517,7 @@ def clear_cache():
     """
     _pack_manifest.cache_clear()
     _mirror.cache_clear()
+    _teaching_sha256.cache_clear()
     _layers_for.cache_clear()
     _frozen.clear()
     library_index.clear_cache()

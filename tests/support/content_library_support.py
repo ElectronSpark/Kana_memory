@@ -7,12 +7,32 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import zipfile
 
+import pytest
+
 from kanamemory import content_library_rules as rules
+from kanamemory import content_pack
 from kanamemory.content_pack import namespace_document
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_bundled_stamp(monkeypatch, tmp_path_factory):
+    """The tree's real resources carry a stamp of the bundled content (design 08 section 5.7); a test whose
+    subject is not the stamp runs with none, so it gives the same result in a stamped and an unstamped tree.
+    Imported by the library test modules (autouse there). A test about the stamp patches
+    content_pack.bundled_teaching itself; KANAMEMORY_TEACHING_PACK keeps its meaning (that database's folder).
+    KANAMEMORY_TEST_STAMP_FOLDER (verification only) names the folder standing in for the real resources."""
+    real = content_pack.bundled_teaching
+    folder = Path(os.environ.get("KANAMEMORY_TEST_STAMP_FOLDER") or tmp_path_factory.mktemp("no-stamp"))
+
+    def located():
+        return real() if os.environ.get("KANAMEMORY_TEACHING_PACK") else (folder, folder / "teaching_content.sqlite3")
+    monkeypatch.setattr(content_pack, "bundled_teaching", located)
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location("build_teaching_content", _ROOT / "tools/build_teaching_content.py")

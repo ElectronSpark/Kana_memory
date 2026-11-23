@@ -54,6 +54,9 @@ RESTART_HOW = "重启指完全关闭应用再打开：电脑上关闭窗口；�
 RESTART_NOW = "立即重启"
 RESTART_NOW_HINT = "可在内容库页点「立即重启」。"
 PENDING_NOTE = "内容库有变更，重启应用后生效；重启前仍按当前内容出题。"
+# Design 08 section 5.7: shown until the next library change.
+BUNDLED_REPLACED_NOTE = ("应用更新后自带的内容（版本 {bundled_version}）不比导入的核心库（版本 {replaced_version}）旧，"
+                         "已改用内置内容；导入的核心库已移除，进度记录保留。")
 # After a saved change that needs a restart, the app restarts at once through 立即重启's own path; the
 # notice says library_activity.RESTARTING meanwhile. One sentence after today's note when that automatic
 # restart did not happen, by why.
@@ -86,7 +89,8 @@ def _time_text(value):
 def _source_lines(row):
     """Source rows of one ContentLibraryService.libraries() row (section 4.5)."""
     if row["source_kind"] == "bundled":
-        return [u.label("来源：内置（随应用安装与校验）", size=12, color=u.MUTED)]
+        version = f" · 内置内容版本 {row['bundled_version']}" if row.get("bundled_version") else ""
+        return [u.label("来源：内置（随应用安装与校验）" + version, size=12, color=u.MUTED)]
     status = row["signature_status"]
     rows = [u.label(f"来源：导入文件 {row['source_name'] or '（无文件名）'} · 导入时间 {_time_text(row['installed_at_utc'])}"
                     f" · sha256 {_short_sha(row['source_sha256'])}", size=12, color=u.MUTED),
@@ -351,6 +355,7 @@ class ContentLibraryUIMixin:
             rows = service.libraries()
             pending = service.pending_restart()
             mismatch = service.root_mismatch()
+            replaced = service.bundled_notice()
         except Exception as error:
             self.screen("content_libraries", "内容库", *children,
                         u.label("无法读取内容库设置：" + _message(error), size=14), u.button("返回", self.go_back))
@@ -362,6 +367,8 @@ class ContentLibraryUIMixin:
             children.append(slot)
         if mismatch:
             children.append(self.note("内容库目录与本次启动载入的目录不一致，导入的库暂未载入；请重启应用。"))
+        if replaced:
+            children.append(self.note(BUNDLED_REPLACED_NOTE.format(**replaced)))
         imported = [row for row in rows if row["source_kind"] == "file"]
         add = [] if working else [u.button("添加内容库", self.add_content_library, primary=True)]
         if not imported:
@@ -586,6 +593,8 @@ class ContentLibraryUIMixin:
         elif package_errors:
             children.append(u.label(f"包错误：{len(package_errors)} 项与已安装内容同 ID、同修订号但内容不同，不能安装。"
                                     "请向库作者索取修订号已更新的版本。", size=13))
+        elif check.bundled_error:
+            children.append(u.label(check.bundled_error + "。", size=13))
         elif blocking:
             children.append(u.label("默认不安装：" + "；".join(blocking), size=13))
             children.append(u.button("仍然安装（相关项标为依赖缺失、不可加入）",

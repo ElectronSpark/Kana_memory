@@ -17,6 +17,7 @@ from kanamemory.content_library_service import ContentLibraryService
 from kanamemory.domain import StudyStore
 from kanamemory.material_review import item_fingerprint
 from support.content_library_support import CORE_ITEMS, CORE_NAMESPACES, build_core_resources, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 LIBRARY = "author.lazy"
 WORDS = ["word:lazy:%02d" % index for index in range(6)]

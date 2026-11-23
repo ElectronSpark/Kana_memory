@@ -395,6 +395,7 @@ tools/evaluate_tutor_api.py
 tools/export_clean_source.py
 tools/package_content_bundle.py
 tools/package_library_pack.py
+tools/stamp_bundled_library.py
 tools/probe_readiness.py
 tools/public_source_files.txt
 
@@ -994,6 +995,7 @@ tests/test_sound_known_variants.py
 app/src/kanamemory/content_library_index.py
 tests/test_content_library_index.py
 tests/test_content_library_lazy.py
+tests/test_stamp_bundled_library.py
 app/src/kanamemory/route_mix/__init__.py
 app/src/kanamemory/route_mix/params.py
 app/src/kanamemory/route_mix/readiness.py

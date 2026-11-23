@@ -7,6 +7,7 @@ import pytest
 
 from kanamemory import content_library_rules as rules
 from support.content_library_support import CORE_ITEMS, CORE_NAMESPACES, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 
 def test_default_registry_has_only_the_enabled_core_library():

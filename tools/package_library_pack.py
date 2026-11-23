@@ -54,7 +54,7 @@ import argparse
 from contextlib import closing
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 import sys
@@ -361,6 +361,8 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             for path in sorted(p for p in (resources / "media").rglob("*") if p.is_file()):
                 add(path.relative_to(resources).as_posix(), _check_file(path, resources), "media")
     add(rules.NOTICE_FILE, _check_file(resources / rules.NOTICE_FILE, resources), "notice")
+    if any(PurePosixPath(name).name == rules.BUNDLED_STAMP_FILE for name in entries):
+        raise ValueError("The bundled content's stamp never enters a library pack")  # design 08 section 5.7
     problem = size_problem(files)
     if problem:
         raise ValueError(problem)

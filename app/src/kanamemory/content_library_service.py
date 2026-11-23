@@ -244,6 +244,37 @@ class ContentLibraryService:
             raise
         return target
 
+    # ------------------------------------------------------------ bundled content replaced a core pack (5.7)
+
+    def _bundled_notice_path(self):
+        return self.root / rules.BUNDLED_NOTICE_FILE
+
+    def _write_bundled_notice(self, notice):
+        """Kept beside the mirror (device state, never in a backup) until the next library change."""
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._bundled_notice_path().write_text(json.dumps(notice, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass  # the page then shows no notice; the registry change stands
+
+    def _clear_bundled_notice(self):
+        try:
+            self._bundled_notice_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def bundled_notice(self):
+        """{"replaced_version", "bundled_version"} after a start replaced an imported core pack by newer bundled
+        content, until the next library change (install, enable/disable, remove); else None."""
+        try:
+            value = json.loads(self._bundled_notice_path().read_text("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return None
+        if (not isinstance(value, dict) or set(value) != {"replaced_version", "bundled_version"}
+                or not all(isinstance(text, str) and rules.VERSION_TEXT.fullmatch(text) for text in value.values())):
+            return None
+        return value
+
     def root_mismatch(self):
         """content_pack resolved another root; its libraries would never load."""
         loaded = content_pack.library_root()
@@ -259,13 +290,33 @@ class ContentLibraryService:
         ready; superseded version folders of ready libraries and the folders
         listed in pending_delete (removed or replaced libraries, review B-03)
         are deleted; the mirror is rewritten when it differs.
+
+        Every saved change this process started with is settled here: a file entry pending_restart whose version
+        and switch this process loaded becomes ready whether or not it was loaded, and the bundled core entry a
+        removal left pending_restart becomes ready once this process serves the bundled content. Section 5.7:
+        an imported core pack not newer than the stamped bundled content is replaced by it first
+        (bundled_core_replacement; the notice is kept for the libraries page).
         """
         registry = self.registry()
         loaded = content_pack.active_registry()
         status = content_pack.library_status()
         changed = False
+        serves_bundled = loaded is None or (rules.registry_entry(loaded, rules.CORE_LIBRARY_ID) or {}).get(
+            "source", {}).get("kind") != "file"
+        # Section 5.7: newer bundled content replaces an older imported core pack. content_pack made the same
+        # change to the registry it loaded, so nothing waits for a restart (unless this process serves the pack).
+        replaced = content_pack.bundled_core_replacement(registry, self.root)
+        if replaced is not None:
+            registry, notice = replaced
+            if not serves_bundled:
+                rules.registry_entry(registry, rules.CORE_LIBRARY_ID)["state"] = "pending_restart"
+            self._write_bundled_notice(notice)
+            changed = True
         for entry in registry["libraries"]:
             if entry["source"]["kind"] != "file":
+                # The bundled core after a removal of an imported one: settled once this process serves it.
+                if entry["state"] == "pending_restart" and serves_bundled:
+                    entry["state"], changed = "ready", True
                 continue
             seen = status.get(entry["library_id"])
             if seen is not None and seen["state"] == "damaged":
@@ -277,8 +328,11 @@ class ContentLibraryService:
                     entry["state"], changed = "ready", True  # loaded from the next start on
                 continue
             if entry["state"] == "pending_restart" and loaded is not None and entry["enabled"]:
+                # This process started with this version switched on: the change is applied, loaded or not
+                # (a library left out of this start is "ready" and its row says why it was not loaded).
                 mirrored = rules.registry_entry(loaded, entry["library_id"])
-                if mirrored is not None and mirrored["content_sha256"] == entry["content_sha256"] and seen is not None:
+                if (mirrored is not None and mirrored["content_sha256"] == entry["content_sha256"]
+                        and mirrored["enabled"]):
                     entry["state"], changed = "ready", True
             if entry["state"] == "pending_restart" and not entry["enabled"] and loaded is not None:
                 mirrored = rules.registry_entry(loaded, entry["library_id"])
@@ -455,6 +509,7 @@ class ContentLibraryService:
         orphans = {cid: library_of_content(view.catalogue, cid)
                    for cid, state in view.states.items() if state == ORPHANED}
         ignored = self._ignored_routes(registry, catalogue)
+        stamp = content_pack.bundled_stamp()  # section 5.7: the bundled content's version, when stamped
         rows = []
         for entry in rules.effective_entries(registry) + [e for e in registry["libraries"]
                                                           if e not in rules.effective_entries(registry)]:
@@ -483,8 +538,10 @@ class ContentLibraryService:
                 check = "校验通过"
             families = summary.get("families") if summary.get("families") else rules.count_families(provided)
             source = entry["source"]
+            bundled_version = stamp["library_version"] if bundled and stamp else None
             rows.append({"library_id": entry["library_id"], "title": summary.get("title") or entry["library_id"],
-                         "version": entry["library_version"], "profile": entry["profile"], "enabled": entry["enabled"],
+                         "version": bundled_version or entry["library_version"], "bundled_version": bundled_version,
+                         "profile": entry["profile"], "enabled": entry["enabled"],
                          "state": entry["state"], "source_kind": source["kind"],
                          "source_name": source["name"], "signature_status": source["signature_status"],
                          "installed_at_utc": entry["installed_at_utc"], "source_sha256": source["sha256"],
@@ -634,6 +691,9 @@ class ContentLibraryService:
                                     installed_revisions=revisions, signature=report.signature,
                                     routes=report.study_routes, kana_identities=self.kana_identities(),
                                     merge_errors=merge_errors, previous_ids=previous)
+        bundled_error = rules.bundled_precheck_error(manifest, content_pack.bundled_stamp())
+        if bundled_error:
+            check = replace(check, bundled_error=bundled_error)
         if previous:
             # Rule c against the version being replaced, loaded or not: an item whose content changed keeps its
             # revision only by a package error (saved lessons and their questions are matched by revision).
@@ -750,6 +810,7 @@ class ContentLibraryService:
             entry = prepared.entry
             self._manifests.pop((entry["library_id"], entry["content_sha256"]), None)
             self._write(prepared.registry)
+            self._clear_bundled_notice()
             return entry
         finally:
             self.discard(prepared.inspection)
@@ -774,7 +835,7 @@ class ContentLibraryService:
             precheck = self._precheck(report, registry, inspection.archive)
             blocking = precheck.blocking_reasons()
             if blocking and (precheck.signature_error or precheck.revision_errors or precheck.merge_errors
-                             or not accept_missing_references):
+                             or precheck.bundled_error or not accept_missing_references):
                 raise ValueError("；".join(blocking))
             manifest = report.manifest
             accepted = self._accepted_override_ids(manifest, registry, accept_overrides)
@@ -897,6 +958,7 @@ class ContentLibraryService:
             # Enabling a damaged library retries it at the next start (review B-04).
             entry["state"] = "pending_restart"
         self._write(registry)
+        self._clear_bundled_notice()
         return entry
 
     def removal_notice(self, library_id):
@@ -935,5 +997,6 @@ class ContentLibraryService:
         # the lexicon); the next startup_sync deletes it once nothing uses it.
         registry = rules.with_pending_delete(registry, add=(entry["library_id"],))
         self._write(registry)
+        self._clear_bundled_notice()
         self._manifests.pop((entry["library_id"], entry["content_sha256"]), None)
         return registry

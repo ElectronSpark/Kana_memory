@@ -13,10 +13,14 @@ import zipfile
 from build_demo_content import FORMAT, digest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app/src"))
-from kanamemory.content_pack import validate_pack
+from kanamemory.content_library_rules import BUNDLED_STAMP_FILE
+from kanamemory.content_pack import bundled_stamp, validate_pack
 
 MANIFEST = "public-content-manifest.json"
 EXPECTED_FILES = {"content.sqlite3", "teaching_content.sqlite3", "NOTICE.txt", "learning_material_review.json"}
+# Design 08 section 5.7: the version stamp of the bundled content is optional (the demo edition has none); when
+# present it must belong to the teaching database beside it.
+OPTIONAL_FILES = {BUNDLED_STAMP_FILE}
 
 
 def _metadata(raw):
@@ -36,8 +40,10 @@ def validate_resources(resources, source=None):
             raise ValueError("Public resources contain a symbolic link")
         if file.is_file():
             files[file.relative_to(resources).as_posix()] = file
-    if set(files) != EXPECTED_FILES | {MANIFEST}:
+    if set(files) - OPTIONAL_FILES != EXPECTED_FILES | {MANIFEST}:
         raise ValueError("Public resources contain missing, extra, or private files")
+    if BUNDLED_STAMP_FILE in files and bundled_stamp(resources) is None:
+        raise ValueError("The bundled library stamp does not belong to the bundled teaching database")
     manifest = json.loads(files[MANIFEST].read_text("utf-8"))
     if manifest.get("format") != FORMAT or manifest.get("profile") != "demo":
         raise ValueError("Public builds require the original demo pack")

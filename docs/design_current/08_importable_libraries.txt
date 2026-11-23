@@ -294,6 +294,35 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   校验函数放纯规则模块（content_library_rules.py）；写入归 StudyStore.set_setting 的现有事务；
   备份：建议导出时携带（供恢复后提示“你原来装了哪些库”），恢复时不据此安装文件、不据此改
   当前注册表（设备配置属于本机），见 Q7。learning_reset 不删除注册表。
+- 启动即结清：每次启动的 startup_sync 结清本进程启动时已保存的变更。file 条目 pending_restart 且本进程载入的注册表
+  里是同一版本（content_sha256）、同一开关时置 ready，不论是否真的载入（未载入时库行写“本次启动未载入”及原因）；
+  移除导入的核心库后写回的内置核心条目（pending_restart）在本进程已用内置内容时置 ready。原先内置条目从不结清，
+  移除导入的核心库并重启后内容库页一直显示“内容库有变更，重启应用后生效”。pending_delete 中删不掉的残留目录
+  只留待以后的启动再删，从不算作待生效的变更。移除与安装一样，保存后立即经“立即重启”的同一路径重启
+  （忙碌与出错规则相同）。
+
+5.7 内置内容的版本与导入的核心库
+- 标记文件：运行资源目录中 teaching_content.sqlite3 旁的 bundled_library.json：
+  {format: "kanamemory-bundled-library", version: 1, library_id: "kanamemory.core", library_version,
+   version_scheme, teaching_content_sha256}。只有 teaching_content_sha256 等于实际随应用的教学数据库的
+  metadata.content_sha256 时才算数；过期、格式不对或缺失时视为没有标记，从不报错（content_pack.bundled_stamp）。
+  设置了 KANAMEMORY_TEACHING_PACK（隔离构建与测试）时，标记只在该数据库旁查找（content_pack.bundled_teaching）。
+  标记由 tools/stamp_bundled_library.py <资源目录> --pack <核心库包> 写入：包必须是核心库包，且其教学数据库的
+  content_sha256 与资源目录的相同，否则拒绝、不写文件；写入包的 library_version 与 version_scheme。
+  tools/package_library_pack.py 从不把标记放进库包。没有标记的版本（如公开演示版）行为不变。
+- 版本顺序（content_library_rules.library_version_key / compare_library_versions）：version_scheme 为 date 时按
+  点分数字组的整数比较，20261119.3 < 20261121 < 20261121.1；其他方案或形状一律“不可比较”。
+- 启动规则（core_reverted_to_bundled）：核心库条目是导入的包、有有效标记、两者可比较（包的方案取自其清单）且标记版本
+  相同或更新时，核心库回到内置内容，步骤与移除相同（包目录列入 pending_delete，由原有的延后删除处理；本进程没有读它，
+  通常本次启动即删除）。content_pack 读注册表镜像时先做同样的替换，任何内容载入之前就用内置内容，所以不需要再重启；
+  startup_sync 随后保存同样的注册表，内置条目直接为 ready。不可比较、没有有效标记或包更新时什么也不改。扩展库从不受影响。
+  内容库页显示提示“应用更新后自带的内容（版本 X）不比导入的核心库（版本 Y）旧，已改用内置内容……”，
+  提示存于库根目录 bundled_core_notice.json（本机状态，不进备份），直到下一次内容库变更（安装、启用/停用、移除）。
+- 预检：有有效标记时，比内置内容旧的核心库包不可安装（提示写出两个版本），版本相同不可安装（“与应用内置的内容相同”），
+  更新的照常；这一条与签名错误一样，“仍然安装”也不绕过。没有有效标记时照常。
+- 内容库页：有有效标记时内置核心库一行的版本显示标记版本，来源行写“内置内容版本 X”。
+- 发行检查：environment/verify_distribution_apk.py 报告中给出 bundled_library_stamp（无标记时为 null），标记存在却不属于
+  随包的教学数据库时拒绝；tools/check_public_content.py 允许可选的标记文件并做同样的核对。
 
 6 内容解析：多库合并、冲突规则与优先级
 

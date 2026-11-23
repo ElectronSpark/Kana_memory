@@ -11,6 +11,7 @@ from kanamemory import library_activity
 from kanamemory.learning_ui import LearningUIMixin
 from support.app_fixtures import setup_app, question_app  # noqa: F401
 from support.content_library_support import build_core_resources, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 from support.fake_ui import descendants, text_of
 from support.learning_fixtures import learning_app, click  # noqa: F401
 from support.study_path_runtime_support import path_app, home  # noqa: F401
@@ -411,3 +412,76 @@ def test_no_countdown_is_left():
         assert not hasattr(library_ui, name) and not hasattr(library_ui.ContentLibraryUIMixin, name)
     for name in ("_arm_library_restart", "_cancel_library_restart", "_tick_library_restart"):
         assert not hasattr(library_ui.ContentLibraryUIMixin, name)
+
+
+# --- design 08 section 5.7 and the removal of an imported core pack ---------------------------------------------
+
+def _stamped(app, tmp_path, monkeypatch, version="20261121"):
+    resources = tmp_path / "resources"
+    monkeypatch.setattr(content_pack, "_resources", lambda: resources)
+    monkeypatch.setattr(content_pack, "bundled_teaching", lambda: (resources, resources / "teaching_content.sqlite3"))
+    sha = content_pack.validate_pack(resources / "teaching_content.sqlite3")["content_sha256"]
+    (resources / rules.BUNDLED_STAMP_FILE).write_text(
+        __import__("json").dumps(rules.make_bundled_stamp(version, "date", sha)), encoding="utf-8")
+
+
+def _core_pack_bytes(tmp_path, version):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "package_library_pack", Path(__file__).resolve().parents[1] / "tools/package_library_pack.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = tmp_path / f"core-{version}.kmlib"
+    module.package(tmp_path / "resources", output, library_version=version)
+    return output.read_bytes()
+
+
+def test_the_page_shows_the_bundled_version_and_which_pack_it_replaced(library_app, tmp_path, monkeypatch):
+    app = library_app
+    _stamped(app, tmp_path, monkeypatch)
+    service = app.content_library_service()
+    service._write_bundled_notice({"replaced_version": "20261119.3", "bundled_version": "20261121"})
+    app.show_content_libraries()
+    text = text_of(app.body)
+    assert "版本 20261121" in text and "内置内容版本 20261121" in text
+    assert library_ui.BUNDLED_REPLACED_NOTE.format(replaced_version="20261119.3", bundled_version="20261121") in text
+    assert library_ui.PENDING_NOTE not in text
+
+
+@pytest.mark.parametrize("version, sentence", [("20261119.3", "旧，不能安装"), ("20261121", "与应用内置的内容相同")])
+def test_a_core_pack_not_newer_than_the_bundled_content_cannot_be_installed(library_app, tmp_path, monkeypatch,
+                                                                            version, sentence):
+    app = library_app
+    _stamped(app, tmp_path, monkeypatch)
+    app.platform.import_library_pack = AsyncMock(return_value=_core_pack_bytes(tmp_path, version))
+    app.show_content_libraries()
+    asyncio.run(app.add_content_library())
+    assert app.page == "content_library_precheck"
+    text = text_of(app.body)
+    assert sentence in text and version in text
+    assert "安装" not in _buttons(app) and not any(name.startswith("仍然安装") for name in _buttons(app))
+
+
+def test_after_a_core_pack_was_removed_and_the_app_started_again_no_change_is_pending(restart_app, tmp_path,
+                                                                                     monkeypatch):
+    """Owner report: the note stayed after the removal and a restart (the bundled entry stayed pending)."""
+    app = restart_app
+    app.platform.import_library_pack = AsyncMock(return_value=_core_pack_bytes(tmp_path, "20261122"))
+    _install(app)  # restarts at once
+    app.platform.restart_app.reset_mock()
+    app._close_for_restart.reset_mock()
+    monkeypatch.delenv("KANAMEMORY_TEACHING_PACK")
+    content_pack.clear_cache()  # the new process
+    service = app.content_library_service()
+    service.startup_sync()
+    app.main_window.dialog = AsyncMock(return_value=True)
+    app.show_content_libraries()
+    asyncio.run(app.remove_content_library(rules.CORE_LIBRARY_ID))
+    app._close_for_restart.assert_called_once_with()  # a removal restarts by the install's own path
+    app.platform.restart_app.assert_called_once_with()
+    content_pack.clear_cache()  # the new process
+    service.startup_sync()
+    LearningUIMixin.show_settings_hub.__wrapped__(app)
+    app.show_content_libraries()
+    assert library_ui.PENDING_NOTE not in text_of(app.body) and library_ui.RESTART_NOW not in _buttons(app)

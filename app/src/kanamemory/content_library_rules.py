@@ -447,6 +447,96 @@ def pending_restart(registry):
     return any(entry["state"] == "pending_restart" for entry in registry["libraries"])
 
 
+# ---------------------------------------------------------------- the bundled content's version (section 5.7)
+
+BUNDLED_STAMP_FILE = "bundled_library.json"  # beside teaching_content.sqlite3 in the runtime resources
+BUNDLED_STAMP_FORMAT = "kanamemory-bundled-library"
+BUNDLED_STAMP_VERSION = 1
+BUNDLED_NOTICE_FILE = "bundled_core_notice.json"  # in the library root: which pack the bundled content replaced
+_BUNDLED_STAMP_KEYS = frozenset({"format", "version", "library_id", "library_version", "version_scheme",
+                                 "teaching_content_sha256"})
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_DATE_VERSION = re.compile(r"\d+(?:\.\d+)*\Z")
+
+
+def library_version_key(version, scheme):
+    """Sort key of a library version, or None when it cannot be compared.
+
+    Scheme "date": the dot-separated digit groups as integers ("20261119.3" -> (20261119, 3), "20261121" ->
+    (20261121,)), so 20261119.3 < 20261121 < 20261121.1. Any other scheme or shape is not comparable.
+    """
+    if scheme != "date" or not isinstance(version, str) or not _DATE_VERSION.fullmatch(version):
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
+def compare_library_versions(left, left_scheme, right, right_scheme):
+    """-1, 0 or 1 for left against right; None when either is not comparable."""
+    a, b = library_version_key(left, left_scheme), library_version_key(right, right_scheme)
+    if a is None or b is None:
+        return None
+    return (a > b) - (a < b)
+
+
+def make_bundled_stamp(library_version, version_scheme, teaching_content_sha256):
+    stamp = {"format": BUNDLED_STAMP_FORMAT, "version": BUNDLED_STAMP_VERSION, "library_id": CORE_LIBRARY_ID,
+             "library_version": library_version, "version_scheme": version_scheme,
+             "teaching_content_sha256": teaching_content_sha256}
+    if bundled_stamp(stamp, teaching_content_sha256) is None:
+        raise ValueError("Invalid bundled library stamp")
+    return stamp
+
+
+def bundled_stamp(value, teaching_content_sha256):
+    """The stamp of the bundled content when ``value`` is a valid one for the teaching database actually bundled
+    (``teaching_content_sha256``: its metadata.content_sha256); None for a stale, malformed or missing stamp."""
+    if (not isinstance(value, dict) or set(value) != _BUNDLED_STAMP_KEYS
+            or value["format"] != BUNDLED_STAMP_FORMAT or value["version"] != BUNDLED_STAMP_VERSION
+            or value["library_id"] != CORE_LIBRARY_ID or value["version_scheme"] not in VERSION_SCHEMES
+            or not isinstance(value["library_version"], str) or not VERSION_TEXT.fullmatch(value["library_version"])
+            or not isinstance(value["teaching_content_sha256"], str)
+            or not _SHA256.fullmatch(value["teaching_content_sha256"])
+            or value["teaching_content_sha256"] != teaching_content_sha256):
+        return None
+    return dict(value)
+
+
+def core_reverted_to_bundled(registry, stamp, core_scheme):
+    """Start-up rule: the registry with an imported core pack replaced by the bundled content, and the notice
+    {"replaced_version", "bundled_version"}; None when nothing changes.
+
+    It changes only when the core entry is an imported pack, ``stamp`` is a valid bundled stamp and the
+    stamp's version is the same as or newer than the pack's (``core_scheme``: the pack manifest's
+    version_scheme). The steps are a removal's (the pack's folder is listed in pending_delete), except that the
+    bundled entry is ready: nothing was loaded yet. Extension libraries are never touched.
+    """
+    entry = registry_entry(registry, CORE_LIBRARY_ID)
+    if entry is None or entry["source"]["kind"] != "file" or stamp is None:
+        return None
+    order = compare_library_versions(stamp["library_version"], stamp["version_scheme"],
+                                     entry["library_version"], core_scheme)
+    if order is None or order < 0:
+        return None
+    registry = json.loads(json.dumps(registry))
+    registry["libraries"][registry["libraries"].index(entry)] = core_entry()
+    registry = with_pending_delete(registry, add=(CORE_LIBRARY_ID,))
+    return registry, {"replaced_version": entry["library_version"], "bundled_version": stamp["library_version"]}
+
+
+def bundled_precheck_error(manifest, stamp):
+    """A core pack that is not newer than the bundled content is not installable: the sentence why, else None."""
+    if stamp is None or manifest["profile"] != "core":
+        return None
+    order = compare_library_versions(manifest["library_version"], manifest.get("version_scheme"),
+                                     stamp["library_version"], stamp["version_scheme"])
+    if order is None or order > 0:
+        return None
+    if order == 0:
+        return f"这个核心库文件的版本 {manifest['library_version']} 与应用内置的内容相同，不需要安装"
+    return (f"这个核心库文件的版本 {manifest['library_version']} 比应用内置的内容（{stamp['library_version']}）旧，"
+            "不能安装")
+
+
 def change_blocked_reason(*, backup_busy=False, round_running=False, focused=False):
     """Section 5.3: no exclusive stage and no practice round in progress."""
     if backup_busy:
@@ -826,9 +916,13 @@ class PackPrecheck:
     # Review B-01: a trial merge with the installed libraries (cycle, chain too
     # deep, any merge failure). Never installable, like a signature error.
     merge_errors: tuple = ()
+    # Section 5.7: a core pack not newer than the bundled content (bundled_precheck_error). Never installable.
+    bundled_error: str | None = None
 
     def blocking_reasons(self):
         reasons = []
+        if self.bundled_error:
+            reasons.append(self.bundled_error)
         if self.signature_error:
             reasons.append(self.signature_error)
         reasons.extend(self.merge_errors)

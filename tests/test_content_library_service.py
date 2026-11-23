@@ -14,6 +14,7 @@ from kanamemory.content_library_service import ContentLibraryService
 from kanamemory.domain import StudyStore
 from kanamemory.learning_store import LearningStore, validate_backup_rows
 from support.content_library_support import CORE_ITEMS, build_core_resources, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 
 @pytest.fixture
@@ -514,3 +515,174 @@ def test_an_update_is_compared_with_other_libraries_not_with_its_own_old_version
     assert stale.precheck.revision_errors == ("grammar:ext:masu",) and stale.precheck.blocking_reasons()
     with pytest.raises(ValueError, match="包错误"):
         service.install(stale)
+
+
+# --- after any start no pending change is left (owner report: the note stayed after removing a core pack) ---
+
+def test_after_install_start_remove_start_nothing_is_pending(world, tmp_path, monkeypatch):
+    """Removing an imported core pack writes the bundled entry as pending_restart; the next start must settle it."""
+    service = world["service"]
+    _installed_core(world, tmp_path, monkeypatch)  # install, then a start that loads it
+    assert not service.pending_restart()
+    service.remove(rules.CORE_LIBRARY_ID)
+    assert service.pending_restart()  # this process still serves the pack
+    content_pack.clear_cache()  # a real restart: the bundled content is loaded
+    service.startup_sync()
+    assert rules.registry_entry(service.registry(), rules.CORE_LIBRARY_ID)["state"] == "ready"
+    assert not service.pending_restart()
+
+
+def test_a_leftover_folder_never_keeps_a_change_pending(world, tmp_path, monkeypatch):
+    service, root = world["service"], world["root"]
+    entry = _installed_core(world, tmp_path, monkeypatch)
+    service.remove(rules.CORE_LIBRARY_ID)
+    content_pack.clear_cache()
+
+    def locked(root_, target):
+        raise OSError("locked")
+    monkeypatch.setattr(service_module, "_remove_tree", locked)
+    service.startup_sync()
+    assert (root / entry["path"]).is_dir() and service.registry()["pending_delete"] == [rules.CORE_LIBRARY_ID]
+    assert not service.pending_restart()
+
+
+def test_a_library_this_start_did_not_load_is_not_left_pending(world, monkeypatch):
+    """A start settles every saved change it started with, loaded or not (the row then says why it is not loaded)."""
+    service = world["service"]
+    service.install(service.inspect_bytes(pack_bytes("author.n3", extension_namespaces()), "n3.zip"))
+    content_pack.clear_cache()
+    monkeypatch.setattr(content_pack, "library_status", lambda: {})  # e.g. left out by a merge fallback
+    service.startup_sync()
+    assert not service.pending_restart()
+    assert [row["check"] for row in service.libraries() if row["library_id"] == "author.n3"][0].startswith("本次启动未载入")
+
+
+# --- design 08 section 5.7: newer bundled content wins over an older imported core pack -----------------------
+
+def _stamp(world, monkeypatch, version, scheme="date", sha=None):
+    """The bundled resources of this world carry a version stamp (the app was updated to that content)."""
+    resources = world["resources"]
+    monkeypatch.setattr(content_pack, "_resources", lambda: resources)
+    monkeypatch.setattr(content_pack, "bundled_teaching", lambda: (resources, resources / "teaching_content.sqlite3"))
+    sha = sha or content_pack.validate_pack(resources / "teaching_content.sqlite3")["content_sha256"]
+    stamp = rules.make_bundled_stamp(version, scheme, "0" * 64 if sha == "stale" else sha)
+    (resources / rules.BUNDLED_STAMP_FILE).write_text(json.dumps(stamp), encoding="utf-8")
+
+
+def _core_pack(world, tmp_path, version):
+    from package_library_pack import package
+    output = tmp_path / f"core-{version}.zip"
+    package(world["resources"], output, library_version=version)
+    return output.read_bytes()
+
+
+def _start_on_core_pack(world, tmp_path, monkeypatch, version, *, extension=False):
+    service = world["service"]
+    if extension:
+        service.install(service.inspect_bytes(pack_bytes("author.n3", extension_namespaces()), "n3.zip"))
+    entry = service.install(service.inspect_bytes(_core_pack(world, tmp_path, version), "core.zip"))
+    monkeypatch.delenv("KANAMEMORY_TEACHING_PACK")
+    content_pack.clear_cache()
+    service.startup_sync()
+    assert rules.registry_entry(service.registry(), rules.CORE_LIBRARY_ID)["source"]["kind"] == "file"
+    return entry
+
+
+@pytest.mark.parametrize("pack, bundled", [("20261119.3", "20261121"), ("20261121", "20261121")])
+def test_a_start_replaces_an_older_or_equal_core_pack_by_the_stamped_bundled_content(world, tmp_path, monkeypatch,
+                                                                                      pack, bundled):
+    service, root = world["service"], world["root"]
+    entry = _start_on_core_pack(world, tmp_path, monkeypatch, pack, extension=True)
+    _stamp(world, monkeypatch, bundled)  # the app update brings content of that day
+    content_pack.clear_cache()  # the next start
+    assert rules.registry_entry(content_pack.active_registry(), rules.CORE_LIBRARY_ID)["source"]["kind"] == "bundled"
+    assert content_pack.pack_path() == world["resources"] / "teaching_content.sqlite3"  # nothing of the pack loaded
+    service.startup_sync()
+    registry = service.registry()
+    core = rules.registry_entry(registry, rules.CORE_LIBRARY_ID)
+    assert core == rules.core_entry()  # the removal's steps, ready at once
+    assert rules.registry_entry(registry, "author.n3")["source"]["kind"] == "file"  # extensions untouched
+    assert not (root / entry["path"]).exists() and "pending_delete" not in registry  # nothing read it: deleted
+    assert service.bundled_notice() == {"replaced_version": pack, "bundled_version": bundled}
+    assert not service.pending_restart()
+    content_pack.clear_cache()
+    service.startup_sync()  # the start after: the notice stays until the next library change
+    assert service.bundled_notice() is not None and not service.pending_restart()
+    service.set_enabled("author.n3", False)
+    assert service.bundled_notice() is None
+
+
+def test_a_folder_that_cannot_be_deleted_stays_listed_for_a_later_start(world, tmp_path, monkeypatch):
+    service, root = world["service"], world["root"]
+    entry = _start_on_core_pack(world, tmp_path, monkeypatch, "20261119.3")
+    _stamp(world, monkeypatch, "20261121")
+    content_pack.clear_cache()
+    monkeypatch.setattr(service_module, "_remove_tree", lambda root_, target: (_ for _ in ()).throw(OSError("locked")))
+    service.startup_sync()
+    assert (root / entry["path"]).is_dir() and service.registry()["pending_delete"] == [rules.CORE_LIBRARY_ID]
+    assert not service.pending_restart()
+
+
+@pytest.mark.parametrize("pack, bundled, scheme", [
+    ("20261122", "20261121", "date"),        # the pack is newer
+    ("1.0.0", "20261121", "date"),           # the pack's scheme is not "date": not comparable
+    ("20261119.3", "20261121", "semver"),    # the stamp's scheme is not "date": not comparable
+    ("20261119.3", "20261121", "stale"),     # a stamp of other content: ignored
+    ("20261119.3", None, None),              # no stamp
+])
+def test_a_start_keeps_a_newer_or_not_comparable_core_pack(world, tmp_path, monkeypatch, pack, bundled, scheme):
+    service, root = world["service"], world["root"]
+    entry = _start_on_core_pack(world, tmp_path, monkeypatch, pack)
+    if bundled is not None:
+        _stamp(world, monkeypatch, bundled, *(("date", "stale") if scheme == "stale" else (scheme,)))
+    else:
+        monkeypatch.setattr(content_pack, "_resources", lambda: world["resources"])
+        monkeypatch.setattr(content_pack, "bundled_teaching",
+                            lambda: (world["resources"], world["resources"] / "teaching_content.sqlite3"))
+    before = service.registry()
+    content_pack.clear_cache()
+    service.startup_sync()
+    assert service.registry() == before and (root / entry["path"]).is_dir()
+    assert content_pack.pack_path() == root / entry["path"] / "teaching/teaching_content.sqlite3"
+    assert service.bundled_notice() is None and not service.pending_restart()
+
+
+@pytest.mark.parametrize("pack, refused", [("20261119.3", "旧"), ("20261121", "相同"), ("20261122", None)])
+def test_precheck_of_a_core_pack_against_the_stamped_bundled_content(world, tmp_path, monkeypatch, pack, refused):
+    service = world["service"]
+    _stamp(world, monkeypatch, "20261121")
+    inspection = service.inspect_bytes(_core_pack(world, tmp_path, pack), "core.zip")
+    error = inspection.precheck.bundled_error
+    if refused is None:
+        assert error is None and inspection.precheck.blocking_reasons() == ()
+        service.install(inspection)
+        return
+    assert refused in error and pack in error and error in inspection.precheck.blocking_reasons()
+    with pytest.raises(ValueError, match=refused):
+        service.install(inspection, accept_missing_references=True)
+    assert rules.registry_entry(service.registry(), rules.CORE_LIBRARY_ID)["source"]["kind"] == "bundled"
+
+
+def test_the_core_row_shows_the_bundled_version_only_with_a_valid_stamp(world, monkeypatch):
+    service = world["service"]
+    monkeypatch.setattr(content_pack, "_resources", lambda: world["resources"])
+    monkeypatch.setattr(content_pack, "bundled_teaching",
+                        lambda: (world["resources"], world["resources"] / "teaching_content.sqlite3"))
+    assert service.libraries()[0]["version"] == "bundled" and service.libraries()[0]["bundled_version"] is None
+    _stamp(world, monkeypatch, "20261121")
+    row = service.libraries()[0]
+    assert row["version"] == "20261121" and row["bundled_version"] == "20261121"
+
+
+def test_a_start_heals_the_stuck_bundled_entry_an_earlier_version_left(world):
+    """Device finding: after a removal on 0.36.15 the registry kept the bundled core entry pending_restart for ever."""
+    service, root = world["service"], world["root"]
+    stuck = rules.default_registry()
+    stuck["libraries"][0]["state"] = "pending_restart"
+    world["store"].set_setting(rules.REGISTRY_SETTING, stuck)
+    service.write_mirror(stuck)
+    content_pack.clear_cache()  # a start on that registry
+    assert service.pending_restart()
+    service.startup_sync()
+    assert service.registry() == rules.default_registry() and not service.pending_restart()
+    assert json.loads((root / rules.MIRROR_FILE).read_text("utf-8")) == rules.default_registry()

@@ -18,6 +18,7 @@ from kanamemory.learning_store import LearningStore
 from kanamemory.material_review import item_fingerprint
 from kanamemory import personal_content_versions  # noqa: F401  (import the bundled catalogue before fixtures swap packs)
 from support.content_library_support import CORE_ITEMS, CORE_NAMESPACES, build_core_resources, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = rules.CORE_LIBRARY_ID

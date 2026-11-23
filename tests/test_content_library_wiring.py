@@ -23,6 +23,7 @@ from kanamemory.learning_store import LearningStore
 from kanamemory.material_review import item_fingerprint
 from support.app_fixtures import setup_app, question_app  # noqa: F401
 from support.content_library_support import CORE_ITEMS, build_core_resources, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 from support.fake_ui import descendants, text_of
 from support.learning_fixtures import learning_app, click  # noqa: F401
 

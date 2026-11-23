@@ -15,6 +15,7 @@ from kanamemory import content_library_signing as signing
 from kanamemory import content_pack, learning_content
 from support.app_fixtures import setup_app, question_app  # noqa: F401
 from support.content_library_support import build_core_resources, extension_namespaces, pack_bytes
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 from support.fake_ui import descendants, text_of
 from support.learning_fixtures import learning_app, click  # noqa: F401
 

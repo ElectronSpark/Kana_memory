@@ -21,6 +21,7 @@ from kanamemory.domain import StudyStore
 from kanamemory.material_review import item_fingerprint
 from support.content_library_support import (CORE_ITEMS, CORE_NAMESPACES, build_core_resources, extension_namespaces,
                                              pack_bytes)
+from support.content_library_support import no_ambient_bundled_stamp  # noqa: F401  (autouse: no ambient stamp)
 
 ROOT = Path(__file__).resolve().parents[1]
 _SHA = "a" * 64
