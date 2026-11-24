@@ -431,3 +431,21 @@ def test_practice_floors_count_task_families_input_modes_and_context_ids():
     assert practice_floor_shortfalls(rows[:2]) == [("task_families", 2, 3), ("input_modes", 1, 2), ("context_ids", 1, 3)]
     assert practice_floor_applies({"family": "word"}) and practice_floor_applies({"family": "grammar", "domain": "expression"})
     assert not practice_floor_applies({"family": "grammar", "domain": "pronunciation"})
+
+
+def test_practice_floor_exemptions_follow_the_lessons_abilities():
+    from practice_authoring_fields import practice_floor_exemptions, practice_floor_shortfalls
+    choice_only = [("grammar_meaning", {"choices": ["a", "b"], "practice": {"task_family": "meaning", "context_id": "c1"}})]
+    every = [("task_families", 1, 3), ("input_modes", 1, 2), ("context_ids", 1, 3)]
+    understanding = {"family": "grammar", "domain": "expression", "abilities": ["understanding"]}
+    read_only = {"family": "word", "abilities": []}
+    assert practice_floor_exemptions(understanding) == {"input_modes"}
+    assert practice_floor_exemptions(read_only) == {"task_families", "input_modes", "context_ids"}
+    for ordinary in ({"family": "word", "abilities": ["understanding", "use"]}, {"family": "word"},
+                     {"family": "word", "abilities": ["use"]}):
+        assert practice_floor_exemptions(ordinary) == frozenset()
+        assert practice_floor_shortfalls(choice_only, ordinary) == every
+    # Without the lesson every floor counts, as before; with it, the exempt floors are left out.
+    assert practice_floor_shortfalls(choice_only) == every
+    assert practice_floor_shortfalls(choice_only, understanding) == [("task_families", 1, 3), ("context_ids", 1, 3)]
+    assert practice_floor_shortfalls([], read_only) == []

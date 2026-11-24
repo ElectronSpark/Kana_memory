@@ -444,6 +444,7 @@ def answer_form_fields(raw, kind, fields, *, key, target_id=None):
 # families, 2 input modes and 3 context ids. One definition for the whole-course test
 # (tests/test_practice_expansion281_integration.py) and for the staging check of the dependency tool
 # (derive_question_dependencies.py --check-staging), which applies it to the installed templates plus a batch.
+# Both leave out the floors a lesson is exempt from by its abilities (practice_floor_exemptions).
 PRACTICE_FLOORS = (("task_families", 3), ("input_modes", 2), ("context_ids", 3))
 
 
@@ -451,6 +452,19 @@ def practice_floor_applies(item) -> bool:
     """Whether a catalogue lesson is held to the floors: every word lesson and every grammar lesson outside the
     pronunciation domain (expression lessons included)."""
     return item.get("family") == "word" or (item.get("family") == "grammar" and item.get("domain") != "pronunciation")
+
+
+def practice_floor_exemptions(item) -> frozenset:
+    """The floors a lesson is exempt from, by its abilities: every floor for a lesson whose abilities list is
+    present and empty (a lesson that is only read has no practice); the two-input-mode floor for a lesson whose
+    abilities are exactly ["understanding"] (its kinds are all choice kinds); none otherwise (a lesson record
+    without an abilities field included). One rule for the whole-course test and the staging check."""
+    abilities = item.get("abilities") if isinstance(item, dict) else None
+    if not isinstance(abilities, (list, tuple)):
+        return frozenset()
+    if not abilities:
+        return frozenset(name for name, _floor in PRACTICE_FLOORS)
+    return frozenset({"input_modes"}) if list(abilities) == ["understanding"] else frozenset()
 
 
 def practice_floor_counts(rows) -> dict:
@@ -463,7 +477,10 @@ def practice_floor_counts(rows) -> dict:
     return {"task_families": len(families), "input_modes": len(modes), "context_ids": len(contexts)}
 
 
-def practice_floor_shortfalls(rows) -> list:
-    """[(floor name, count, floor)] of every floor the templates (rows as in practice_floor_counts) do not hold."""
+def practice_floor_shortfalls(rows, item=None) -> list:
+    """[(floor name, count, floor)] of every floor the templates (rows as in practice_floor_counts) do not hold;
+    with the lesson given, the floors it is exempt from (practice_floor_exemptions) are left out."""
     counts = practice_floor_counts(rows)
-    return [(name, counts[name], floor) for name, floor in PRACTICE_FLOORS if counts[name] < floor]
+    exempt = practice_floor_exemptions(item) if item is not None else frozenset()
+    return [(name, counts[name], floor) for name, floor in PRACTICE_FLOORS
+            if counts[name] < floor and name not in exempt]
