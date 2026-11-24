@@ -58,19 +58,26 @@ def _folded_translation(question, presentation, task):
     return None
 
 
-def hint_folds(question):
-    """Whether the Chinese hint waits behind a button instead of being shown.
+def _policy_folds(question):
+    """The effective answer policy's fold mark (the overlay row of the question's own template)."""
+    from .answer_policy.source import question_row
+    row = question_row(question)
+    return row is not None and row.get("fold") is True
 
-    Folding is for questions the content marks as answerable from the Japanese
-    context alone. The content's marks will be read here; no content carries
-    them yet, so every hint is shown.
+
+def hint_folds(question):
+    """Whether the Chinese hint waits behind a button instead of being shown (rule T4).
+
+    Exactly when the question has a folded hint and its effective answer policy says fold: the
+    content marks it answerable from the Japanese context alone (answer_overlay ``fold``). Nothing
+    else folds; the template field hint_policy is not read.
     """
-    return False
+    return question_presentation(question)["fold_hint"]
 
 
 def _finish(result, question):
     result["instruction_role"] = "study" if result["instruction"] in _JAPANESE_CUES else "ui"
-    result["fold_hint"] = bool(result["folded_hint"]) and hint_folds(question)
+    result["fold_hint"] = bool(result["folded_hint"]) and _policy_folds(question)
     return result
 
 

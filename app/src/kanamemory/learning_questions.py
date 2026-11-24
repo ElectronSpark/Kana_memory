@@ -22,6 +22,8 @@ from .learning_content import get_learning_item
 from . import pitch_practice
 from . import multi_cloze
 from . import reading_form_answers
+from .answer_policy import overlay as answer_overlay, source as answer_source
+from .answer_policy.numbers import fold_numbers
 
 _CONTENT = load_namespace("learning_questions", {})
 _PRACTICE = load_namespace("varied_practice", {})
@@ -840,6 +842,34 @@ def _reading_normal(text):
     return "".join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in _normal(text))
 
 
+def _typed_normal(text):
+    """_normal with kanji numerals folded into digits (answer_policy.numbers, rule T5): typed answers only."""
+    return fold_numbers(_normal(text))
+
+
+def _numbers_too(normal):
+    return lambda value: fold_numbers(normal(value))
+
+
+def typed_answer_normal(question):
+    """The normal form the judge compares this question's answers in (both sides).
+
+    By kind: the reading form (vocab_reading), the curated grammar fold (typed and ordered grammar), else
+    _normal; a typed answer (input_mode text) also folds kanji numerals (rule T5). Comparison only.
+    """
+    kind = question.get("kind")
+    spec = KIND_REGISTRY.get(kind) if isinstance(kind, str) else None
+    grader = None if spec is None else spec.grader
+    if grader is not None and grader.normalizer == "reading":
+        normal = _reading_normal
+    elif (question.get("family") == "grammar" and question.get("domain") != "pronunciation"
+          and question.get("input_mode") in {"text", "reorder"}):
+        normal = lambda value: _normal(_grammar_kana(str(value)))  # noqa: E731
+    else:
+        normal = _normal
+    return _numbers_too(normal) if question.get("input_mode") == "text" else normal
+
+
 def _grammar_kana(text):
     """Curated readings for these exact examples, not a general kanji guesser."""
     table = _CONTENT.get('GRAMMAR_READINGS', {})
@@ -1186,8 +1216,8 @@ def _reading_forms(question):
     content's own kana forms confirm them (reading_form_answers.agrees: the all-kana accepted answers, a kana
     answer, answer_reading); unconfirmed spans are dropped. An accepted answer that is already one spelling
     of a form found before is skipped (most listed answers are spellings of one sentence). Pieces are
-    normalised with _normal only: the curated single-kanji fold (_grammar_kana) belongs to the exact
-    comparison, never to a reading form. The last few questions' forms are kept (_READING_FORMS).
+    normalised with _typed_normal only (kanji numerals folded, rule T5): the curated single-kanji fold
+    (_grammar_kana) belongs to the exact comparison, never to a reading form. The last few questions' forms are kept (_READING_FORMS).
     """
     answer = question.get("answer")
     accepted = question.get("accepted_answers", [answer])
@@ -1210,7 +1240,7 @@ def _reading_forms(question):
     forms, complete = [], []  # complete: forms whose every kanji has a reading
 
     def add(text, spans):
-        pieces = reading_form_answers.compile_form(text, spans, _normal)
+        pieces = reading_form_answers.compile_form(text, spans, _typed_normal)
         forms.append(pieces)
         if reading_form_answers.reads_every_kanji(text, spans):
             complete.append(pieces)
@@ -1219,11 +1249,11 @@ def _reading_forms(question):
         add(display, word_spans(display, reading) if reading else [])
     read = annotation_reader(question)
     for text in sorted((x for x in texts if _KANJI_CHAR.search(x)), key=lambda x: -len(_KANJI_CHAR.findall(x))):
-        if any(reading_form_answers.walk(_normal(text), pieces) for pieces in complete):
+        if any(reading_form_answers.walk(_typed_normal(text), pieces) for pieces in complete):
             continue  # one spelling of a form whose every kanji has its confirmed reading
         spans = read(text)
         if reading_form_answers.clean_spans(text, spans) and reading_form_answers.agrees(
-                text, spans, references, _normal):
+                text, spans, references, _typed_normal):
             add(text, spans)
     forms = tuple(forms)
     _READING_FORMS[key] = forms
@@ -1233,17 +1263,21 @@ def _reading_forms(question):
 
 
 def _reading_form_match(question, answer):
-    """The typed answer (normalised with _normal, never the single-kanji fold) is one reading form."""
-    plain = _normal(answer)
+    """The typed answer (normalised with _typed_normal, never the single-kanji fold) is one reading form."""
+    plain = _typed_normal(answer)
     return any(reading_form_answers.walk(plain, pieces) for pieces in _reading_forms(question))
 
 
-def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True) -> dict:
+def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True, policy=None) -> dict:
     """Judge a typed or chosen answer of a question snapshot.
 
+    The answer policy is the effective one (answer_policy.overlay.effective): the question's strict,
+    accepted and known-wrong answers with the installed overlay row of its own template and, for
+    vocab_recall, the lesson reading (T8); read now, never stored. ``policy``: that policy when the
+    caller already has it. A typed answer also matches with kanji numerals as digits (T5); a typed grammar
+    answer may use either kana script (T7) unless it is a known-wrong answer as written.
     reading_forms=False: the judge before 2026-11-18, without answers that write kanji words as their
-    readings (reading_form_answers). Only for checking a result stored by that judge: such a result stays
-    valid when it equals either judgement (validate_practice_guide).
+    readings (reading_form_answers). Only for checking a result stored by that judge.
     """
     from .material_review import reviewed_question
     question = reviewed_question(question)
@@ -1259,24 +1293,25 @@ def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True)
         return pitch_practice.grade_answer(question, answer)
     if isinstance(answer, (list, tuple)):
         answer = "".join(map(str, answer))
+    personal = question.get('personal_rubric', {}).get('method') == 'reviewed-exact-rubric-v1'
+    # A reviewed personal rubric keeps its own exact answer set (personal_question): no overlay.
+    policy = None if personal else policy if policy is not None else answer_source.policy_for(question)
+    if policy is not None:
+        question = answer_overlay.view(question, policy)
     # Kind-specific grading steps (question_kinds/vocab_text); None is generic.
     kind = question["kind"]
     spec = KIND_REGISTRY.get(kind) if isinstance(kind, str) else None
     grader = None if spec is None else spec.grader
-    if grader is not None and grader.normalizer == "reading":
-        normal = _reading_normal
-    elif (question.get("family") == "grammar" and question.get("domain") != "pronunciation"
-          and question.get("input_mode") in {"text", "reorder"}):
-        normal = lambda value: _normal(_grammar_kana(str(value)))
-    else:
-        normal = _normal
+    normal = typed_answer_normal(question)
+    typed = question.get("input_mode") == "text"
     value = normal(answer)
     if not value:
         return {"status": "empty", "correct": None, "message": "请先作答。", "scorable": False}
     reason = question.get("assessment_blocked_reason")
     if isinstance(reason, str) and reason:
         return {"status": "unresolved", "correct": None, "message": reason, "scorable": False}
-    if value in {_normal(x) for x in question.get("retired_ambiguous_answers", [])}:
+    retired = {_typed_normal(x) if typed else _normal(x) for x in question.get("retired_ambiguous_answers", [])}
+    if value in retired:
         return {"status": "unresolved", "correct": None,
                 "message": "旧题的这个选项也可成立，不能作为错误答案。本次不调整复习间隔。", "scorable": False}
     if grader is not None and grader.visible_answer is not None:
@@ -1290,7 +1325,7 @@ def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True)
         # as tapping the shown block first (0.34.0 native retest, D3).
         accepted |= {normal(x[len(cue):]) for x in question.get("accepted_answers", [question["answer"]])
                      if isinstance(x, str) and x.startswith(cue) and x[len(cue):].strip()}
-    if question.get('personal_rubric', {}).get('method') == 'reviewed-exact-rubric-v1':
+    if personal:
         # These are explicitly reviewed alternatives for this exact target and
         # context, separate from dictionary readings for another usage. The
         # store still rederives eligibility before granting scheduling credit.
@@ -1301,11 +1336,20 @@ def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True)
         if matched is not None:
             return matched
     known_wrong = {normal(x) for x in question.get("known_wrong", [])}
-    if value in accepted or (reading_forms and value not in known_wrong and reading_form_answers.applies(question)
-                             and _reading_form_match(question, answer)):
+    # T7: the typed grammar kinds test the grammar, not the kana script (a romaji draft cannot mix scripts).
+    script_fold = (typed and kind in answer_overlay.SCRIPT_FOLD_KINDS and value not in known_wrong
+                   and answer_overlay.fold_katakana(value) in {answer_overlay.fold_katakana(x) for x in accepted})
+    if value in accepted or script_fold or (
+            reading_forms and value not in known_wrong and reading_form_answers.applies(question)
+            and _reading_form_match(question, answer)):
         return {"status": "correct", "correct": True, "message": question.get("feedback", "正确。"), "scorable": True}
     if question.get("strict") or value in known_wrong:
-        result = {"status": "incorrect", "correct": False, "message": question.get("feedback", "请核对答案。"), "scorable": True}
+        message = question.get("feedback", "请核对答案。")
+        own = answer_overlay.row_feedback(policy, value, normal) if policy is not None else ""
+        if own:
+            # The row's feedback for this very wrong answer comes before the template's own.
+            message = own + ("\n" + message if isinstance(message, str) and message.strip() else "")
+        result = {"status": "incorrect", "correct": False, "message": message, "scorable": True}
         if grader is not None:
             result.update(grader.incorrect_fields)
         return result

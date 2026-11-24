@@ -90,9 +90,22 @@ def _reading_match(question, value, normal, accepted):
     return None, accepted
 
 
+def _script_fold(text):
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in text)
+
+
 def written_form_match(question, value, normal, accepted):
-    """Modern-kana spellings of a kana word; never another same-sound word."""
+    """Modern-kana spellings of a kana word; never another same-sound word.
+
+    A form the question lists as accepted (``accepted``: its effective accepted answers, normalised) that
+    is the other kana script of an all-kana target is right (ダメ listed for だめ); the other script of
+    the target stays a spelling error when it is not listed.
+    """
     target = normal(question["answer"])
+    if (value != target and value in accepted and same_kana_sound(target, target)
+            and _script_fold(value) == _script_fold(target)):
+        return ({"status": "correct", "correct": True, "message": question.get("feedback", "正确。"),
+                 "scorable": True, "accepted_spelling": True}, accepted)
     kana_targets = [candidate for candidate in accepted if same_kana_sound(candidate, candidate)]
     # Keep reviewed kanji/other expression alternatives, but never treat a
     # legacy same-sound spelling as permission to write a different word.

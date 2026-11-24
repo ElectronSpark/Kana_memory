@@ -196,6 +196,20 @@ def kana_answer(question) -> bool:
     return probe_rules.accepts_kana(question) or applies(question)
 
 
+def policy_view(question):
+    """The question with its effective answer policy (answer_policy: strict and accepted answers with the
+    overlay row of its own template). A detached copy for checks only: the probe stays the question."""
+    from .answer_policy import overlay, source
+    return overlay.view(question, source.policy_for(question))
+
+
+def probe_qualifies(question, track, ability, *, candidate=None) -> bool:
+    """probe_rules.qualifies on the effective policy: a non-strict typed template whose row says strict,
+    with a kana answer, can be a probe; one whose row says not strict cannot."""
+    view = policy_view(question)
+    return probe_rules.qualifies(view, track, ability, kana_answer=kana_answer(view), candidate=candidate)
+
+
 def _requirements_met(item, question, known) -> bool:
     from .learning_questions import question_requires
     try:
@@ -233,7 +247,7 @@ def plan_probe(learning, source, ability: str, *, enabled_kinds, known, system_j
             question = build_learning_question(source, candidate["kind"], variant=candidate["variant"])
         except (ValueError, KeyError, TypeError):
             continue
-        if (probe_rules.qualifies(question, track, ability, kana_answer=kana_answer(question), candidate=candidate)
+        if (probe_qualifies(question, track, ability, candidate=candidate)
                 and _requirements_met(source, question, known)
                 and _eligible(learning, source, question, system_japanese)):
             return question
@@ -267,7 +281,7 @@ def pending_qualifies(learning, source, ability, pending, *, enabled_kinds, know
     track = probe_rules.track(source.get("family"), source.get("domain"))
     return (question.get("kind") in set(enabled_kinds) and str(question.get("revision", source.get("revision")))
             == str(source.get("revision"))
-            and probe_rules.qualifies(question, track, ability, kana_answer=kana_answer(question))
+            and probe_qualifies(question, track, ability)
             and _requirements_met(source, question, known)
             and _eligible(learning, source, question, system_japanese))
 

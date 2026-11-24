@@ -538,6 +538,10 @@ class TutorUIMixin:
             else:
                 entered = shown_answer(q, entered)
             children.append(u.label("我的回答：" + entered, size=12, color=u.MUTED))
+        from .answer_result_ui import known_wrong_note
+        note = known_wrong_note(q, result)
+        if note:
+            children.append(u.label(shown_explanation(q, note), size=15))
         explanation = str(result.get("explanation") or q.get("feedback") or "").strip()
         if explanation and explanation != answer_text(q).strip():
             children.append(u.label(shown_explanation(q, explanation), size=15))

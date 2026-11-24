@@ -77,7 +77,10 @@ def guide_write_guard(checkpoint, state, transition, *, orientation=None):
     if transition in {'guide_correct', 'bridge'}:
         from .learning_questions import grade_learning_answer
         q, answer = checkpoint.get('guide_question'), checkpoint.get('guide_answer')
-        if not q or answer is None or grade_learning_answer(q, answer).get('status') != 'correct':
+        stored = checkpoint.get('guide_correct')  # the verdict given with the answer, never judged again
+        right = (q and answer is not None
+                 and (stored if type(stored) is bool else grade_learning_answer(q, answer).get('status') == 'correct'))
+        if not right:
             # Only "seen, go on" after an actual recorded wrong answer, never before one.
             from .arrangement.rules.gates import guide_may_continue
             if not (transition == 'bridge' and q and answer is not None and orientation is not None

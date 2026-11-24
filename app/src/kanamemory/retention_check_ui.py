@@ -167,6 +167,9 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         explanation = distinct_explanation(q.get('feedback'), q['answer'])
         asked = asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
+        from .answer_result_ui import known_wrong_note
+        note = known_wrong_note(q, result)
+        if note: children.append(u.label(shown_explanation(q, note), size=15))
         if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
         children.append(u.label('本次只作检查，不调整复习。' if not result['assisted'] else '这次使用了帮助，只记录练习。',size=12,color=u.MUTED))
         def advance(widget=None,**kwargs):

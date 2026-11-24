@@ -24,6 +24,18 @@ def shown_text(question, text):
     return annotate(question, text) if isinstance(text, str) and answers_in_japanese(question) else text
 
 
+def known_wrong_note(question, result):
+    """The answer overlay's feedback for the known-wrong answer the learner typed, or "" (design 03).
+
+    Only under a stored wrong verdict; read when the page is drawn, before the template's own feedback.
+    The verdict and the stored question never change.
+    """
+    if not isinstance(result, dict) or result.get("correct") is not False:
+        return ""
+    from .answer_policy.source import known_wrong_feedback
+    return known_wrong_feedback(question, result.get("answered_text", ""))
+
+
 def shown_explanation(question, explanation):
     """The explanation under a result, with kana on the Japanese words the question has readings for."""
     from .result_readings import annotate_explanation

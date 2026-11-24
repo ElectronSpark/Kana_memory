@@ -61,6 +61,7 @@ from . import content_library_index as library_index
 from . import content_library_merge as library_merge
 from . import content_library_rules as library_rules
 from . import loanword_origins
+from .answer_policy import overlay as answer_overlay
 
 FORMAT = "kanamemory-teaching-content"
 VERSION = 1
@@ -327,11 +328,27 @@ def _loanword_check(check):
     return checked
 
 
+# Optional teaching namespace that corrects the answer policy of installed templates (design 03, 08):
+# keyed like question_readings; its rules live in answer_policy.overlay.
+ANSWER_OVERLAY = answer_overlay.NAMESPACE
+
+
+def _overlay_check(check):
+    def checked(*args):
+        try:
+            return check(*args)
+        except answer_overlay.OverlayError as error:
+            raise ContentPackError("Invalid answer overlay: " + str(error)) from error
+    return checked
+
+
 # namespace -> (whole-value check, per-item check, name used in errors).
 _SHARD_CHECKS = {
     QUESTION_DEPENDENCIES: (validate_question_dependencies, validate_question_dependency_entry,
                             "question dependencies"),
     QUESTION_READINGS: (validate_question_readings, validate_question_reading_item, "question readings"),
+    ANSWER_OVERLAY: (_overlay_check(answer_overlay.validate_namespace), _overlay_check(answer_overlay.validate_item),
+                     "answer overlay"),
     LOANWORD_ORIGINS: (_loanword_check(loanword_origins.validate_namespace),
                        _loanword_check(loanword_origins.validate_entry), "loanword origins"),
 }

@@ -27,8 +27,10 @@ from kanamemory.loanword_origins import NAMESPACE as LOANWORD_ORIGINS, candidate
 # The two largest namespaces (about 32 and 4 MiB of JSON), both looked up by
 # content id and bound by item_fingerprint (08 section 6.2, 09 section 3), and
 # the per-template dependency and reading tables (11 sections 5 and 7), looked
-# up by content id and raw template sha256; all four use the items key "items".
-SHARDED_NAMESPACES = frozenset({"varied_practice", "context_choice", "question_dependencies", "question_readings"})
+# up by content id and raw template sha256, and the answer overlay keyed like them (design 03); all five
+# use the items key "items".
+SHARDED_NAMESPACES = frozenset({"varied_practice", "context_choice", "question_dependencies", "question_readings",
+                                "answer_overlay"})
 ITEMS_KEY = "items"
 _LIMIT = 32 * 1024 * 1024
 

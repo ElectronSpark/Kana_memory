@@ -266,10 +266,12 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
                     continue
             # The dependency entry is keyed by the raw template as stored.
             requires, stem_only = questions.template_facts(item, kind, raw)
+            template = raw if variants is not None and not sound else None  # a raw template: its overlay row
             raw = dict(raw, kind=kind)
             from .answer_input import available
-            if not available(dict(raw, family=item.get("family"), domain=item.get("domain")),
-                             system_japanese=state.get("system_japanese_input") is True):
+            if not available(dict(raw, family=item.get("family"), domain=item.get("domain"),
+                                  target_id=raw.get("target_id", item.get("id"))),
+                             system_japanese=state.get("system_japanese_input") is True, template=template):
                 continue
             meta = practice_metadata(raw)
             if "practice" in raw and meta is None:
@@ -487,8 +489,12 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
     return {name: chosen[name] for name in ("kind", "variant", "input_mode")}
 
 
-def validate_practice_guide(content_id, revision, checkpoint, *, item=None, validate_result=True):
-    """Check the new generic frozen guide extension; leave legacy guides alone."""
+def validate_practice_guide(content_id, revision, checkpoint, *, item=None, validate_result=True, judged_now=False):
+    """Check the new generic frozen guide extension; leave legacy guides alone.
+
+    judged_now: the checkpoint's guide_correct was given in the write being checked (then, and only
+    then, it must agree with the judge).
+    """
     q = checkpoint.get("guide_question")
     sequence = checkpoint.get("guide_sequence")
     source_item = checkpoint.get("guide_source_item")
@@ -583,14 +589,17 @@ def validate_practice_guide(content_id, revision, checkpoint, *, item=None, vali
         if type(checkpoint["guide_correct"]) is not bool:
             raise ValueError("Invalid practice guide result")
         if validate_result:
-            from .learning_questions import grade_learning_answer
             answer = checkpoint.get("guide_answer")
-
-            def judged(**options):
-                return answer is not None and grade_learning_answer(q, answer, **options).get("status") == "correct"
-            # A result stored by the judge before 2026-11-18 (without reading forms) stays valid: it may
-            # equal either judgement. Nothing stored changes.
-            if checkpoint["guide_correct"] != judged() and checkpoint["guide_correct"] != judged(reading_forms=False):
+            if checkpoint["guide_correct"] and not (isinstance(answer, str) and answer.strip()):
+                raise ValueError("Practice guide result disagrees with its answer")
+        if validate_result and judged_now:
+            # Only a verdict given in this very write is checked against the judge, with the answer
+            # policy current now. A stored verdict is never judged again (design 03): the judge
+            # (reading forms since 2026-11-18, the typed-answer rules) and the answer overlay may have
+            # changed since it was given, and the verdict stays what it was.
+            from .learning_questions import grade_learning_answer
+            judged = answer is not None and grade_learning_answer(q, answer).get("status") == "correct"
+            if checkpoint["guide_correct"] != judged:
                 raise ValueError("Practice guide result disagrees with its answer")
 
 

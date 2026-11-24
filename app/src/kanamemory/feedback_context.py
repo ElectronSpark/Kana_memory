@@ -343,8 +343,12 @@ def _question_capture(c, question, path):
     if record is None:
         c.warn(path, "question_snapshot_unavailable")
         return {}
+    from .answer_policy.source import question_row
+    row = question_row(record)  # the answer overlay row the judge reads for this question (design 03), if any
     hidden = {key: record.pop(key) for key in ("answer", "accepted_answers", "alternative_answers",
         "known_wrong", "feedback", "explanation", "guide", "audio_text", "optional_audio_text", "support") if key in record}
+    if row is not None:
+        hidden["answer_overlay"] = dict(row)
     # Metadata may carry a kana answer or generated canonical ordering. It is
     # evidence for maintainers, not part of the public question prompt preview.
     if "metadata" in record:

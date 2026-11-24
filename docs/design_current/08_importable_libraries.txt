@@ -1116,3 +1116,25 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
   ContentLibraryUIMixin.open_content_library_file 与“添加内容库”共用 _precheck_content_library_file。
 - 未验（留给设备步骤）：过滤器在各文件管理器中的实际匹配（类型与路径）、onNewIntent 监听、进程被杀后从启动器图标回到
   旧任务时系统按原 Intent 重建窗口（此时标记不在系统保存的 Intent 上，预检可能再显示一次；不会安装）。
+
+
+16.9 答案覆盖层 answer_overlay（2026-11-24） [I，合成数据测试；原生未验]
+
+- 命名空间：answer_overlay（answer_policy.overlay，版本1）{"schema_version": 1, "items": {内容id: {题型: {模板sha256: 行}}}}，
+  行的字段见第03号设计第2节。打包、加载与跨库合并与question_readings完全相同：tools/build_teaching_content.py按内容id分片，
+  content_pack的_SHARD_CHECKS做深校验（格式不对时建包拒绝），load_namespace按第6.2节合并；扩展库给核心课的行与它的其他
+  按内容id的记录一样，核心有该课条目时整条丢弃并报冲突（content_library_merge），扩展库只对自己的课可靠。
+- 内容源：命名空间文档answer_overlay.json放在内容源目录（data/content_packs/full/teaching，与question_readings.json同处），
+  由tools/build_answer_overlay.py写；进包后在教学数据库里（核心包）或teaching/answer_overlay.json（扩展包）。
+- 表格工具：tools/build_answer_overlay.py --table <tsv> [...] --check | --write [--teaching 目录]。UTF-8 TSV，首行为列名
+  sha（模板sha256，可用至少12位的唯一前缀）、content_id、kind、strict（1、0或空=不变）、accepted_add（用｜分隔）、
+  known_wrong（“错答=>反馈”，用｜分隔）、fold（1或空）；五个字段全空的一行删除该模板的行。拒绝（写明表格与行号）：sha未知或
+  有歧义；content_id或kind与模板不符；非输入模板上的strict、accepted_add、known_wrong；新增答案为空、已被接受、或与已知错答
+  （按判题的规范化）相同；判题会接受的已知错答；没有可折叠提示的题标fold；新增答案被同题的注释显示出来（question_support.
+  glosses_showing）。--check只报告；--write在没有拒绝时只替换所列模板的行，其他行保留，模板已不存在的行报告并删除。
+- 打包检查：tools/package_library_pack.py用应用自己的规则（tools/typed_answer_check.py，经answer_input.available的
+  has_kana_answer与有效策略，在单独的进程里读要打包的教学数据库）列出没有假名答案的输入模板（扩展包只查它带的课）：
+  缺省在标准错误输出警告与清单，加--refuse-typed-without-kana时拒绝打包。
+- 最低应用版本：0.36.16接受带这个命名空间的包（核心教学数据库深校验、加载与扩展包安装都照常），只是不读它，带行的包在旧应用里
+  按没有修正的策略判题。所以包里有行时打包工具把requires.app_min_version提高到ANSWER_OVERLAY_MIN_APP（首个读取它的应用版本，
+  须与发布这项改动的版本号一致），给出的更高版本保留；没有行时不设。旧应用对这样的包在导入时给出“需要更新的应用”的说明。

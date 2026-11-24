@@ -39,8 +39,30 @@ _BACKGROUND_SUPPORT_VERSION = 2
 _KANJI = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff々〆]")
 
 
-def _protected_answer_forms(question):
+def _own_answer_forms(question):
+    """The answers a template or snapshot lists itself (build time: what a built question contains)."""
     forms = [question.get('answer', ''), *question.get('accepted_answers', ())]
+    if question.get('input_mode') == 'multi_cloze':
+        from .multi_cloze import specification
+        forms.extend(value for row in specification(question)['accepted_combinations'] for value in row)
+    return forms
+
+
+def _added_answer_forms(question):
+    """Accepted answers the effective answer policy adds to the question's own (an overlay row, T8)."""
+    from .answer_policy.source import policy_for
+    try:
+        accepted = policy_for(question).accepted
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return []
+    own = set(question.get('accepted_answers', ()) or ()) | {question.get('answer')}
+    return [value for value in accepted if isinstance(value, str) and value not in own]
+
+
+def _protected_answer_forms(question):
+    """Display time: the effective accepted answers (answer_policy), so a form an overlay row adds is
+    never glossed either."""
+    forms = [question.get('answer', ''), *question.get('accepted_answers', ()), *_added_answer_forms(question)]
     if question.get('input_mode') == 'multi_cloze':
         from .multi_cloze import specification
         forms.extend(value for row in specification(question)['accepted_combinations'] for value in row)
@@ -110,7 +132,7 @@ def background_support(prompt, target, raw, kind, *, explicit=(), bundled=False,
         if (plan.get('text') == prompt and plan.get('status') == 'precomputed'
                 and (kind in {'grammar_cloze', 'vocab_usage', 'vocab_context_choice'} or plan.get('context_projection_sha256'))):
             candidates = plan.get("segments", [])
-    protected = _protected_answer_forms(raw)
+    protected = _own_answer_forms(raw)  # build time: the overlay never changes what a question contains
     if target.get("family") == "word":
         protected.extend((target.get("title", ""), target.get("reading", "")))
     valid = _aligned_segments({"prompt": prompt}, {"segments": candidates})
@@ -501,6 +523,47 @@ def unmet_rule_hints(question, known_ids, *, requires=None):
     return hints[:3]
 
 
+def glosses_showing(question, forms):
+    """The glosses of the question (background glosses, the context hint, the readings its prompt can
+    show to a learner who knows nothing yet) that would give away one of ``forms``: [(surface, text)].
+
+    For content checks (tools/build_answer_overlay.py): an accepted answer an overlay row adds must not be
+    shown by a gloss. Uses the guard the pages use (_background_span_safe), without the installed row.
+    """
+    forms = [value for value in forms if isinstance(value, str) and _hint_normal(value)]
+    if not forms or not isinstance(question, Mapping):
+        return []
+    found = []
+    display = learning_question_display(question)
+    for part in (display.get("background_glosses") or []) if isinstance(display, Mapping) else []:
+        if not isinstance(part, Mapping):
+            continue
+        surface, reading, meaning = (str(part.get(key) or "") for key in ("surface", "reading", "meaning"))
+        if _gloss_gives_away(surface, reading, meaning, forms):
+            found.append((surface, reading or meaning))
+    hint = display.get("context_hint") if isinstance(display, Mapping) else None
+    if isinstance(hint, str) and any(_hint_normal(value) in _hint_normal(hint) for value in forms):
+        found.append(("context_hint", hint))
+    plan = prompt_support(question, {"furigana": True, "number": True}, frozenset())
+    for segment in plan["segments"]:
+        reading = segment.get("reading")
+        if reading and _gloss_gives_away(segment["surface"], reading, "", forms):
+            found.append((segment["surface"], reading))
+    return found
+
+
+def _gloss_gives_away(surface, reading, meaning, forms):
+    """A kanji word with its kana: the pages' guard (_background_span_safe); else any text containing a form."""
+    if _KANJI.search(surface or "") and _KANA.fullmatch(_hint_normal(reading or "")):
+        if not _background_span_safe({"surface": surface, "reading": reading}, forms):
+            return True
+    else:
+        texts = [_hint_normal(surface), _hint_normal(reading)]
+        if any(text and _hint_normal(value) in text for value in forms for text in texts):
+            return True
+    return any(meaning and _hint_normal(value) in _hint_normal(meaning) for value in forms)
+
+
 def learning_question_display(question):
     """Add safe display support to a copy while retaining the original test."""
     # These are derived display fields, never trusted import/template inputs.
@@ -757,6 +820,13 @@ def prompt_support(question, preferences=None, known_ids=None):
                              "surface": span["surface"], "reading": visible_reading,
                              "accent_number": visible_number,
                              **({"accent_phrases": visible_phrases} if visible_phrases else {})})
+    added = _added_answer_forms(question)
+    if added:
+        # An answer the overlay adds is never given away by a stored gloss or a reading (rule T2).
+        approved = [span for span in approved if span["reading"] is None
+                    or _background_span_safe({"surface": span["surface"], "reading": span["reading"]}, added)]
+        extra = tuple(span for span in extra
+                      if _background_span_safe({"surface": text[span[0]:span[1]], "reading": span[2]}, added))
     if extra:
         # Kana of question_readings fills only words no reviewed segment annotates; it never carries an accent.
         added = [{"start": start, "end": end, "surface": text[start:end], "reading": reading, "accent_number": None}

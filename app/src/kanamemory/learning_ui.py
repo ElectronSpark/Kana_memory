@@ -2397,6 +2397,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             diagnosis = grade_learning_answer(q, result.get("answered_text", result.get("answer", ""))).get("message", "")
             if diagnosis and diagnosis != explanation:
                 children.append(u.label(diagnosis, size=13, color=u.MUTED))
+        from .answer_result_ui import known_wrong_note
+        note = known_wrong_note(q, result)
+        if note:
+            children.append(u.label(shown_explanation(q, note)))
         if explanation and explanation != str(q["answer"]).strip():
             children.append(u.label(shown_explanation(q, explanation)))
         from .personal_content_notes_ui import append_notes

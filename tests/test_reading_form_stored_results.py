@@ -1,10 +1,12 @@
-"""Results stored by the judge before reading forms (2026-11-18) stay valid where a stored verdict is re-judged.
+"""Results stored by the judge before reading forms (2026-11-18) stay valid: a stored verdict is never re-judged.
 
 A guide answer 学校へいきます stored as not correct is correct under the widened judge; the stored checkpoint
-must still load, advance and replay (validate_practice_guide accepts either judgement). Synthetic lesson,
-temporary SQLite store; the readings of the answer are given directly (no course content).
+must still load, advance and replay (design 03: a verdict, once stored, never changes; only a verdict given
+in the write being checked is compared with the judge). Synthetic lesson, temporary SQLite store; the
+readings of the answer are given directly (no course content).
 """
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -58,6 +60,16 @@ def test_the_two_judgements_differ_for_this_answer(stores):
     assert lq.grade_learning_answer(question, KANA, reading_forms=False)["status"] == "correct"
 
 
+def _store_as_recorded(learning, item, state):
+    """The checkpoint as an earlier app version recorded it (written directly: no judge of today gave it)."""
+    row = learning._db.execute("SELECT checkpoint_json FROM learning_content WHERE content_id=?",
+                               (item["id"],)).fetchone()
+    checkpoint = {**json.loads(row[0]), **state}
+    with learning._db:
+        learning._db.execute("UPDATE learning_content SET checkpoint_json=? WHERE content_id=?",
+                             (json.dumps(checkpoint, ensure_ascii=False), item["id"]))
+
+
 @pytest.mark.parametrize("stored, valid", [
     (False, True),   # an old record: judged by the earlier judge
     (True, True),    # a new record: judged by the widened judge
@@ -67,8 +79,11 @@ def test_a_stored_guide_result_loads_advances_and_replays(stores, stored, valid)
     question = guide(item)
     state = {"guide_question": question, "guide_answer": MIXED, "guide_correct": stored,
              "guide_draft": {"answer": MIXED}}
-    # learning_store.advance_instruction validates the checkpoint it stores (validate_practice_guide)
-    learning.advance_instruction(item["id"], "guide", now=NOW, state=state)
+    if stored:
+        # learning_store.advance_instruction validates the checkpoint it stores (validate_practice_guide)
+        learning.advance_instruction(item["id"], "guide", now=NOW, state=state)
+    else:
+        _store_as_recorded(learning, item, state)
     saved = learning.get_item(item["id"])
     assert saved["checkpoint"]["guide_correct"] is stored  # stored as it was
     # guided_question re-reads the frozen guide and validates its stored result
@@ -78,10 +93,18 @@ def test_a_stored_guide_result_loads_advances_and_replays(stores, stored, valid)
     learning.advance_instruction(item["id"], "guide", now=NOW, state=state)  # stored again unchanged
 
 
-def test_a_result_neither_judge_gives_is_still_refused(stores):
-    _, item = stores
+def test_a_new_verdict_must_agree_with_the_judge_and_a_stored_one_is_kept(stores):
+    learning, item = stores
     question = guide(item)
-    for answer, stored in ((ANSWER, False), ("学校にいきます", True)):
+    for answer, given in ((ANSWER, False), ("学校にいきます", True), (MIXED, False)):
+        checkpoint = {"guide_question": question, "guide_answer": answer, "guide_correct": given}
         with pytest.raises(ValueError, match="disagrees"):
-            validate_practice_guide(item["id"], item["revision"], {
-                "guide_question": question, "guide_answer": answer, "guide_correct": stored}, item=item)
+            validate_practice_guide(item["id"], item["revision"], checkpoint, item=item, judged_now=True)
+        validate_practice_guide(item["id"], item["revision"], checkpoint, item=item)  # stored: kept as it is
+    with pytest.raises(ValueError, match="disagrees"):  # the store gives a new verdict only through the judge
+        learning.advance_instruction(item["id"], "guide", now=NOW, state={
+            "guide_question": question, "guide_answer": ANSWER, "guide_correct": False,
+            "guide_draft": {"answer": ANSWER}})
+    with pytest.raises(ValueError, match="disagrees"):  # a right verdict without an answer was never given
+        validate_practice_guide(item["id"], item["revision"], {
+            "guide_question": question, "guide_answer": " ", "guide_correct": True}, item=item)

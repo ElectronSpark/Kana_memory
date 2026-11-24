@@ -52,7 +52,7 @@ def probe_for(item, ability, known):
     from kanamemory import probe_rules
     from kanamemory.answer_input import available
     from kanamemory.learning_practice_policy import _candidate_questions
-    from kanamemory.learning_probe import kana_answer
+    from kanamemory.learning_probe import probe_qualifies
     from kanamemory.learning_questions import build_learning_question, question_kinds, question_requires
     track = probe_rules.track(item.get("family"), item.get("domain"))
     present = set(question_kinds(item, ability=ability))
@@ -63,7 +63,7 @@ def probe_for(item, ability, known):
             question = build_learning_question(item, candidate["kind"], variant=candidate["variant"])
         except (ValueError, KeyError, TypeError):
             continue
-        if not probe_rules.qualifies(question, track, ability, kana_answer=kana_answer(question), candidate=candidate):
+        if not probe_qualifies(question, track, ability, candidate=candidate):  # the effective answer policy
             continue
         requires = question_requires(item, question)
         if requires is not None and any(not (r in known or str(r).startswith("kana:")) for r in requires):

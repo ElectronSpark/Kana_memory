@@ -516,6 +516,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         explanation = distinct_explanation(q.get('feedback'), answer_text(q))
         asked = None if pitch else asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
+        from .answer_result_ui import known_wrong_note
+        note = known_wrong_note(q, result)
+        if note: children.append(u.label(shown_explanation(q, note), size=15))
         if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
         formal = (result.get('assessment', {}).get('settlement_channel') == 'formal'
                   and value['purpose'] == 'check_and_adjust' and not row['credit_revoked'])

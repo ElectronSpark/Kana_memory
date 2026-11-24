@@ -45,6 +45,9 @@ CACHES = {
     "semantic_errors.py::_SHARED": REGISTERED,      # keyed by the pack file only, not by the library layers
     "content_library_service.py::_DEPENDENCIES": REGISTERED,  # keyed by the catalogue ids only
     "study_routes.py::_BUILT": REGISTERED,
+    "answer_policy/source.py::_LOCATED": REGISTERED,  # its key does not name the lesson it was located in
+    "answer_policy/source.py::lesson_forms": REGISTERED,
+    "answer_policy/kana_answer.py::_JUDGED": REGISTERED,  # judged with the catalogue's word tables
     # The source itself: keyed by file path and stamp, dropped by content_pack.clear_cache.
     "content_pack.py::_mirror": "the registry mirror, by path and stamp; clear_cache",
     "content_pack.py::_layers_for": "the checked library layers of the frozen registry; clear_cache",
@@ -100,7 +103,7 @@ LOADED_AT_IMPORT = {
     "pronunciation_curriculum.py": 1, "question_contexts.py": 1, "question_readings.py": 1,
     "sentence_annotations.py": 1, "structured_lessons_grammar_a.py": 1, "structured_lessons_grammar_b.py": 1,
     "structured_lessons_pronunciation.py": 1, "structured_lessons_words.py": 1, "study_path_catalog.py": 1,
-    "usage_grammar_curriculum.py": 1, "vocabulary_lessons.py": 1,
+    "usage_grammar_curriculum.py": 1, "vocabulary_lessons.py": 1, "answer_policy/source.py": 1,
 }
 
 

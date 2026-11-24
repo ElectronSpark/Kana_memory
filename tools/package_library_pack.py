@@ -33,6 +33,12 @@ catalogue id family:rest becomes family:<library_id>:rest throughout the
 selected namespaces; ``--depend-on-source`` makes each copied item depend on
 its original id (a cross-library required reference).
 
+Typed answers (design 03 rule T9): the typed templates of the packed lessons that have no kana answer
+(the app never serves them; tools/typed_answer_check.py, the app's own rule) are listed as a warning on
+standard error, or refused with ``--refuse-typed-without-kana``. A pack that carries answer_overlay rows
+needs an app that reads them: its requires.app_min_version is raised to ANSWER_OVERLAY_MIN_APP (an older
+app opens the pack and ignores the namespace, judging those templates without their corrections).
+
 Phase 5: ``--sign-key <local key file>`` signs the manifest with Ed25519 through
 the same implementation as tools/sign_library_pack.py
 (kanamemory.content_library_signing); ``--key-id`` names the public key.
@@ -65,6 +71,7 @@ from kanamemory import content_library_merge as merge  # noqa: E402
 from kanamemory import content_library_rules as rules  # noqa: E402
 from kanamemory import content_library_signing as signing  # noqa: E402
 from kanamemory.content_pack import namespace_document, read_pack_namespaces, validate_pack  # noqa: E402
+from kanamemory.answer_policy import overlay as answer_overlay  # noqa: E402
 from kanamemory.material_review import item_fingerprint  # noqa: E402
 
 from kanamemory.build_info import VERSION as APP_VERSION  # noqa: E402
@@ -74,6 +81,9 @@ LEARNER_TABLES = {"study_card", "review_event", "session_checkpoint", "learning_
 ANNOTATION_FILES = ("sentence_annotations.sqlite3", "natural_translations.sqlite3", "order_translations.sqlite3",
                     "lexical_sentence_review.sqlite3")
 REVIEW_FILE = "learning_material_review.json"
+# The first app version that reads the answer_overlay namespace (design 08): set by the version bump that
+# ships it. An older app accepts a pack with the namespace and ignores it.
+ANSWER_OVERLAY_MIN_APP = "0.36.17"
 
 
 def short_id(library_id):
@@ -287,7 +297,9 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             extension=False, namespaces=None, include_media=True, description="", rewrite_ids=False,
             depend_on_source=False, optional_references=(), retires=(), aliases=None, overrides=(),
             sign_seed=None, key_id=None, routes=(), with_sample_route=False, app_min_version=None, edition=None,
-            short=None):
+            short=None, refuse_typed_without_kana=False, typed_check=None, report=None):
+    """Write the pack (see the module text). typed_check(teaching_db, content_ids) -> rows replaces the
+    typed-answer check (tests); report(text) receives the warning (default: standard error)."""
     resources, output = Path(resources).resolve(), Path(output).resolve()
     if app_min_version is not None and rules.app_version_key(app_min_version) is None:
         raise ValueError("app_min_version must be a dotted number such as 0.36.0")
@@ -337,6 +349,25 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             dependencies.update(d for d in item.get("depends_on", ()) if isinstance(d, str))
     if selected - set(provided_namespaces):
         raise ValueError("Unknown namespaces: " + ", ".join(sorted(selected - set(provided_namespaces))))
+    # Design 03 rule T9: typed templates without a kana answer are never served; listed or refused here.
+    checked_ids = None if not extension else set(provides_items) | {
+        cid for value in values.values() if isinstance(value, dict) and isinstance(value.get("items"), dict)
+        for cid in value["items"] if isinstance(cid, str)}
+    if typed_check is None:
+        from typed_answer_check import check_pack as typed_check
+    typed_rows = typed_check(teaching_db, checked_ids)
+    if typed_rows:
+        listing = "\n".join("  " + "\t".join(str(row.get(key)) for key in
+                                             ("content_id", "kind", "variant", "template_sha256", "answer"))
+                            for row in typed_rows)
+        text = f"{len(typed_rows)} typed templates without a kana answer (never served):\n{listing}"
+        if refuse_typed_without_kana:
+            raise ValueError(text)
+        (report or (lambda line: print(line, file=sys.stderr)))(text)
+    if answer_overlay.row_count(values.get(answer_overlay.NAMESPACE)) and (
+            app_min_version is None
+            or rules.app_version_key(app_min_version) < rules.app_version_key(ANSWER_OVERLAY_MIN_APP)):
+        app_min_version = ANSWER_OVERLAY_MIN_APP
     route_specs = [*routes, *([sample_route(library_id, title, mapping, provides_items)] if with_sample_route else [])]
     route_table = _route_table(library_id, route_specs)
     route_references = []
@@ -411,13 +442,14 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
         for name in sorted(entries):
             archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), entries[name],
                              compress_type=zipfile.ZIP_DEFLATED)
-    report = rules.validate_library_pack(output)
+    checked = rules.validate_library_pack(output)
     return {"path": str(output), "library_id": library_id, "library_version": version,
             "content_sha256": manifest["content_sha256"], "files": len(files), "items": len(provides_items),
-            "namespaces": len(provided_namespaces), "bytes": report.total_bytes,
+            "namespaces": len(provided_namespaces), "bytes": checked.total_bytes,
             "references": len(manifest["references"]), "provides": list(provides_items),
-            "signature_status": report.signature.status, "public_key_id": report.signature.public_key_id,
-            "routes": list(route_table)}
+            "signature_status": checked.signature.status, "public_key_id": checked.signature.public_key_id,
+            "routes": list(route_table), "typed_without_kana": len(typed_rows),
+            "app_min_version": manifest["requires"].get("app_min_version")}
 
 
 def main():
@@ -454,6 +486,8 @@ def main():
                         "number such as 0.36.0); an older app then refuses the import with a message")
     parser.add_argument("--sample-route", action="store_true",
                         help="With --rewrite-ids: add route:<library_id>:sample over the rewritten ids")
+    parser.add_argument("--refuse-typed-without-kana", action="store_true",
+                        help="Refuse the pack when a typed template has no kana answer (default: a warning list)")
     args = parser.parse_args()
     if args.key_id and not args.sign_key:
         parser.error("--key-id needs --sign-key")
@@ -467,7 +501,8 @@ def main():
                      retires=retires, aliases=aliases, overrides=args.override, sign_seed=seed, key_id=args.key_id,
                      routes=[spec for path in args.route for spec in load_route_specs(path)],
                      with_sample_route=args.sample_route, app_min_version=args.app_min_version,
-                     edition=args.edition, short=args.short_id)
+                     edition=args.edition, short=args.short_id,
+                     refuse_typed_without_kana=args.refuse_typed_without_kana)
     result.pop("provides")
     print(json.dumps(result, ensure_ascii=False))
 

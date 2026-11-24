@@ -1542,6 +1542,9 @@ class LearningStore:
             draft = _load(row["checkpoint_json"])
             from .learning_replacement import guide_write_guard
             guide_write_guard(draft, state, checkpoint, orientation=self.arrangement_orientation)
+            # A guide verdict is new when this write gives one the record does not hold yet (design 03).
+            judged_now = isinstance(state, dict) and "guide_correct" in state and any(
+                state.get(key) != draft.get(key) for key in ("guide_correct", "guide_answer", "guide_question"))
             if state is not None:
                 if not isinstance(state, dict):
                     raise ValueError("Instruction checkpoint must be an object")
@@ -1563,7 +1566,8 @@ class LearningStore:
             from .multi_cloze import validate_checkpoint as validate_cloze_checkpoint
             validate_cloze_checkpoint(content_id, row['revision'], draft)
             from .learning_practice_policy import validate_practice_guide
-            validate_practice_guide(content_id, row["revision"], draft, item=_load(row["content_json"]))
+            validate_practice_guide(content_id, row["revision"], draft, item=_load(row["content_json"]),
+                                    judged_now=judged_now)
             if checkpoint in {"intro_done", "guide"} and row["stage"] == "intro":
                 _teaching.update(self._db, row, stage='guide')
             elif checkpoint in {"guide_correct", "bridge"} and row["stage"] == "guide":
@@ -1986,7 +1990,12 @@ class LearningStore:
                     return {"finished": len(checkpoint["guide_completed_ids"]) == len(sequence),
                             "item": self.instruction_item(content_id, instruction_scope)}
                 raise ValueError("This guided question is not current")
-            if grade_learning_answer(question, checkpoint.get("guide_answer", "")).get("status") != "correct":
+            # The verdict stored with the answer, never judged again (design 03); an older guide without one
+            # is judged as before.
+            stored = checkpoint.get("guide_correct")
+            right = (stored if type(stored) is bool
+                     else grade_learning_answer(question, checkpoint.get("guide_answer", "")).get("status") == "correct")
+            if not right:
                 # Design 12 Q1 (c): under breadth first a step with a recorded
                 # wrong answer may be marked seen; the shape stays the same.
                 from .arrangement.rules.gates import guide_may_continue

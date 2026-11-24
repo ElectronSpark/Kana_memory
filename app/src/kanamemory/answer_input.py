@@ -3,6 +3,9 @@
 The key inventory depends on the public stimulus, never the hidden answer.
 Checking that at least one already-accepted answer is enterable changes neither
 the question nor its grader. In particular it is not a kanji-reading guesser.
+Both read the effective answer policy (answer_policy: the template's answers
+with its overlay row), and a typed question without a kana answer is never
+available, whatever the system-keyboard setting (answer_policy.kana_answer, T9).
 """
 from __future__ import annotations
 
@@ -111,14 +114,19 @@ def public_characters(question):
                               or "\uf900" <= c <= "\ufaff" or c in "々〆〇"))[:96]
 
 
-def without_japanese_ime(question):
-    """Whether the existing response can be completed by the actual controls."""
+def without_japanese_ime(question, policy=None):
+    """Whether the existing response can be completed by the actual controls.
+
+    ``policy``: the question's effective answer policy (answer_policy.source.policy_for when absent).
+    """
     if not japanese_text(question):
         return True
-    from .learning_questions import _normal, _grammar_kana
+    from .learning_questions import _typed_normal, _grammar_kana
+    from .answer_policy.source import policy_for
+    accepted = (policy or policy_for(question)).accepted
     keys = {unicodedata.normalize("NFKC", c) for c in FIXED_KEYS}
     keys.update(unicodedata.normalize("NFKC", c) for c in public_characters(question))
-    answers = [question.get("answer", ""), *question.get("accepted_answers", [])]
+    answers = [question.get("answer", ""), *accepted]
     for answer in answers:
         if not isinstance(answer, str) or not answer.strip():
             continue
@@ -126,11 +134,29 @@ def without_japanese_ime(question):
         # not transliteration using a dictionary's arbitrary first reading.
         if question.get("family") == "grammar" and question.get("domain") != "pronunciation":
             answer = _grammar_kana(answer)
-        normalized = _normal(answer)
+        normalized = _typed_normal(answer)
         if normalized and all(c in keys or c.isascii() for c in normalized):
             return True
     return False
 
 
-def available(question, *, system_japanese=False):
-    return system_japanese is True or without_japanese_ime(question)
+def available(question, *, system_japanese=False, template=None):
+    """Whether the question can be served with these input settings.
+
+    A typed Japanese question needs a kana answer (T9, independent of ``system_japanese``); then the
+    system keyboard, or the app's keys and the prompt's Han characters, must reach an accepted answer.
+    ``template``: the raw template ``question`` was made from at selection (with the lesson id as
+    ``target_id``), so that its overlay row is found; a built question is located from its own fields.
+    """
+    if not japanese_text(question):
+        return True
+    from .answer_policy import source
+    from .answer_policy.kana_answer import has_kana_answer
+    if template is not None:
+        policy = source.policy_for(question, row_value=source.template_row(
+            question.get("target_id"), question.get("kind"), template))
+    else:
+        policy = source.policy_for(question)
+    if not has_kana_answer(question, policy):
+        return False
+    return system_japanese is True or without_japanese_ime(question, policy)
