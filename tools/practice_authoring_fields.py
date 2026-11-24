@@ -21,7 +21,9 @@ part of the practice they are part of the fingerprint as well.
 
 A gloss row is refused unless the App would show it to a learner who does not know the word: every condition of
 question_support._practice_background_context is checked here, with the App's own normalisers, and a refusal names
-the template key. The App's validator (learning_questions.validate_practice) stays the final judge of the practice;
+the template key. One deliberate difference (2026-11-24): the answer-leak test compares whole words
+(_reveals), where the App's display test compares substrings; until the App compares whole words too, a gloss that
+only the substring test refuses (日曜日 beside the answer に) is stored but not shown. The App's validator (learning_questions.validate_practice) stays the final judge of the practice;
 the tools call it after apply_pacing. Used by tools/compile_reviewed_question_batch.py and the merge tool.
 Pure functions: no file, database, clock or course text. The App modules are imported when a function needs them
 (the calling tool puts app/src on sys.path).
@@ -215,26 +217,59 @@ def _closed_reason(raw, kind, target_id):
     return None
 
 
-def _protected(raw):
-    """What a gloss may not reveal, as the App protects it: the answers and every target quote without a gap."""
-    from kanamemory.question_support import _GAP
+def _protected(raw, kind=None):
+    """What a gloss may not reveal, as the App protects it: the answers and every target quote without a gap, as
+    (value, Japanese) pairs: the answers of a meaning kind (question_support._MEANING_KINDS) are Chinese text."""
+    from kanamemory.question_support import _GAP, _MEANING_KINDS
     practice = raw.get("practice") or {}
-    forms = [raw.get("answer", ""), *raw.get("accepted_answers", ())]
-    forms.extend(span.get("quote", "") for span in practice.get("target_spans", ())
+    chinese = kind in _MEANING_KINDS
+    forms = [(value, not chinese) for value in (raw.get("answer", ""), *raw.get("accepted_answers", ()))]
+    forms.extend((span.get("quote", ""), True) for span in practice.get("target_spans", ())
                  if isinstance(span, dict) and isinstance(span.get("quote"), str) and not _GAP.search(span["quote"]))
-    return [value for value in forms if isinstance(value, str)]
+    return [(value, japanese) for value, japanese in forms if isinstance(value, str)]
 
 
-def _reveals(surface, meaning, reading, value):
-    """question_support._practice_background_context's answer-leak test for one protected value."""
+# Where a text divides into words for the leak test (_words): punctuation and spaces.
+_WORD_BREAK = re.compile(r"[\s、。，．,.;；:：/／・･（）()［］\[\]「」『』【】〈〉《》…～〜!！?？\-—–]+")
+_KANA_RUN = re.compile(r"[ぁ-ゖァ-ヺー]+|[^ぁ-ゖァ-ヺー]+")
+
+
+def _words(value, *, by_script=False):
+    """The whole words of a text for the leak test, normalised as the App normalises hints: the pieces between
+    punctuation and spaces; by_script (a Chinese meaning): also the kana and non-kana runs of each piece, so a
+    Japanese word written inside Chinese prose (在で) is a word of its own."""
+    from kanamemory.question_support import _hint_normal
+    import unicodedata
+    pieces = [piece for piece in _WORD_BREAK.split(unicodedata.normalize("NFKC", value or "")) if piece]
+    if by_script:
+        pieces = [run for piece in pieces for run in _KANA_RUN.findall(piece)]
+    return {word for word in (_hint_normal(piece) for piece in pieces) if word}
+
+
+def _reveals(surface, meaning, reading, value, japanese=True):
+    """Whether a gloss gives a protected value away, compared by WHOLE words (2026-11-24).
+
+    The App's display test (question_support._practice_background_context) compares substrings, so the gloss
+    日曜日 (にちようび) was refused for the answer に; here the gloss's written form, its reading and each word of its
+    meaning are compared with each word of the value, written and as sound (ぢ/じ, を/お... as the App folds them),
+    and a kanji they share still counts when the value is Japanese (the written answer would show); a Chinese
+    answer (japanese False: a meaning kind's) is compared by its words only, so a weekday gloss gives nothing of a
+    Chinese sentence about "that day" away. A real leak stays caught: a gloss read に (二) for the answer に, a meaning holding the answer as a word
+    (在で for で), a gloss sharing a Japanese answer's kanji, a Chinese answer that is the gloss's meaning.
+    """
     from kanamemory.question_support import _KANJI, _hint_normal, _hint_sound
-    normal, gloss, sound = _hint_normal(surface), _hint_normal(meaning), _hint_sound(reading or surface)
-    other, other_sound = _hint_normal(value), _hint_sound(value)
+    normal, sound = _hint_normal(surface), _hint_sound(reading or surface)
+    other = _hint_normal(value)
     if not other:
         return False
-    return bool(normal in other or other in normal or gloss in other or other in gloss
-                or set(_KANJI.findall(normal)) & set(_KANJI.findall(other))
-                or (sound and other_sound and (sound in other_sound or other_sound in sound)))
+    theirs = _words(value, by_script=not japanese) | {other}
+    mine = {normal} | _words(meaning, by_script=True)
+    if mine & theirs or (japanese and set(_KANJI.findall(normal)) & set(_KANJI.findall(other))):
+        return True
+    if not japanese and any(word in other for word in _words(meaning, by_script=True) if len(word) >= 2):
+        return True  # Chinese has no spaces: the gloss's meaning written inside the Chinese answer gives it away
+    sounds = {_hint_sound(word) for word in theirs} - {""}
+    return bool(sound and sound in sounds)
 
 
 def _entry(entry, index, *, key):
@@ -273,7 +308,7 @@ def gloss_rows(raw, kind, target_id, entries, *, key, known_items=None, existing
         _fail(key, "glosses need a template with a prompt and practice metadata")
     targets = practice.get("target_spans", [])
     options = [value for value in raw.get("choices", ()) if isinstance(value, str)]
-    protected = _protected(raw)
+    protected = _protected(raw, kind)
     rows = []
     for index, entry in enumerate(entries):
         label = _entry(entry, index, key=key)
@@ -309,8 +344,8 @@ def gloss_rows(raw, kind, target_id, entries, *, key, known_items=None, existing
         for value in options:
             if normal in _hint_normal(value):
                 _fail(key, f"{label}: {surface!r} also stands in the option {value!r}")
-        for value in protected:
-            if _reveals(surface, meaning, reading, value):
+        for value, japanese in protected:
+            if _reveals(surface, meaning, reading, value, japanese):
                 _fail(key, f"{label}: {surface!r} or its meaning would reveal the answer or target {value!r}")
         row = {"start": start, "end": end, "surface": surface, "reading": reading, "meaning": meaning}
         if lesson is not None:

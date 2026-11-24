@@ -174,6 +174,33 @@ def test_every_unsafe_or_incomplete_gloss_is_refused_with_the_template_key(name)
         gloss_rows(raw, kind, target, entries, key="slot-9", **options)
 
 
+def test_the_leak_test_compares_whole_words():
+    # 2026-11-24: a gloss whose reading merely contains the answer (にちようび, に) gives nothing away.
+    raw = template(prompt="日曜日（　）二人で来ます。", choices=["に", "へ", "を"], answer="に")
+    sunday = {"surface": "日曜日", "reading": "にちようび", "meaning": "星期日"}
+    two = {"surface": "二人", "reading": "ふたり", "meaning": "两个人"}
+    assert [row["surface"] for row in gloss_rows(raw, KIND, CID, [sunday, two], key="k1")] == ["日曜日", "二人"]
+    # A real leak is still caught: a gloss read as the answer, a meaning holding it as a word, a shared kanji.
+    leaks = ({"surface": "二", "reading": "に", "meaning": "数字二", "start": 6},
+             {**sunday, "meaning": "星期日（に）"}, {**sunday, "meaning": "时间に"})
+    for entry in leaks:
+        with pytest.raises(AuthoringFieldError, match="would reveal the answer"):
+            gloss_rows(raw, KIND, CID, [entry], key="k1")
+    kanji = template(prompt="日曜日（　）友だちと泳ぎました。", choices=["日", "月", "火"], answer="日")
+    with pytest.raises(AuthoringFieldError, match="would reveal the answer"):
+        gloss_rows(kanji, KIND, CID, [sunday], key="k1")
+    # The Chinese answer of a meaning question shares no kanji with a Japanese gloss by accident (日 of 日语), but
+    # the gloss's meaning written inside it is a leak.
+    meaning = template(prompt="土曜日に港で泳ぎました。", choices=["指定来的那一天", "说明方式", "表示对象"],
+                       answer="指定来的那一天")
+    meaning["practice"]["target_spans"] = [{"start": 3, "end": 4, "quote": "に"}]
+    saturday = {"surface": "土曜日", "reading": "どようび", "meaning": "星期六"}
+    assert gloss_rows(meaning, "grammar_meaning", CID, [saturday], key="k1")[0]["surface"] == "土曜日"
+    assert gloss_rows({**meaning, "answer": "指定日语的那一天"}, "grammar_meaning", CID, [saturday], key="k1")
+    with pytest.raises(AuthoringFieldError, match="would reveal the answer"):
+        gloss_rows({**meaning, "answer": "指定星期六"}, "grammar_meaning", CID, [saturday], key="k1")
+
+
 # ------------------------------------------------------------------ the App's own display filter
 
 def _question(raw):
