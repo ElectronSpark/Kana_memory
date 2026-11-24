@@ -11,6 +11,21 @@ from support.ai_material_fixtures import new_word
 from support.material_workflow_support import request
 
 
+def _absent_prerequisite():
+    """A star word the bundled course does not teach, so it stays an unverified candidate.
+
+    A candidate equal to a course word is mapped to that canonical lesson, which needs no
+    verification; the bundled content grows at every landing (星 arrived in November 2026).
+    """
+    from kanamemory.learning_content import learning_items
+    taught = {value for row in learning_items() for value in (row.get('title'), row.get('reading'))}
+    for title, reading, meaning in (('星', 'ほし', '星星'), ('星屑', 'ほしくず', '星尘'),
+                                    ('彗星', 'すいせい', '彗星'), ('星雲', 'せいうん', '星云')):
+        if title not in taught and reading not in taught:
+            return {'title': title, 'reading': reading, 'meaning': meaning}
+    raise AssertionError('every prerequisite candidate is now a course word; add another one here')
+
+
 def prepared(resources, *, second=False, blocked_dependency=False):
     store, learning, _, ex, materials = resources
     flow = MaterialWorkflowStore(store); job = flow.create({**request('reference-fixture'), 'count': 10})
@@ -34,7 +49,7 @@ def prepared(resources, *, second=False, blocked_dependency=False):
         pack['examples'].extend(more['examples']); pack['references'].extend(more['references'])
         items.append(other)
         if blocked_dependency:
-            items.append(new_word(alias='candidate:prerequisite', title='星', reading='ほし', meaning='星星'))
+            items.append(new_word(alias='candidate:prerequisite', **_absent_prerequisite()))
     job = flow.complete_generation(job['id'], token,
         {'items': items, 'example_pack': pack, 'segments': []}, materials)
     proposal = materials.get(job['proposal_id'])

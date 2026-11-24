@@ -114,10 +114,18 @@ def pack_bytes(library_id, namespaces, *, version="20260102", profile="extension
         entries[corrupt] = entries[corrupt] + b"x"
     import io
     buffer = io.BytesIO()
+
+    def member(name):
+        # A fixed timestamp: the same arguments give the same bytes, also when two builds fall into
+        # different seconds (writestr with a bare name stamps the current local time).
+        info = zipfile.ZipInfo(name, date_time=(2026, 1, 2, 0, 0, 0))
+        info.external_attr = 0o600 << 16  # what writestr gives a bare name
+        return info
+
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(rules.MANIFEST_FILE, json.dumps(manifest, ensure_ascii=False))
+        archive.writestr(member(rules.MANIFEST_FILE), json.dumps(manifest, ensure_ascii=False))
         for name, raw in entries.items():
-            archive.writestr(name, raw)
+            archive.writestr(member(name), raw)
     return buffer.getvalue()
 
 

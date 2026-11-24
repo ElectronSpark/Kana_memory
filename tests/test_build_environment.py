@@ -240,12 +240,21 @@ needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='the pinned t
 
 def _git(cwd, *arguments):
     import subprocess
-    return subprocess.run(['git', '-C', str(cwd), *arguments], check=True, capture_output=True, text=True).stdout.strip()
+    done = subprocess.run(['git', '-C', str(cwd), *arguments], capture_output=True, text=True, encoding='utf-8',
+                          errors='replace')
+    assert done.returncode == 0, f'git {" ".join(arguments)} in {cwd} exited {done.returncode}: {done.stderr.strip()}'
+    return done.stdout.strip()
+
+
+# The released working directory lives under a path with Chinese characters and spaces, so every template
+# repository here does too: its file:/// URL then carries percent-encoded UTF-8 and %20 on every run.
+WIDE_FOLDER = '模板 仓库'
 
 
 def _template_origin(root):
     """A small cookiecutter template repository with two commits; returns (origin, first, second)."""
-    origin = root / 'origin'
+    origin = root / WIDE_FOLDER / 'origin'
+    assert '%20' in origin.as_uri() and '%E4%BB%93' in origin.as_uri()  # 仓 percent-encoded
     (origin / '{{ cookiecutter.format }}').mkdir(parents=True)
     _git(origin, 'init', '--quiet')
     for key, value in (('user.email', 'test@example.org'), ('user.name', 'test'), ('core.autocrlf', 'false')):
@@ -264,7 +273,7 @@ def test_the_pinned_commit_is_rolled_out_from_the_cache_without_the_network(tmp_
     from tools.build_environment import TEMPLATE_MARKER, pinned_template
     origin, first, _ = _template_origin(tmp_path)
     url = origin.as_uri()
-    cache = tmp_path / 'cache'
+    cache = tmp_path / WIDE_FOLDER / 'cache'
     _git(tmp_path, 'clone', '--quiet', url, str(cache))
     origin.rename(origin.with_name('moved-away'))  # no remote any more: the cache alone must do
     target = tmp_path / 'km/briefcase/pinned-template/t'
@@ -280,7 +289,7 @@ def test_a_commit_missing_from_the_cache_is_fetched_by_its_hash_and_a_wrong_one_
     from tools.build_environment import pinned_template
     origin, first, second = _template_origin(tmp_path)
     url = origin.as_uri()
-    cache = tmp_path / 'cache'
+    cache = tmp_path / WIDE_FOLDER / 'cache'
     _git(tmp_path, 'clone', '--quiet', '--no-checkout', url, str(cache))
     _git(origin, 'reset', '--quiet', '--hard', first)  # the newer commit is not on any branch any more
     _git(cache, 'fetch', '--quiet', '--prune', 'origin')
@@ -303,7 +312,7 @@ def test_a_commit_missing_from_the_cache_is_fetched_by_its_hash_and_a_wrong_one_
 def test_a_foreign_cache_or_an_unknown_directory_is_refused(tmp_path):
     from tools.build_environment import pinned_template
     origin, first, _ = _template_origin(tmp_path)
-    cache = tmp_path / 'cache'
+    cache = tmp_path / WIDE_FOLDER / 'cache'
     _git(tmp_path, 'clone', '--quiet', origin.as_uri(), str(cache))
     with pytest.raises(ValueError, match='does not come from'):
         pinned_template(tmp_path / 'out', cache, 'https://example.org/other-template.git', first)
@@ -318,7 +327,7 @@ def test_a_foreign_cache_or_an_unknown_directory_is_refused(tmp_path):
 def test_the_command_line_takes_the_commit_from_the_declaration_and_fails_with_its_exit_code(source, tmp_path):
     import subprocess, sys
     origin, first, _ = _template_origin(tmp_path / 'repo')
-    cache = tmp_path / 'cache'
+    cache = tmp_path / WIDE_FOLDER / 'cache'
     _git(tmp_path, 'clone', '--quiet', origin.as_uri(), str(cache))
     declared = contract()['android']
     for relative, old, new in (('config/build_environment.json', declared['template'], origin.as_uri()),
