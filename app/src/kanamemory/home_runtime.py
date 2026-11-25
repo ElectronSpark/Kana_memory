@@ -64,7 +64,8 @@ def home_service(app, *, queue_kinds: Callable[[dict], Sequence[str]] | None = N
         presenter=lambda: StudyPathRuntimeMixin.study_arrangement(app).presenter,
         costs=lambda: StudyPathUIMixin.study_admission(app).costs,
         course_kinds=lambda: app.learning_preferences()["enabled"],
-        queue_kinds=queue_kinds or _missing("queue_kinds"), word_count=word_count or _missing("word_count"))
+        queue_kinds=queue_kinds or _missing("queue_kinds"), word_count=word_count or _missing("word_count"),
+        arrangement=lambda: StudyPathRuntimeMixin.study_arrangement(app))
 
 
 def run_action(app, action: HomeAction, widget=None, *, open_word_drill: Callable[[], object]):
@@ -108,6 +109,10 @@ def run_action(app, action: HomeAction, widget=None, *, open_word_drill: Callabl
         from .study_path_runtime import StudyPathRuntimeMixin
         StudyPathRuntimeMixin.study_arrangement(app).focus.clear()
         return app.refresh_home_actions()
+    if kind is HomeActionKind.EXTRA:
+        # 加练… (design 12 E9): the page 加练 with its parts.
+        from .extra_practice_runtime import open_extra
+        return open_extra(app)
     if kind is HomeActionKind.CHOOSE_ORIENTATION:
         # The never-chosen card (design 12 UI5): store the choice at once, one re-arrangement, then the home.
         from .arrangement.model import Orientation

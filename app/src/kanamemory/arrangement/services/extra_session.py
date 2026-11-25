@@ -67,8 +67,10 @@ class ExtraSession:
     """The extra-practice mode of one learner store: start/stop, available(), next() and their memory."""
 
     def __init__(self, states: ExtraStates, *, new_sitting: Callable[[], PracticeSitting], new_deck: NewDeck,
-                 refresh: timedelta = REFRESH, probe_reuse: timedelta = PROBE_REUSE):
+                 refresh: timedelta = REFRESH, probe_reuse: timedelta = PROBE_REUSE,
+                 on_stop: Callable[[], object] = lambda: None):
         self._states = states
+        self._on_stop = on_stop   # the assembly: forget the extra-practice part (design 12 E9)
         self._new_sitting, self._new_deck = new_sitting, new_deck
         self._refresh, self._probe_reuse = refresh, probe_reuse
         self._probe: tuple[datetime, list[ExtraEntry]] | None = None
@@ -92,6 +94,11 @@ class ExtraSession:
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def states(self) -> ExtraStates:
+        """The pool reader (the page 加练 counts its parts from one read of it)."""
+        return self._states
 
     @property
     def sitting(self) -> PracticeSitting | None:
@@ -135,9 +142,21 @@ class ExtraSession:
             self._reported = frozenset(entry.ref.key for entry in due)
 
     def stop(self) -> None:
-        """Switch the mode off and forget everything of it."""
+        """Switch the mode off and forget everything of it (also its part, through ``on_stop``)."""
         self._probe = None
         self._clear()
+        self._on_stop()
+
+    def learned(self, now: datetime) -> bool:
+        """Whether some learned state is in the pool at ``now`` (the home page's 加练… entry, design 12 E9).
+
+        Uses the button's read (available(); reused for ``probe_reuse``) while the mode is off.
+        """
+        if self._active:
+            return bool(self._pool)
+        if not (self._probe is not None and timedelta(0) <= now - self._probe[0] < self._probe_reuse):
+            self._probe = (now, list(self._states.read(now)))
+        return bool(self._probe[1])
 
     @property
     def batch_unchecked(self) -> bool:

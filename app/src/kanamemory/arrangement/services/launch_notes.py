@@ -1,5 +1,7 @@
 """LaunchNotes: what this launch has already shown once (design 12 B10, UI1).
 
+Since design 12 E9 the page 加练 is shown at every entry (with its parts), so it is no longer a launch note.
+
 Memory only, one per store object (StoreArrangement), so it is forgotten at
 the next launch and when the store object is replaced (restore, reset). No
 storage, no clock, no rule: the presenter decides whether a prompt is due;
@@ -9,13 +11,11 @@ from __future__ import annotations
 
 
 class LaunchNotes:
-    """Once-per-launch facts: the B10 first-continue prompt, the fresh-install orientation screen and
-    the page 加练 before the first extra practice (UI7)."""
+    """Once-per-launch facts: the B10 first-continue prompt and the fresh-install orientation screen."""
 
     def __init__(self):
         self._continue_prompted = False
         self._orientation_shown = False
-        self._extra_explained = False
 
     def may_prompt_continue(self) -> bool:
         """True until the B10 prompt before the first "继续学习" has been shown in this launch."""
@@ -32,11 +32,3 @@ class LaunchNotes:
     def showed_orientation(self) -> None:
         """Record that the orientation screen was shown for a fresh install in this launch."""
         self._orientation_shown = True
-
-    def may_explain_extra(self) -> bool:
-        """True until the page 加练 before the first start of extra practice has been shown in this launch (UI7)."""
-        return not self._extra_explained
-
-    def explained_extra(self) -> None:
-        """Record that the page 加练 was shown (whatever the learner pressed)."""
-        self._extra_explained = True

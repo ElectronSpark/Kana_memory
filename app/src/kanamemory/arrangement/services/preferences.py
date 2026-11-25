@@ -1,8 +1,8 @@
-"""ArrangementPreferences: reading and writing the learner's orientation and focus (design 12 B1, H, 10).
+"""ArrangementPreferences: reading and writing the learner's orientation, focus and review filter (design 12 B1, H, 10).
 
 Pure application layer: the store is any object with the existing public
 ``get_setting(key, default)`` / ``set_setting(key, value)`` methods; no SQL.
-A missing key means THOROUGH and no focus. A stored value of the wrong shape
+A missing key means THOROUGH, no focus, and no review filter (H8, H9). A stored value of the wrong shape
 raises ValueError on read, like the comparable settings (new_dispatch_v1,
 explicit_learning_start_v1), instead of being silently replaced: only a
 direct database edit can store one, because writes and restores validate.
@@ -12,29 +12,31 @@ reached through kana_depth() / apply_kana_depth(level).
 """
 from __future__ import annotations
 
-from ..model import Focus, Orientation
+from ..model import Focus, Orientation, ReviewFilterSetting
 from ..rules.depth import KanaDepth
-from ..settings import (FOCUS_KEY, ORIENTATION_KEY, focus_of, focus_value, orientation_of, orientation_value,
-                        validate_focus, validate_orientation)
+from ..settings import (FOCUS_KEY, ORIENTATION_KEY, REVIEW_FILTER_KEY, focus_of, focus_value, orientation_of,
+                        orientation_value, review_filter_of, review_filter_value, validate_focus, validate_orientation,
+                        validate_review_filter)
 from .kana_depth import KanaDepthSetting
 
 _MISSING = object()
 
-# The two keys and their strict validators: the backup validation chain and the
-# feedback settings snapshot use these (design 12 section 10 (1), (5)).
-_VALIDATORS = {ORIENTATION_KEY: validate_orientation, FOCUS_KEY: validate_focus}
+# The three keys and their strict validators: the backup validation chain and the
+# feedback settings snapshot use these (design 12 section 10 (1), (5), (7)).
+_VALIDATORS = {ORIENTATION_KEY: validate_orientation, FOCUS_KEY: validate_focus,
+               REVIEW_FILTER_KEY: validate_review_filter}
 KEYS = tuple(_VALIDATORS)
 
 
 def validate_stored(key: str, value) -> dict:
-    """Strictly validate a stored value of one of the two keys; raise ValueError otherwise."""
+    """Strictly validate a stored value of one of the three keys; raise ValueError otherwise."""
     if key not in _VALIDATORS:
         raise ValueError("Not a study arrangement setting")
     return _VALIDATORS[key](value)
 
 
 class ArrangementPreferences:
-    """The orientation and focus of one learner store."""
+    """The orientation, focus and review filter of one learner store."""
 
     def __init__(self, store):
         self._store = store
@@ -74,6 +76,18 @@ class ArrangementPreferences:
         value = validate_focus(focus_value(focus))
         self._store.set_setting(FOCUS_KEY, value)
         return focus_of(value)
+
+    def review_filter(self) -> ReviewFilterSetting:
+        """只做范围内 and 暂不复习 (design 12 H8, H9); off and nothing paused when the key is missing."""
+        return review_filter_of(self._read(REVIEW_FILTER_KEY))
+
+    def set_review_filter(self, setting: ReviewFilterSetting) -> ReviewFilterSetting:
+        """Store the learner's switches; anything but a valid ReviewFilterSetting raises ValueError and writes nothing."""
+        if not isinstance(setting, ReviewFilterSetting):
+            raise ValueError("A ReviewFilterSetting is required")
+        value = validate_review_filter(review_filter_value(setting))
+        self._store.set_setting(REVIEW_FILTER_KEY, value)
+        return review_filter_of(value)
 
     def kana_depth(self) -> KanaDepth | None:
         """The level the stored mixed kind switches match, None when they match no preset (D1)."""

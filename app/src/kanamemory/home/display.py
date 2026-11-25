@@ -17,7 +17,8 @@ from typing import NamedTuple
 from ..arrangement.display import FocusRowModel, HomeRowsModel
 from ..arrangement.model import RouteFacts
 from ..home_counts import next_review_text, review_backlog_hint, show_next_review
-from .model import CANCEL_FOCUS, OPEN_ORIENTATION, HomeAction, HomeActionKind
+from ..arrangement.display import EXTRA_ENTRY, SCOPE_DONE_HINT, SCOPE_DONE_TITLE
+from .model import CANCEL_FOCUS, OPEN_EXTRA, OPEN_ORIENTATION, HomeAction, HomeActionKind
 
 # The primary card: the heading, the hint and the primary button.
 HEADING_WORK = "接着学"
@@ -112,6 +113,8 @@ class HomeModel:
     note_add: HomeAction | None
     open_orientation: HomeAction = OPEN_ORIENTATION
     cancel_focus: HomeAction = CANCEL_FOCUS
+    paused_line: str | None = None       # design 12 H10: 暂不复习 N 个部分，其中到期 M 题
+    extra_entry: HomeButton | None = None   # design 12 E9: 加练… while a learned state exists
 
 
 def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFacts, no_new_content: bool,
@@ -119,7 +122,8 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
             instruction: int, blocked_content: int, blocked_material: int, blocked_input: int | None,
             blocked_kana: int, next_section: tuple[str, str] | None, others: Sequence[OtherRoute], orphans: int,
             libraries_page: bool, word_count: int, completed: int, total: int, added: int, partial: int | None,
-            next_change_at: datetime | None) -> HomeModel:
+            next_change_at: datetime | None, scope_done: bool = False, paused_line: str | None = None,
+            extra_entry: bool = False) -> HomeModel:
     """The home page from the numbers one refresh read (HomeOverviewService.overview).
 
     ``route_id``: the current route (CORE_ROUTE_ID for the core route), ``core``
@@ -128,6 +132,9 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
     ``others``: the other routes to list; ``orphans``: enrolled content of a
     disabled library, listed only when ``libraries_page``; ``completed``,
     ``total``, ``added`` and ``partial``: the overview's required sections.
+    ``scope_done``: 只做范围内 acts and nothing inside is left (design 12 H8, H10): the primary button says
+    范围内的都做完了 and goes to 继续学习's page of that name instead of offering work it will not serve.
+    ``paused_line``: H10's 暂不复习 line; ``extra_entry``: a learned state exists (加练…, E9).
     """
     lines = []
     if ready:
@@ -144,7 +151,9 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
         lines.append(INPUT_BLOCKED.format(count=blocked_input))
     if blocked_kana:
         lines.append(KANA_GATED.format(count=blocked_kana))
-    if has_work:
+    if scope_done:
+        caption, hint, then = SCOPE_DONE_TITLE, SCOPE_DONE_HINT, HomeAction(HomeActionKind.CONTINUE)
+    elif has_work:
         caption, hint, then = CONTINUE, HINT_JOINER.join(lines) or GO_ON, HomeAction(HomeActionKind.CONTINUE)
     elif next_section:
         caption, hint = START_NEXT, next_section[1]
@@ -185,4 +194,5 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
         next_change_at=next_change_at,
         # B10's note names the focus scope's route when its section lies there (H6), else none: the current route.
         note_add=(HomeAction(HomeActionKind.ADD_SECTIONS, section_id=note.section_id, route_id=note.route_id or route_id)
-                  if note is not None else None))
+                  if note is not None else None),
+        paused_line=paused_line, extra_entry=HomeButton(EXTRA_ENTRY, OPEN_EXTRA) if extra_entry else None)

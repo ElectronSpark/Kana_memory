@@ -70,6 +70,31 @@ NO_SCOPE_TITLE = "不设范围"
 SCOPE_GONE_TITLE = "所选范围"
 SCOPE_GONE_TEXT = "已停用或不存在，暂按没有范围安排"
 CANCEL_FOCUS = "取消重点"
+# The learner's two switches (design 12 H8, H9) on the focus part; the off state of 只做范围内 is SCOPE_TEXT's 先做.
+FIRST_TITLE = "先做范围内"
+ONLY_TITLE = "只做范围内"
+ONLY_TEXT = "打开后，“继续学习”和加练只出范围内的内容；范围外到期的照常累计，随时可以关掉。"
+ONLY_ON = "改为只做范围内"
+ONLY_OFF = "改为先做范围内"
+PAUSED_HEADING = "暂不复习"
+PAUSED_TEXT = ("列在这里的部分不出题：复习、新课和加练都不出。学习记录和到期时间不变，恢复后照常安排。"
+               "被暂不复习的内容如果是别的课的前置，那些课会等它。")
+PAUSED_NONE = "现在没有暂不复习的部分。"
+PAUSED_RESTORE = "恢复"
+PAUSED_ADD = "添加…"
+PAUSED_FULL = "最多 {count} 个部分；先恢复一个再添加。"
+PAUSE_CHOOSER_TEXT = "选一个部分暂不复习："
+PAUSE_PICK = "暂不复习这一部分"
+PAUSE_BACK = "返回"
+# H8's end page, H10's two apart lines and the home's 加练… entry (E9).
+SCOPE_DONE_TITLE = "范围内的都做完了"
+SCOPE_DONE_OUTSIDE = "范围外到期 {count} 题"
+SCOPE_DONE_EXTRA = "继续加练（范围内）"
+SCOPE_DONE_LIFT = "做范围外的"
+SCOPE_DONE_BACK = "回到今日"
+SCOPE_DONE_HINT = "只做范围内：范围外的到期照常累计，不出题。"
+PAUSED_LINE = "暂不复习 {parts} 个部分，其中到期 {count} 题"
+EXTRA_ENTRY = "加练…"
 DROP_SCOPE = "改为不设范围"
 SET_FOCUS = "设为重点"
 FOCUS_SET_TEXT = "这是现在的学习重点。"
@@ -196,6 +221,7 @@ class FocusRowModel:
     cancel: str = CANCEL_FOCUS
     outside_due: int | None = None
     outside_due_line: str | None = None
+    only: bool = False   # 只做范围内 acts (H8): the line names it and outside_due_line is H10's 范围外到期 N 题
 
 
 @dataclass(frozen=True)
@@ -224,6 +250,70 @@ class ScopeOption:
 
     scope: FocusScope | None
     title: str
+
+
+@dataclass(frozen=True)
+class OnlySwitchModel:
+    """只做范围内 on the focus part (H8), as a pair: 先做范围内 (SCOPE_TEXT) and 只做范围内 (ONLY_TEXT), each with
+    its sentence; the stored one says 当前使用, the other has its button (stored at once). ``acts`` False:
+    the stored scope does not resolve, so neither acts (the part's scope line says so)."""
+
+    on: bool
+    acts: bool = True
+    first_title: str = FIRST_TITLE
+    first_text: str = SCOPE_TEXT
+    only_title: str = ONLY_TITLE
+    only_text: str = ONLY_TEXT
+    turn_on: str = ONLY_ON
+    turn_off: str = ONLY_OFF
+    in_use: str = IN_USE
+
+
+@dataclass(frozen=True)
+class PausedRow:
+    """One scope listed under 暂不复习 with its title (the scope line's wording when it no longer resolves)."""
+
+    scope: FocusScope
+    title: str
+    restore: str = PAUSED_RESTORE
+
+
+@dataclass(frozen=True)
+class PausedModel:
+    """The section 暂不复习 (H9): the note, the listed scopes each with 恢复, and 添加… (``can_add`` False at the
+    limit, then ``full_text``)."""
+
+    rows: tuple[PausedRow, ...] = ()
+    can_add: bool = True
+    heading: str = PAUSED_HEADING
+    text: str = PAUSED_TEXT
+    none_text: str = PAUSED_NONE
+    add: str = PAUSED_ADD
+    full_text: str | None = None
+
+
+@dataclass(frozen=True)
+class PauseChooserModel:
+    """添加… under 暂不复习: the focus scope's choices (routes, libraries, families, the stored scope) not paused yet."""
+
+    options: tuple[ScopeOption, ...]
+    header: str = PAUSED_HEADING
+    text: str = PAUSE_CHOOSER_TEXT
+    pick: str = PAUSE_PICK
+    back: str = PAUSE_BACK
+
+
+@dataclass(frozen=True)
+class ScopeDoneModel:
+    """H8's end page 范围内的都做完了: ``outside_line`` (None at 0), 继续加练（范围内） only when something inside can
+    be practised (``extra`` None otherwise), 做范围外的 and 回到今日."""
+
+    outside_line: str | None
+    extra: str | None
+    title: str = SCOPE_DONE_TITLE
+    hint: str = SCOPE_DONE_HINT
+    lift: str = SCOPE_DONE_LIFT
+    back: str = SCOPE_DONE_BACK
 
 
 @dataclass(frozen=True)
@@ -262,6 +352,8 @@ class FocusModel:
     scope_text: str = SCOPE_TEXT
     change_text: str = CHANGE_TEXT
     drop_scope: str = DROP_SCOPE
+    only_switch: OnlySwitchModel | None = None   # only while a scope is stored (H8)
+    paused: PausedModel | None = None            # the section 暂不复习 (H9)
 
     @staticmethod
     def offers_tilts(mode: Orientation) -> bool:
@@ -458,12 +550,11 @@ class DeckEndModel:
     finish_caption: str = DECK_FINISH
 
 
-# Extra practice (design 12 E1, E5, UI7): the button on the end and wait pages of 继续学习, the once-per-launch
+# Extra practice (design 12 E1, E5, UI7, E9): the button on the end and wait pages of 继续学习, the page 加练 with
 # page before the first start, and the deck's header and leave button while the mode is on.
 EXTRA_BUTTON = "继续加练"
 EXTRA_HEADER = "加练"
 EXTRA_INTRO_TEXT = "这些题还没到期。24 小时内评过分的只算练习；同一题连着答错两次，它的下次复习会提前一点。"
-EXTRA_START = "开始加练"
 EXTRA_BACK = "回到今日"
 EXTRA_END = "结束加练"
 EXTRA_DECK_NOTE = "这些题 24 小时内已经评过分：只算练习，不评分。"
@@ -477,11 +568,29 @@ class ExtraButtonModel:
     caption: str = EXTRA_BUTTON
 
 
-@dataclass(frozen=True)
-class ExtraIntroModel:
-    """The page 加练 before the first start of extra practice in a launch (UI7)."""
+PART_TITLES = {"today": "今天新学的", "recent": "最近 14 天新学的", "scope": "学习重点范围内", "all": "全部"}
+PART_COUNT = "{title} · 现在可练 {count} 个"
+PART_EMPTY = "{title} · 现在没有可练的"
 
+
+@dataclass(frozen=True)
+class PartOption:
+    """One part on the page 加练 (E9): its caption with the count; ``startable`` False at 0 (shown, no button)."""
+
+    part: str
+    caption: str
+    count: int
+
+    @property
+    def startable(self) -> bool:
+        return self.count > 0
+
+
+@dataclass(frozen=True)
+class ExtraPartsModel:
+    """The page 加练 (E9): the explanation, the parts with their counts, 回到今日."""
+
+    parts: tuple[PartOption, ...]
     header: str = EXTRA_HEADER
     text: str = EXTRA_INTRO_TEXT
-    start_caption: str = EXTRA_START
     back_caption: str = EXTRA_BACK

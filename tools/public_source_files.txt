@@ -65,6 +65,7 @@ tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
 tests/test_probe_first.py
 tests/test_arrangement_recent.py
+tests/test_arrangement_review_filter.py
 tests/test_probe_form_and_guide_pick.py
 tests/test_read_only_lessons.py
 tests/test_reading_form_answers.py
@@ -162,6 +163,7 @@ app/src/kanamemory/arrangement/rules/depth.py
 app/src/kanamemory/arrangement/rules/reinforce.py
 app/src/kanamemory/arrangement/rules/recent.py
 app/src/kanamemory/arrangement/rules/consolidation.py
+app/src/kanamemory/arrangement/rules/review_filter.py
 app/src/kanamemory/arrangement/services/__init__.py
 app/src/kanamemory/arrangement/services/dispatch.py
 app/src/kanamemory/arrangement/services/preferences.py
@@ -178,6 +180,8 @@ app/src/kanamemory/arrangement/services/queue_practice.py
 app/src/kanamemory/arrangement/services/extra_session.py
 app/src/kanamemory/arrangement/services/extra_presenter.py
 app/src/kanamemory/arrangement/services/consolidation.py
+app/src/kanamemory/arrangement/services/review_filter.py
+app/src/kanamemory/arrangement/services/extra_parts.py
 app/src/kanamemory/arrangement/sources/__init__.py
 app/src/kanamemory/arrangement/sources/candidates.py
 app/src/kanamemory/arrangement/sources/deck_course.py
@@ -205,6 +209,8 @@ app/src/kanamemory/arrangement/ui/section_note.py
 app/src/kanamemory/arrangement/ui/practice_deck_page.py
 app/src/kanamemory/arrangement/ui/practice_deck_flow.py
 app/src/kanamemory/arrangement/ui/extra_practice.py
+app/src/kanamemory/arrangement/ui/scope_done.py
+app/src/kanamemory/arrangement/ui/pause_chooser.py
 app/src/kanamemory/audio_overview.py
 app/src/kanamemory/legacy_backup_envelope.py
 app/src/kanamemory/backup_stage.py

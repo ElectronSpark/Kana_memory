@@ -53,7 +53,7 @@ ends and the page is shown. A failed read when entering or after a deck
 alerts and leaves the page as it is, so pressing again retries.
 """
 from .arrangement.display import EXTRA_NOTHING
-from .arrangement.model import Arranged, EarlyCourse, EarlyKana, Practice
+from .arrangement.model import Arranged, EarlyCourse, EarlyKana, Part, Practice
 
 # Steps carried out one inside another without a question page in between. The session's own loop guard
 # (states handed back unchanged are set aside) ends such a chain long before; this only bounds the stack.
@@ -185,20 +185,33 @@ class ExtraPracticeFlow:
         return extra_button_rows(self.presenter.button(available), on_start=self.enter)
 
     def enter(self):
-        """继续加练: the page 加练 first once per launch, then the mode."""
-        model = self.presenter.intro()
-        if model is None:
-            return self.start()
-        self.presenter.showed_intro()
-        from .arrangement.ui.extra_practice import extra_intro_page
-        self.app.screen("extra_intro", model.header, *extra_intro_page(model, on_start=self.start,
-                                                                        on_back=self.app.leave_learning))
-
-    def start(self):
-        """The mode is on, then exactly what an Arranged step does: the dispatch serves what it can first."""
-        from .practice_round import restart
+        """继续加练 and the home page's 加练…: the page 加练 with its parts (design 12 E9), every time."""
+        from .arrangement.ui.extra_practice import extra_parts_page
+        from .study_path_runtime import StudyPathRuntimeMixin
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self.app)
         try:
-            self.session.start(_now())
+            counts = arrangement.extra_parts.counts(_now())
+        except Exception as exc:   # a busy database: the page stays
+            _record(exc)
+            self.app.alert(BUSY)
+            return
+        model = arrangement.presenter.extra_parts(counts)
+        self.app.screen("extra_intro", model.header, *extra_parts_page(
+            model, on_start=lambda part: self.start(Part(part)), on_back=self.app.leave_learning))
+
+    def start(self, part=None):
+        """The mode is on with ``part`` (None or Part.ALL: everything, as before E9), then exactly what an Arranged
+        step does: the dispatch serves what it can first, under the filter with the part (design 12 E9)."""
+        from .practice_round import restart
+        from .study_path_runtime import StudyPathRuntimeMixin
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self.app)
+        try:
+            now = _now()
+            members = None if part in (None, Part.ALL) else arrangement.extra_parts.members(part, now)
+            # stop() forgets an earlier read of the pool and an earlier part; the part acts from the first read.
+            self.session.stop()
+            arrangement.review_filter.set_part(members)
+            self.session.start(now)
             restart(self.app.store, lane="main")
         except Exception as exc:   # a busy database: the mode stays off and the page stays
             self.session.stop()
@@ -320,6 +333,30 @@ def extra_button_rows(app):
     if not _main_lane(app):
         return []
     return ExtraPracticeFlow(app).button_rows()
+
+
+def open_extra(app):
+    """The home page's 加练… (design 12 E9): the page 加练 with its parts (the main lane's own apps only)."""
+    if not _main_lane(app):
+        return None
+    return ExtraPracticeFlow(app).enter()
+
+
+def extra_available(app):
+    """Whether some state the review filter allows can be practised now (H8's 继续加练（范围内）); False on a failed read."""
+    if not _main_lane(app):
+        return False
+    session = _store_session(app)
+    try:
+        return session is not None and not session.active and session.available(_now())
+    except Exception as exc:
+        _record(exc)
+        return False
+
+
+def start_extra(app):
+    """继续加练（范围内） on H8's page: extra practice with everything the filter allows (no part)."""
+    return ExtraPracticeFlow(app).start()
 
 
 def take_over(app):

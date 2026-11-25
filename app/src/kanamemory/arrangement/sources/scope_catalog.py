@@ -1,7 +1,8 @@
 """StoreScopeCatalog: a focus scope as content, title, next section and choices (design 12 H1, H3, H6, B10, UI6).
 
 Implements ports.ScopeCatalog over one learner store. ``contents(scope)``
-is the scope's own members plus their enrolled prerequisites, as a set of
+is the scope's own members plus their enrolled prerequisites (``members(scope)``:
+without them, design 12 H9), as a set of
 lesson content ids and kana entry ids ("kana:<id>:<script>", rules/focus.
 kana_member); None when the route, node or library it names is gone or
 disabled, and then everything behaves as without a scope (the stored
@@ -82,6 +83,10 @@ class StoreScopeCatalog:
             members = KINDS[scope.kind].members(scope.id, reads)
             return None if members is None else members | enrolled_prerequisites(members, reads)
         return self._cached("contents", scope, compute)
+
+    def members(self, scope: FocusScope) -> frozenset[str] | None:
+        """The scope's own members, without their prerequisites (design 12 H9); None when it does not resolve."""
+        return self._cached("members", scope, lambda reads: KINDS[scope.kind].members(scope.id, reads))
 
     def title(self, scope: FocusScope) -> str | None:
         """The scope's name to show (route, node, library or family title); None when it does not resolve."""

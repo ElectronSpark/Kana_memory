@@ -43,6 +43,7 @@ class HomeActionKind(Enum):
     ORIENTATION = "orientation"
     CANCEL_FOCUS = "cancel_focus"
     CHOOSE_ORIENTATION = "choose_orientation"
+    EXTRA = "extra"
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class HomeAction:
     CANCEL_FOCUS  the focus service's clear(), then the home redraws
     CHOOSE_ORIENTATION  store ``orientation`` (the never-chosen card's two buttons) and re-arrange the
                   main round once (StoreArrangement.choose_orientation), then the home redraws
+    EXTRA         加练…: the page 加练 with its parts (design 12 E9; extra_practice_runtime.open_extra)
     """
 
     kind: HomeActionKind
@@ -77,6 +79,7 @@ class HomeAction:
 
 
 OPEN_ORIENTATION = HomeAction(HomeActionKind.ORIENTATION)
+OPEN_EXTRA = HomeAction(HomeActionKind.EXTRA)
 CANCEL_FOCUS = HomeAction(HomeActionKind.CANCEL_FOCUS)
 
 

@@ -23,7 +23,11 @@ States inside their steps are read too: they are never offered (rules/extra
 drops them), but their due is what "arranged work has come due" watches.
 ``in_scope`` comes from the focus scope (``scope``: lesson ids and kana entry
 ids "kana:<id>:<script>", None for no scope). A point read again goes through
-sources/states.StoreStates, the same reader the credit rule uses.
+sources/states.StoreStates, the same reader the credit rule uses. The
+learner's review filter (``serve(now)``, ReviewFilterService.current: 只做范围内,
+暂不复习 and the extra-practice part, design 12 H10, E9) decides which states the
+pool holds at all; ``read(now, with_part=False)`` reads it without the part
+(the 加练 page counts each part from that read).
 """
 from __future__ import annotations
 
@@ -34,8 +38,9 @@ from datetime import datetime
 
 from ...domain import WORD_SKILLS
 from ...kana_question_policy import direction_allowed
-from ..model import ExtraEntry, StateRef
+from ..model import ExtraEntry, Lane, StateRef
 from ..rules.focus import kana_member
+from ..rules.review_filter import allows
 from .states import StoreStates, state_view
 
 _FOCUS = object()   # read the focus scope through the injected callable
@@ -45,14 +50,18 @@ class StoreExtraStates:
     """ports.ExtraStates over one StudyStore (and its LearningStore)."""
 
     def __init__(self, store, *, kana_kinds: Callable[[], Iterable[str]], course_kinds: Callable[[], Iterable[str]],
-                 scope: Callable[[], frozenset[str] | None] = lambda: None, learning=None):
+                 scope: Callable[[], frozenset[str] | None] = lambda: None, learning=None,
+                 serve: Callable[..., object] = lambda now, **kwargs: None):
         self._store = store
         self._kana_kinds, self._course_kinds, self._scope = kana_kinds, course_kinds, scope
+        self._serve = serve
         self._states = StoreStates(store, learning)
 
-    def read(self, now: datetime) -> list[ExtraEntry]:
+    def read(self, now: datetime, *, with_part: bool = True) -> list[ExtraEntry]:
         scope = self._scope()
-        return [*self.kana(now, scope), *self.course(now, scope)]
+        serve = self._serve(now, with_part=with_part)
+        entries = [*self.kana(now, scope), *self.course(now, scope)]
+        return entries if serve is None else [entry for entry in entries if allows(serve, entry_member(entry))]
 
     def reread(self, entry: ExtraEntry, now: datetime) -> ExtraEntry | None:
         view = self._states.view(entry.ref, now)
@@ -101,3 +110,9 @@ class StoreExtraStates:
                               in_scope=scope is None or row["content_id"] in scope, early=early)
             result.append(ExtraEntry(ref, view))
         return result
+
+
+def entry_member(entry: ExtraEntry) -> str:
+    """The scope member of a pool entry: the lesson of a course unit, the kana entry of a kana state."""
+    ref = entry.ref
+    return kana_member(ref.content_id, ref.script) if ref.lane is Lane.KANA else ref.content_id

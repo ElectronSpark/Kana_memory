@@ -17,6 +17,7 @@ from datetime import datetime
 
 from ..model import ConsolidationFacts, DeckItem
 from ..rules.consolidation import deck_due, deck_order, is_ready, paused, ready_at
+from ..rules.review_filter import allows
 from .deck_presenter import DeckPresenter
 
 
@@ -24,20 +25,27 @@ class Consolidation:
     """When "继续学习" offers a consolidation deck, and the deck itself."""
 
     def __init__(self, facts: Callable[[datetime], Sequence[ConsolidationFacts]],
-                 new_deck: Callable[[Sequence[DeckItem]], object]):
+                 new_deck: Callable[[Sequence[DeckItem]], object], *, serve: Callable[[datetime], object] = lambda now: None):
         self._facts = facts
         self._new_deck = new_deck
+        self._serve = serve
         self._left_at: datetime | None = None
+
+    def _served(self, now: datetime) -> list[ConsolidationFacts]:
+        """The facts of the states the review filter of ``now`` allows (a course state's member is its lesson)."""
+        facts = list(self._facts(now))
+        serve = self._serve(now) if facts else None
+        return facts if serve is None else [item for item in facts if allows(serve, item.ref.content_id)]
 
     def ready(self, now: datetime) -> list[ConsolidationFacts]:
         """The states whose next repeat is ready at ``now``."""
-        return [item for item in self._facts(now) if is_ready(item, now)]
+        return [item for item in self._served(now) if is_ready(item, now)]
 
     def due_deck(self, now: datetime, *, nothing_else: bool = False) -> tuple[DeckItem, ...]:
         """The items of the deck to offer now, or () (none due, or the leave pause)."""
         if paused(self._left_at, now):
             return ()
-        facts = list(self._facts(now))
+        facts = self._served(now)
         ready = [ready_at(item, now) for item in facts if is_ready(item, now)]
         if not deck_due(ready, now, nothing_else=nothing_else):
             return ()

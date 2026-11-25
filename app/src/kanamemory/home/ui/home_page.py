@@ -39,6 +39,8 @@ def draw_home(model: HomeModel, *, action_slot, secondary_slot, stats_label, on_
                       on_add_next=lambda section_id: on_action(model.note_add, None))
     card += focus_rows(model.focus, on_open_orientation=open_orientation,
                        on_cancel=lambda: on_action(model.cancel_focus, None))
+    if model.paused_line is not None:
+        card.append(u.label(model.paused_line, size=13, color=u.MUTED, margin_bottom=2))
     column = []
     card += [u.label(model.heading, size=22, bold=True, color=u.GREEN),
              u.label(model.hint, size=14, color=u.MUTED),
@@ -56,6 +58,8 @@ def draw_home(model: HomeModel, *, action_slot, secondary_slot, stats_label, on_
     if model.orphans is not None:
         column.append(u.button(model.orphans.caption, press(model.orphans.action), multiline=True))
     column.append(u.button(model.word_drill.caption, press(model.word_drill.action), multiline=True))
+    if model.extra_entry is not None:
+        column.append(u.button(model.extra_entry.caption, press(model.extra_entry.action), multiline=True))
     action_slot.clear()
     secondary_slot.clear()
     action_slot.add(*card)

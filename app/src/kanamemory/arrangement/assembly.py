@@ -13,7 +13,9 @@ and the misses held for the deck at the end of a batch; practice_deck builds
 a deck over this store), and extra practice (ExtraSession: the 加练 mode,
 its pool of learned states read through sources/extra_states and its
 sitting), and the consolidation deck of what was taught today
-(Consolidation over sources/consolidation, design 12 N5). Built lazily by its user and replaced together with the store
+(Consolidation over sources/consolidation, design 12 N5), and the learner's review filter (ReviewFilterService:
+只做范围内, 暂不复习 and the extra-practice part as one filter that the dispatch, the counts, extra practice's pool
+and the consolidation deck read, design 12 H8-H10, E9). Built lazily by its user and replaced together with the store
 object (a restore or reset swaps the connection): the clock's memory and
 the extra-practice mode belong to one store.
 """
@@ -25,12 +27,14 @@ from dataclasses import dataclass
 from .services import ArrangementPreferences, ArrangementPresenter, FocusService, LaunchNotes, ShareDispatcher
 from .model import DeckItem
 from .services.consolidation import Consolidation
+from .services.extra_parts import ExtraParts
 from .services.extra_session import ExtraSession
 from .services.kana_depth import KanaDepthSetting
 from .services.practice import PracticeCredit
 from .services.practice_deck import PracticeDeck
 from .services.practice_sitting import PracticeSitting
 from .services.queue_practice import QueuePractice
+from .services.review_filter import ReviewFilterService
 from .services.probe_memo import ProbeMemo
 from .sources.consolidation import StoreConsolidation
 from .sources.deck_course import CourseDeckLane
@@ -41,6 +45,7 @@ from .sources.events import StoreEventSource
 from .sources.extra_states import StoreExtraStates
 from .sources.practice_exposure import ConsolidationExposure, StorePracticeExposure
 from .sources.practice_moves import StorePracticeMoves
+from .sources.recent import lesson_firsts
 from .sources.scope_catalog import StoreScopeCatalog
 from .sources.states import StoreStates
 
@@ -60,13 +65,16 @@ class StoreArrangement:
     practice: QueuePractice      # the kana queue's practice-only answers and held deck items (E3, E4)
     extra: ExtraSession          # extra practice (加练), memory only (E1-E8)
     consolidation: Consolidation   # the consolidation deck of what was taught today (section 21, N5)
+    review_filter: ReviewFilterService   # 只做范围内, 暂不复习 and the extra-practice part (H8-H10, E9)
+    extra_parts: ExtraParts       # the page 加练's parts and their counts (E9)
 
     @classmethod
     def for_store(cls, store, *, routes: Callable[[], object] | None = None,
                   repository: Callable[[], object] | None = None,
                   kana_kinds: Callable[[], Iterable[str]] | None = None,
                   course_kinds: Callable[[], Iterable[str]] | None = None,
-                  japanese_input: Callable[[], bool] | None = None) -> StoreArrangement:
+                  japanese_input: Callable[[], bool] | None = None,
+                  catalog: StoreScopeCatalog | None = None) -> StoreArrangement:
         """``routes``: a callable giving the app's current StudyPathService (route and node scopes need it).
 
         Without it route and node scopes resolve to None (as if no scope
@@ -77,22 +85,30 @@ class StoreArrangement:
         main lane uses now, the enabled course kinds and whether the system
         Japanese input is on, as the app has them (asked by extra practice at
         each pool read and deck); without them the stored preferences decide
-        and no system input is assumed.
+        and no system input is assumed. ``catalog``: the scope catalogue (a ports.ScopeCatalog; default the
+        store's StoreScopeCatalog over ``routes``), one for the focus and the review filter alike.
         """
         preferences = ArrangementPreferences(store)
         events = StoreEventSource(store)
         dispatcher = ShareDispatcher(preferences, events)
         launch_notes = LaunchNotes()
-        catalog = StoreScopeCatalog(store, routes)
+        catalog = catalog if catalog is not None else StoreScopeCatalog(store, routes)
         focus = FocusService(preferences, catalog, restart=lambda: _restart_main_round(store))
+        review_filter = ReviewFilterService(preferences, focus, study_day=lambda at: store.study_day(at).isoformat(),
+                                            restart=lambda: _restart_main_round(store))
+        # The extra-practice part lives as long as the mode: every stop() forgets it (design 12 E9).
+        extra = extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
+                              course_kinds=course_kinds, japanese_input=japanese_input, serve=review_filter.current,
+                              on_stop=lambda: review_filter.set_part(None))
+        parts = ExtraParts(lambda now: extra.states.read(now, with_part=False), lambda: lesson_firsts(store),
+                           study_day=lambda at: store.study_day(at).isoformat(), scope=focus.scope_contents)
         return cls(store, preferences, events, dispatcher, ProbeMemo(), launch_notes,
                    ArrangementPresenter(store, preferences, events, dispatcher, launch_notes, focus=focus,
-                                        due=DueReviews(store)),
-                   catalog, focus, practice_credit(store), queue_practice(store, repository=repository),
-                   extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
-                                 course_kinds=course_kinds, japanese_input=japanese_input),
+                                        due=DueReviews(store), review_filter=review_filter),
+                   catalog, focus, practice_credit(store), queue_practice(store, repository=repository), extra,
                    consolidation(store, repository=repository, course_kinds=course_kinds,
-                                 japanese_input=japanese_input))
+                                 japanese_input=japanese_input, serve=review_filter.current),
+                   review_filter, parts)
 
     def serves(self, store) -> bool:
         return self.store is store
@@ -153,6 +169,21 @@ class StoreArrangement:
         """The focus scope's content for the scheduling (one settings read without a scope); None for none."""
         return self.focus.scope_contents()
 
+    def serving(self, serve):
+        """The block in which this store's lanes read ``serve`` (services.review_filter.serving, design 12 H10)."""
+        from .services.review_filter import serving
+        return serving(self.store, serve)
+
+    def serving_now(self):
+        """The review filter of the running "继续学习" or home refresh on this store, None outside one."""
+        from .services.review_filter import serving_filter
+        return serving_filter(self.store)
+
+    def serve_filter(self, now):
+        """The review filter of ``now`` for one "继续学习" (design 12 H10): the lift lasts while the sitting does."""
+        self.review_filter.touch(now)
+        return self.review_filter.current(now)
+
 
 def practice_credit(store, learning=None) -> PracticeCredit:
     """PracticeCredit over ``store`` (``learning``: the caller's LearningStore of it, else a new one)."""
@@ -207,24 +238,32 @@ def extra_session(store, *, scope: Callable[[], frozenset[str] | None] = lambda:
                   repository: Callable[[], object] | None = None,
                   kana_kinds: Callable[[], Iterable[str]] | None = None,
                   course_kinds: Callable[[], Iterable[str]] | None = None,
-                  japanese_input: Callable[[], bool] | None = None) -> ExtraSession:
-    """Extra practice over ``store`` (design 12 E1-E8): the pool reader, a new sitting per start, decks over it."""
+                  japanese_input: Callable[[], bool] | None = None,
+                  serve: Callable[..., object] = lambda now, **kwargs: None,
+                  on_stop: Callable[[], object] = lambda: None) -> ExtraSession:
+    """Extra practice over ``store`` (design 12 E1-E8): the pool reader, a new sitting per start, decks over it.
+
+    ``serve(now, with_part=...)``: the review filter of the moment (design 12 H10; ReviewFilterService.current);
+    the pool holds only what it allows."""
     kana_kinds = kana_kinds or (lambda: KanaDepthSetting.kinds_in_force(KanaDepthSetting(store).preferences()))
     course_kinds = course_kinds or (lambda: _stored_course_kinds(store))
     japanese_input = japanese_input or (lambda: False)
-    states = StoreExtraStates(store, kana_kinds=kana_kinds, course_kinds=course_kinds, scope=scope)
+    states = StoreExtraStates(store, kana_kinds=kana_kinds, course_kinds=course_kinds, scope=scope, serve=serve)
 
     def new_deck(items: Sequence[DeckItem], sitting: PracticeSitting) -> PracticeDeck:
         return practice_deck(store, items, sitting=sitting, repository=repository, course_kinds=course_kinds(),
                              system_japanese_input=japanese_input())
 
-    return ExtraSession(states, new_sitting=lambda: practice_sitting(store), new_deck=new_deck)
+    return ExtraSession(states, new_sitting=lambda: practice_sitting(store), new_deck=new_deck, on_stop=on_stop)
 
 
 def consolidation(store, *, repository: Callable[[], object] | None = None,
                   course_kinds: Callable[[], Iterable[str]] | None = None,
-                  japanese_input: Callable[[], bool] | None = None) -> Consolidation:
-    """The consolidation deck over ``store`` (design 12 N5): its facts from the store, its decks practice only."""
+                  japanese_input: Callable[[], bool] | None = None,
+                  serve: Callable[..., object] = lambda now: None) -> Consolidation:
+    """The consolidation deck over ``store`` (design 12 N5): its facts from the store, its decks practice only.
+
+    ``serve(now)``: the review filter of the moment (design 12 H10); a deck holds only what it allows."""
     course_kinds = course_kinds or (lambda: _stored_course_kinds(store))
     japanese_input = japanese_input or (lambda: False)
     source = StoreConsolidation(store)
@@ -233,7 +272,7 @@ def consolidation(store, *, repository: Callable[[], object] | None = None,
         return practice_deck(store, items, repository=repository, course_kinds=course_kinds(),
                              system_japanese_input=japanese_input(), consolidation=True)
 
-    return Consolidation(source.facts, new_deck)
+    return Consolidation(source.facts, new_deck, serve=serve)
 
 
 def _stored_course_kinds(store) -> tuple[str, ...]:

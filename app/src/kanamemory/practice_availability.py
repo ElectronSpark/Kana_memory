@@ -30,8 +30,14 @@ def summarize_queue_availability(store, pending=None, *, allowed_kinds=None,
     StudyStore.prepare_next_question apply. Passing the effective queue kinds
     also previews reconciliation, including a previously disabled repetition
     that can be restored on its original due date.
+    Under the learner's review filter of a running "继续学习" or home refresh
+    (design 12 H10; serving_filter) an item of a spaced queue it leaves out
+    from tier 3 on is neither ready nor waiting, as prepare_next_question
+    holds it back.
     """
     now = _utc(now)
+    from .arrangement.services.review_filter import serving_filter
+    serve = serving_filter(store)
     pending = store.load_session_progress() if pending is None else pending
     if not pending:
         return QueueAvailability()
@@ -96,8 +102,11 @@ def summarize_queue_availability(store, pending=None, *, allowed_kinds=None,
     graph = kana_dependency_graph(graph=dependency_graph)
     dependency_state = kana_dependency_state(store)
     ready, future, blocked = 0, [], 0
+    today = []
     for old, question in active:
         preserved = old == index and visible_current
+        if serve is not None and not preserved and _held_back(store, question, now, serve, today):
+            continue
         if kana_prerequisite_status(question, graph, dependency_state, preserve=preserved)["blocked"]:
             blocked += 1
             continue
@@ -117,3 +126,27 @@ def summarize_queue_availability(store, pending=None, *, allowed_kinds=None,
     content_blocked = sum(retired(q) for q in questions[index:])
     return QueueAvailability(ready, len(future), min(future).isoformat() if future else None,
                              excluded, blocked, content_blocked)
+
+
+def _held_back(store, question, now, serve, today):
+    """Whether the review filter holds this queue item back (design 12 H8-H10): a spaced item of tier 3 and up
+    whose kana entry it does not allow. The tier as prepare_next_question ranks it: a context word's rank, else
+    the card's review priority (2: a due short step, served wherever it is). ``today``: a one-item memo of
+    reviews_today for this call."""
+    if question.metadata.get("practice_config", {}).get("schedule_mode") != "spaced":
+        return False
+    from .arrangement.rules.focus import kana_member
+    if serve.allows(kana_member(question.content_id, question.script)):
+        return False
+    from .kana_context_words import context_priority
+    rank = context_priority(question, store)
+    if rank is None:
+        from .review_dispatch import review_priority, reviews_today
+        if not today:
+            today.append(reviews_today(store, now))
+        day, counts = today[0]
+        card = (None if question.kind in WORD_SKILLS
+                else store.get_scheduling_card(question.content_id, question.kind, question.script))
+        rank = review_priority(card, now=now, day_start=day,
+                               reviewed_today=counts.get(card["card_id"], 0) if card else 0)
+    return rank[0] >= 3

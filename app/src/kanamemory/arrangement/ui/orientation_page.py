@@ -56,7 +56,7 @@ class _OrientationForm:
     """One screen: the two cards, the depth selection (it follows the orientation in force) and 确定."""
 
     def __init__(self, model: OrientationModel, on_confirm: Callable[..., object], focus: FocusModel | None = None,
-                 on_choose: Callable[[Orientation], object] | None = None):
+                 on_choose: Callable[[Orientation], object] | None = None, filter_actions: dict | None = None):
         self._model = model
         self._on_confirm = on_confirm
         self._on_choose = on_choose
@@ -67,7 +67,7 @@ class _OrientationForm:
         level = model.preselected_depth(model.preselected)
         self.depth = u.selection(items=list(self._by_title), value=self._levels[level], on_change=self._depth_changed)
         self.consequence = u.label(model.depth_option(level).text, size=12, color=u.MUTED)
-        self.focus = None if focus is None else FocusPart(focus, model.preselected)
+        self.focus = None if focus is None else FocusPart(focus, model.preselected, **(filter_actions or {}))
 
     def widgets(self) -> list:
         return [u.label(ORIENTATION_HEADING, size=17, bold=True), *orientation_cards(self._model, self._on_choose),
@@ -99,11 +99,17 @@ class _OrientationForm:
 
 
 def orientation_page(model: OrientationModel, *, on_confirm: Callable[..., object],
-                     focus: FocusModel | None = None, on_choose: Callable[[Orientation], object] | None = None) -> list:
+                     focus: FocusModel | None = None, on_choose: Callable[[Orientation], object] | None = None,
+                     on_only: Callable[[bool], object] | None = None, on_restore: Callable[..., object] | None = None,
+                     on_pause_add: Callable[[], object] | None = None) -> list:
     """The screen's widgets: the two orientation cards, the depth choice with its D2 sentence, the focus part
     when ``focus`` is given, 确定.
 
     on_choose(mode): a card's button (stores the orientation at once). on_confirm(orientation, depth) without
     ``focus``; on_confirm(orientation, depth, picked_focus) with it; ``orientation`` is the stored one or None.
+    on_only(on) / on_restore(scope) / on_pause_add(): the focus part's 只做范围内 pair and 暂不复习 section (design 12
+    H8, H9), each stored at once by the caller; without them those parts are not drawn.
     """
-    return _OrientationForm(model, on_confirm, focus, on_choose).widgets()
+    actions = {name: value for name, value in (("on_only", on_only), ("on_restore", on_restore),
+                                                ("on_pause_add", on_pause_add)) if value is not None}
+    return _OrientationForm(model, on_confirm, focus, on_choose, actions).widgets()

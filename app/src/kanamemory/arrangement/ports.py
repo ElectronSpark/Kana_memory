@@ -40,6 +40,10 @@ class ScopeCatalog(Protocol):
         """Content ids inside the scope, including enrolled prerequisites; None when
         the route, node or library it names is gone or disabled."""
 
+    def members(self, scope: FocusScope) -> frozenset[str] | None:
+        """The scope's own content ids, without prerequisites (暂不复习 pauses these, design 12 H9);
+        None when it does not resolve."""
+
 
 class StateSource(Protocol):
     """The scheduling state behind one answer, as the credit rule sees it (design 12 E3)."""

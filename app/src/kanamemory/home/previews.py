@@ -98,6 +98,8 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
     # The plans of the lessons without a question, for this state of the learner records: the next
     # refresh without a write, and the add page's existing-work line, read them instead of planning again.
     plans = costs().plan_preview()
+    from ..arrangement.services.review_filter import serving_filter
+    serve = serving_filter(store)
     for row in missing:
         item = learning_store.get_item(row[0])
         # 四之二: a not-yet-open later ability is neither ready nor teaching,
@@ -115,6 +117,8 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
             ids["planned"].add((item['id'], unit['ability']))
             if gate and unit['ability'] in gate['closed']:
                 continue
+            if serve is not None and not serve.allows(item['id']):
+                continue   # design 12 H10: left out by the learner's filter (still "planned" for the apart counts)
             if learning_store.content_question_blocked(item, plan):
                 result['blocked_material'] += 1
                 continue
@@ -197,10 +201,16 @@ def kana_preview(store, inputs, *, repository, paths, queue_kinds, pending=UNREA
     occupied = {identities[key] for key in queued}
     feedback_due = store.feedback_wait_times(
         ((c["content_id"], c["skill"], c["script"]) for c in cards), now)
+    from ..arrangement.rules.focus import kana_member
+    from ..arrangement.rules.review_filter import allows
+    from ..arrangement.services.review_filter import serving_filter
+    serve = serving_filter(store)   # design 12 H10: what the learner's filter leaves out is counted apart
     for card in cards:
         cid, kind, script = card["content_id"], card["skill"], card["script"]
         control = controls.get(cid, {})
         if kind not in kinds or identities[cid, kind, script] in occupied or control.get("suspended"):
+            continue
+        if not allows(serve, kana_member(cid, script)):
             continue
         due = datetime.fromisoformat(card["due_at_utc"])
         due = max(due, feedback_due.get((cid, kind, script), due))
@@ -213,6 +223,8 @@ def kana_preview(store, inputs, *, repository, paths, queue_kinds, pending=UNREA
         ((entry["content_id"], kind, entry["script"]) for entry, kind, _ in advancing), now)
     for entry, kind, _ in advancing:
         cid, script = entry["content_id"], entry["script"]
+        if not allows(serve, kana_member(cid, script)):
+            continue
         grouped.setdefault((kind, script), []).append(cid)
         due_by_key[cid, kind, script] = advancement_due.get((cid, kind, script), now)
     # Group by direction to avoid rebuilding the whole eligible catalogue

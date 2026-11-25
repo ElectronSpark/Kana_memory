@@ -2211,7 +2211,13 @@ class LearningStore:
         the course order (design 12 N4 (ii): the first due review of a recent
         state is served before the share rule, also when a scope or the frozen
         order puts other rows before it); every other row is passed over.
+        The learner's review filter of the running "继续学习" (design 12 H8-H10;
+        arrangement.services.review_filter.serving_filter, None outside one)
+        passes over every row of tier 3 and up whose lesson it does not allow,
+        also in a sealed round; tiers 0-2 are served wherever they are.
         """
+        from .arrangement.services.review_filter import serving_filter
+        serve = serving_filter(self.store)
         skip = frozenset(skip_teaching_ids or ())
         if include_unassessed and (not teaching_only or teaching_content_ids is not None):
             raise ValueError("New-ability service requires an unrestricted teaching probe")
@@ -2221,15 +2227,16 @@ class LearningStore:
             key = self.current_key(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
                 teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
                 prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, scope_content_ids=scope,
-                only_recent=only_recent)
+                only_recent=only_recent, serve_filter=serve)
             return projection.result(key, lambda: self._current(enabled_kinds, now, fair_new=fair_new,
                 teaching_only=teaching_only, teaching_content_ids=teaching_content_ids,
                 include_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed,
-                projection=projection, skip_teaching_ids=skip, focus_scope=scope, only_recent=only_recent))
+                projection=projection, skip_teaching_ids=skip, focus_scope=scope, only_recent=only_recent,
+                serve=serve))
         return self._current(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
             teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
             prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, focus_scope=scope,
-            only_recent=only_recent)
+            only_recent=only_recent, serve=serve)
 
     def _effective_scope(self, scope_content_ids, include_unassessed):
         """The focus scope where it can still act: None without one, or once the course order is frozen."""
@@ -2243,10 +2250,11 @@ class LearningStore:
     @staticmethod
     def current_key(enabled_kinds, now, *, fair_new=False, teaching_only=False, teaching_content_ids=None,
                     include_unassessed=False, prefer_unassessed=False, skip_teaching_ids=None,
-                    scope_content_ids=None, only_recent=False):
+                    scope_content_ids=None, only_recent=False, serve_filter=None):
         """read_operation key of one current() call (see _LearningRead.seed).
 
-        ``scope_content_ids`` is the effective scope of that call (current() drops it once the order is frozen).
+        ``scope_content_ids`` is the effective scope of that call (current() drops it once the order is frozen);
+        ``serve_filter`` the review filter it ran under (design 12 H10), None for none.
         """
         key = ("current", None if enabled_kinds is None else tuple(enabled_kinds), _utc(now).isoformat(),
                bool(fair_new), bool(teaching_only),
@@ -2255,6 +2263,7 @@ class LearningStore:
         # Unchanged key without a skip or a scope, so seeded worker results still match.
         key = key + (frozenset(skip_teaching_ids),) if skip_teaching_ids else key
         key = key + ("only-recent",) if only_recent else key
+        key = key + (("serve", serve_filter),) if serve_filter is not None else key
         return key + (("scope", frozenset(scope_content_ids)),) if scope_content_ids is not None else key
 
     @classmethod
@@ -2344,8 +2353,9 @@ class LearningStore:
 
     def _current(self, enabled_kinds, now, *, fair_new, teaching_only, teaching_content_ids,
                  include_unassessed, prefer_unassessed, projection=None, skip_teaching_ids=frozenset(),
-                 focus_scope=None, only_recent=False):
+                 focus_scope=None, only_recent=False, serve=None):
         # focus_scope: current()'s effective focus scope (not an instruction scope, which the loop below names "scope").
+        # serve: the review filter of the running "继续学习" (design 12 H10), None for none.
         from .learning_dependencies import independent_ready_ids, prerequisite_status, has_started_answer
         from .review_dispatch import review_priority, reviews_today
         now = _utc(now)
@@ -2450,6 +2460,8 @@ class LearningStore:
             if only_recent and (_read_only_row(row) or row["result_json"] is not None
                                 or not recent_review(row, dispatch_priority(row))):
                 continue
+            if serve is not None and not serve.serves(row["content_id"], dispatch_priority(row)[0]):
+                continue   # design 12 H8, H9: left out by the learner's filter from tier 3 on
             content_row = content_row_for(row)
             if _read_only_row(row):
                 # J6 R1: a lesson that is only read, not read yet: its explanation page with 「知道了」.
@@ -2577,14 +2589,36 @@ class LearningStore:
         return None
 
     def counts(self, enabled_kinds=None, now=None, *, projection=None):
-        """Home/dispatch counts; projection shares one action's unchanged reads."""
+        """Home/dispatch counts; projection shares one action's unchanged reads.
+
+        Under the review filter of a running "继续学习" or home refresh (design 12 H10; serving_filter) the work
+        it leaves out from tier 3 on is counted nowhere here: the home shows it apart.
+        """
+        from .arrangement.services.review_filter import serving_filter
+        serve = serving_filter(self.store)
         if projection is not None:
             now = projection.moment(now)
             key = ("counts", None if enabled_kinds is None else tuple(enabled_kinds), now.isoformat())
-            return projection.result(key, lambda: self._counts(enabled_kinds, now, projection=projection))
-        return self._counts(enabled_kinds, now)
+            key = key + (("serve", serve),) if serve is not None else key
+            return projection.result(key, lambda: self._counts(enabled_kinds, now, projection=projection, serve=serve))
+        return self._counts(enabled_kinds, now, serve=serve)
 
-    def _counts(self, enabled_kinds, now, *, projection=None):
+    def _filter_tier(self, row, now, *, exposure_times, review_day, daily_counts):
+        """The dispatch tier of a pending row as far as the review filter asks (0-2 are always served, H8):
+        0 feedback, 1 a started answer, 2 a due short step, else 3 (never fewer than _current's tiers)."""
+        from .learning_dependencies import has_started_answer
+        from .review_dispatch import review_priority
+        if row["result_json"] is not None:
+            return 0
+        if row["instruction_ready"] and has_started_answer(_load(row["draft_json"])):
+            return 1
+        if not row["review_count"]:
+            return 3
+        due = self.serviceable_ability_due(row, _load(row["snapshot_json"]), now, exposure_times=exposure_times)
+        return max(2, review_priority(row, due=due, now=now, day_start=review_day,
+                                      reviewed_today=daily_counts.get(row["unit_id"], 0))[0])
+
+    def _counts(self, enabled_kinds, now, *, projection=None, serve=None):
         from .learning_dependencies import independent_ready_ids, prerequisite_status
         from functools import lru_cache
         from types import SimpleNamespace
@@ -2645,10 +2679,16 @@ class LearningStore:
         gate_closed = self._batch_gate_reader(enabled_kinds)
         from .learning_probe import GateReader
         probe_gate = GateReader(self, now)
+        if serve is not None:
+            from .review_dispatch import reviews_today
+            review_day, daily_counts = reviews_today(self.store, now, course=True)
         for row in visible.values():
             if gate_closed(row):
                 # Not yet open (四之二): neither ready, waiting nor disabled.
                 continue
+            if serve is not None and not serve.allows(row["content_id"]) and self._filter_tier(
+                    row, now, exposure_times=exposure_times, review_day=review_day, daily_counts=daily_counts) >= 3:
+                continue   # design 12 H10: left out by the learner's filter; the home counts it apart
             # Decode only if this row reaches a consumer, at most once per row.
             # These three readers do not mutate the persisted question snapshot.
             snapshot = None
@@ -2702,6 +2742,8 @@ class LearningStore:
             else:
                 counts["ready"] += 1
         for cid, _ in self.read_only_unread(projection=projection):
+            if serve is not None and not serve.allows(cid):
+                continue   # design 12 H10: new content the learner's filter leaves out
             if self.prerequisite_status(cid, None, ready_ids=ready_ids)["blocked"]:
                 counts["blocked"] += 1
                 blocked_content.add(cid)

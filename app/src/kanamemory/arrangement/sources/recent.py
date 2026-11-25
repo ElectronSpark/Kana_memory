@@ -77,3 +77,14 @@ def serviceable(unit: Mapping, due: str | None, firsts: RecentFirsts, now: datet
     if earliest is None or earliest >= when:
         return due, False
     return earliest.isoformat(), served_early(when, earliest, now)
+
+
+def lesson_firsts(store) -> list[tuple[str, datetime | None]]:
+    """(lesson content id, first formal rating) of each scored, unsuspended course state (design 12 E9's parts).
+
+    StudyQueries.review_unit_queue_rows lists the states; one RecentFirsts pass reads their first ratings.
+    """
+    rows = list(store.queries.review_unit_queue_rows())
+    firsts = RecentFirsts(store)
+    firsts.prime(row["unit_id"] for row in rows)
+    return [(row["content_id"], firsts.first(row["unit_id"])) for row in rows]

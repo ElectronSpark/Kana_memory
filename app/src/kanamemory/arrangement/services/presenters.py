@@ -35,12 +35,17 @@ from ..display import (RECENT_UNITS_NOTE, BREADTH_TEXT, CHANGED_TEXT, BREADTH_TI
                        SCOPE_GONE_TITLE, SCOPE_KIND_TITLES, SCOPE_TEXT, SET_FOCUS, SINGLE_KIND_UNCHANGED_TEXT,
                        THOROUGH_TEXT, THOROUGH_TITLE, TILT_TITLES, DayMinutes, DepthOption, FocusButtonModel,
                        FocusModel, FocusRowModel, HomeRowsModel, KanaTiltOption, OrientationModel, OrientationOption,
-                       ProgressModel, ReviewFigures, ScopeOption, SectionNote, TiltOption)
+                       ProgressModel, ReviewFigures, ScopeOption, SectionNote, TiltOption,
+                       EXTRA_HEADER, PART_COUNT, PART_EMPTY, PART_TITLES, PAUSED_LINE, PAUSED_FULL,
+                       SCOPE_DONE_EXTRA, SCOPE_DONE_OUTSIDE, ExtraPartsModel, OnlySwitchModel, PartOption,
+                       PauseChooserModel, PausedModel, PausedRow, ScopeDoneModel)
 from ..model import (KANA_DIRECTION_KINDS, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, RouteFacts, Tilt,
                      Unit)
 from ..rules.clock import charges
 from ..rules.depth import GROUP_TITLES, LEVELS, KanaDepth, switched_groups
+from ..rules.review_filter import Apart
 from ..rules.shares import KANA_WEIGHTS, TILT_WEIGHTS
+from ..settings import MAX_EXCLUDED
 
 DAYS = 7
 # A read from this far back covers the 7 study days (each at most 25 hours) and the time of today.
@@ -158,7 +163,7 @@ def _pass(ratings: list[int]) -> tuple[int | None, int]:
 class ArrangementPresenter:
     """Display models for one learner store; every call is read-only."""
 
-    def __init__(self, store, preferences, events, dispatcher, launch, *, focus=None, due=None):
+    def __init__(self, store, preferences, events, dispatcher, launch, *, focus=None, due=None, review_filter=None):
         self._store = store
         self._preferences = preferences   # services.preferences.ArrangementPreferences
         self._events = events             # sources.events.StoreEventSource
@@ -166,6 +171,7 @@ class ArrangementPresenter:
         self._launch = launch             # services.launch_notes.LaunchNotes
         self._focus = focus               # services.focus.FocusService, or None (then no focus is shown)
         self._due = due                   # sources.due_reviews.DueReviews, or None (then no "重点之外到期")
+        self._filter = review_filter      # services.review_filter.ReviewFilterService, or None (no switches shown)
 
     # Study days -----------------------------------------------------------
 
@@ -256,8 +262,11 @@ class ArrangementPresenter:
     # UI6 -------------------------------------------------------------------
 
     def home_focus(self, now: datetime, *, course_kinds: Iterable[str] = (), kana_kinds: Iterable[str] | None = None,
-                   course_exclude: Iterable[str] = (), unqueued_course=None) -> FocusRowModel | None:
+                   course_exclude: Iterable[str] = (), unqueued_course=None, apart=None) -> FocusRowModel | None:
         """The home page's focus row (UI6) under every orientation, None without a focus.
+
+        ``apart``: the apart counts the caller already computed (design 12 H10), else computed here when
+        只做范围内 acts.
 
         One settings read without a focus (the even tilt, the normal kana
         tilt and no scope); with one, also the orientation; only when the
@@ -283,13 +292,88 @@ class ArrangementPresenter:
         if line is None:
             return None
         contents = self._focus.scope_contents(focus) if state is not None and state.resolves else None
+        only = contents is not None and self._filter is not None and self._filter.only_acts(now)
+        if only:
+            line += " · " + OnlySwitchModel(True).only_title   # design 12 H8: 只做范围内 acts
         if contents is None or self._due is None:
-            return FocusRowModel(line)
+            return FocusRowModel(line, only=only)
         if kana_kinds is None:
             kana_kinds = self._preferences.depth.kinds_in_force(self._preferences.depth.preferences())
+        if only:
+            # Design 12 H10: under 只做范围内 the due work outside is counted apart (due work of a paused part
+            # counts in the 暂不复习 line only).
+            apart = apart or self.apart(now, course_kinds=course_kinds, kana_kinds=kana_kinds,
+                                        course_exclude=course_exclude, unqueued_course=unqueued_course)
+            outside = apart.outside
+            return FocusRowModel(line, outside_due=outside, outside_due_line=SCOPE_DONE_OUTSIDE.format(count=outside),
+                                 only=True)
         outside = self.outside_due(now, contents, course_kinds=course_kinds, kana_kinds=kana_kinds,
                                    course_exclude=course_exclude, unqueued_course=unqueued_course)
         return FocusRowModel(line, outside_due=outside, outside_due_line=f"重点之外到期 {outside} 题")
+
+    # Design 12 H8-H10, E9 ---------------------------------------------------
+
+    def due_members(self, now: datetime, *, course_kinds: Iterable[str] = (), kana_kinds: Iterable[str] | None = None,
+                    course_exclude: Iterable[str] = (), unqueued_course=None) -> list[str]:
+        """The scope member of each due review 继续学习 can serve under the kinds (DueReviews; one entry per review)."""
+        if self._due is None:
+            return []
+        if kana_kinds is None:
+            kana_kinds = self._preferences.depth.kinds_in_force(self._preferences.depth.preferences())
+        return [*self._due.course(now, course_kinds, unavailable=course_exclude, plannable=unqueued_course),
+                *self._due.kana(now, kana_kinds)]
+
+    def apart(self, now: datetime, **kinds):
+        """H10's apart counts (rules/review_filter.Apart) of the due reviews at ``now``; zeros without switches.
+
+        ``kinds``: due_members' keyword arguments (the kinds and availability the caller uses)."""
+        if self._filter is None:
+            return Apart()
+        setting = self._filter.setting()
+        if not setting.excluded and not (setting.only and self._filter.only_acts(now)):
+            return self._filter.apart(now, ())
+        return self._filter.apart(now, self.due_members(now, **kinds))
+
+    @staticmethod
+    def paused_line(apart) -> str | None:
+        """「暂不复习 {parts} 个部分，其中到期 {count} 题」 while some part is paused, else None (H10)."""
+        return PAUSED_LINE.format(parts=apart.paused_parts, count=apart.paused_due) if apart.paused_parts else None
+
+    @staticmethod
+    def scope_done(apart, *, extra_available: bool) -> ScopeDoneModel:
+        """H8's page 范围内的都做完了 from the apart counts and whether something inside can be practised."""
+        return ScopeDoneModel(SCOPE_DONE_OUTSIDE.format(count=apart.outside) if apart.outside else None,
+                              SCOPE_DONE_EXTRA if extra_available else None)
+
+    @staticmethod
+    def extra_parts(counts) -> ExtraPartsModel:
+        """The page 加练 (E9) from services.extra_parts.ExtraParts.counts."""
+        options = []
+        for item in counts:
+            title = PART_TITLES[item.part.value]
+            caption = (PART_COUNT.format(title=title, count=item.count) if item.count
+                       else PART_EMPTY.format(title=title))
+            options.append(PartOption(item.part.value, caption, item.count))
+        return ExtraPartsModel(tuple(options), header=EXTRA_HEADER)
+
+    def pause_chooser(self) -> PauseChooserModel:
+        """添加… under 暂不复习: the focus scope's chooser (its scopes, the stored one first) minus the paused ones."""
+        paused = set(self._filter.setting().excluded) if self._filter is not None else set()
+        options = [option for option in self.focus_model().scopes if option.scope is not None
+                   and option.scope not in paused]
+        return PauseChooserModel(tuple(options))
+
+    def _paused_model(self) -> PausedModel | None:
+        if self._filter is None or self._focus is None:
+            return None
+        rows = []
+        for scope in self._filter.setting().excluded:
+            title = self._focus.catalog.title(scope)
+            resolves = self._focus.catalog.members(scope) is not None
+            rows.append(PausedRow(scope, scope_line(title, resolves)))
+        full = len(rows) >= MAX_EXCLUDED
+        return PausedModel(tuple(rows), can_add=not full,
+                           full_text=PAUSED_FULL.format(count=MAX_EXCLUDED) if full else None)
 
     def outside_due(self, now: datetime, scope_contents, *, course_kinds: Iterable[str], kana_kinds: Iterable[str],
                     course_exclude: Iterable[str] = (), unqueued_course=None) -> int:
@@ -332,9 +416,12 @@ class ArrangementPresenter:
             line, resolves = f"现在：{scope_line(state.title, state.resolves)}", state.resolves
             if all(scope != state.scope for scope, _ in choices):
                 choices.insert(0, (state.scope, scope_line(state.title, state.resolves)))
+        switch = None
+        if state is not None and self._filter is not None:
+            switch = OnlySwitchModel(self._filter.setting().only, acts=state.resolves)
         return FocusModel(focus=focus, tilts=tilt_options(), kana_tilts=kana_tilt_options(),
                           scopes=(ScopeOption(None, NO_SCOPE_TITLE), *_unique_titles(choices)),
-                          scope_line=line, scope_resolves=resolves)
+                          scope_line=line, scope_resolves=resolves, only_switch=switch, paused=self._paused_model())
 
     def focus_buttons(self, scopes: Iterable[FocusScope]) -> tuple[FocusButtonModel | None, ...]:
         """设为重点 / 取消重点 for pages that show these objects (UI6, H6), one settings read for all.

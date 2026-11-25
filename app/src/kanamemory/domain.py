@@ -1473,8 +1473,17 @@ class StudyStore:
         additional sort key; the priority itself, frozen for the cross-lane
         comparison and used to keep one content from coming twice in a row,
         is unchanged. A teaching probe offers the introductions inside it first.
+        The learner's review filter of the running "继续学习" (design 12 H8-H10;
+        arrangement.services.review_filter.serving_filter) holds back the items
+        of a spaced queue it does not allow from tier 3 on, also in a sealed
+        round: they stay unfinished behind everything else (never consumed,
+        never rated), the head is an allowed item when there is one, and the
+        result's ``serve_counts`` (ready, waiting, next due) and ``serve_held``
+        (the head itself is held back) tell the dispatch what is left to serve.
         """
         now = _utc(now)
+        from .arrangement.services.review_filter import serving_filter
+        serve = serving_filter(self)
         pending = self.load_session_progress(lazy_questions=lazy_questions)
         if pending is None or pending["session_id"] != session_id:
             return None
@@ -1541,7 +1550,8 @@ class StudyStore:
         review_day, daily_counts = reviews_today(self, now) if due_cards else (None, {})
         learned_scripts = ({tuple(row) for row in self._db.execute(
             "SELECT DISTINCT content_id,script FROM study_card WHERE review_count>0")} if spaced else set())
-        if (scope_contents is None and not round_active(self) and not teaching_only and not fair_new and not state
+        if (scope_contents is None and serve is None and not round_active(self) and not teaching_only and not fair_new
+                and not state
                 and not unavailable and not paused_directions
                 and all(question_allowed(q) for q in questions[index:])
                 and not due_cards
@@ -1664,6 +1674,18 @@ class StudyStore:
             admitted_indices = {old for old, _ in [*frozen_ready, *frozen_future]}
             parked.extend(row for row in [*ready, *future] if row[0] not in admitted_indices)
             ready, future = frozen_ready, frozen_future
+        held = []
+        if serve is not None and spaced:
+            # Design 12 H8, H9: from tier 3 on, only what the learner's filter allows; tiers 0-2 wherever they are.
+            from .arrangement.rules.focus import kana_member as _member
+            def kept(item):
+                return serve.serves(_member(item[1].content_id, item[1].script), priority(item)[0])
+            held = [item for item in [*ready, *future] if not kept(item)]
+            ready = [item for item in ready if kept(item)]
+            future = [item for item in future if kept(item)]
+            # Held back by a prerequisite as well: never served before the filter allows it, so it waits behind.
+            held += [item for item in blocked if not serve.allows(_member(item[1].content_id, item[1].script))]
+            blocked = [item for item in blocked if serve.allows(_member(item[1].content_id, item[1].script))]
         teaching_trace = {}
         if teaching_only:
             from types import SimpleNamespace
@@ -1702,7 +1724,7 @@ class StudyStore:
         # indices are authoritative only for untouched, still-unanswered rows.
         # A dependency-blocked question remains unfinished. Unlike a disabled
         # direction it must never be consumed into the skipped history prefix.
-        ordered = [*skipped, *ready, *future, *blocked, *parked]
+        ordered = [*skipped, *ready, *future, *blocked, *parked, *held]
         remap = {old: index + offset for offset, (old, _) in enumerate(ordered)}
         retired_markers = {old for old, question in skipped if WORD_KIND_PAUSE in question.metadata}
         if lazy_questions:
@@ -1737,6 +1759,7 @@ class StudyStore:
         wait_until = available_at(future[0][1]) if not ready and future else None
         dependency_blocked = bool(blocked and not ready and not future)
         settings_blocked = bool(parked and not ready and not future and not blocked)
+        serve_held = bool(held and not ready and not future and not blocked and not parked)
         from .session_content import retired
         content_blocked = bool(settings_blocked and any(retired(q) for _, q in parked))
         new_state = ({"page": "session_wait"} if settings_blocked else
@@ -1762,6 +1785,10 @@ class StudyStore:
                 "content_blocked": content_blocked,
                 "dependency_blocked": dependency_blocked,
                 "blocked_prerequisites": blocked_prerequisites}
+        if serve is not None and spaced:
+            waits = [available_at(question) for _, question in future]
+            result.update(serve_held=serve_held, serve_counts=(len(ready), len(future),
+                                                                min(waits).isoformat() if waits else None))
         return self._activate_word_draft(result, lazy_questions=lazy_questions, dry_run=dry_run)
 
     def clear_session_progress(self, lane=None):

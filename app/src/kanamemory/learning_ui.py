@@ -922,7 +922,29 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             model, focus=presenter.focus_model(),
             on_confirm=lambda orientation, depth, focus: self._confirm_study_orientation(
                 orientation, depth, then, focus=focus),
-            on_choose=lambda mode: self._choose_study_orientation(mode, then)))
+            on_choose=lambda mode: self._choose_study_orientation(mode, then),
+            on_only=lambda on: self._review_filter_action(lambda service: service.set_only(on), then),
+            on_restore=lambda scope: self._review_filter_action(lambda service: service.restore(scope), then),
+            on_pause_add=lambda: self.show_pause_chooser(then=then)))
+
+    def _review_filter_action(self, change, then):
+        """只做范围内 / 恢复 on the 学习重点 part (design 12 H8, H9): stored at once through the review filter
+        service (one rearrangement of the round), then the screen again, so its state and choices agree."""
+        if self.page not in {"study_orientation", "study_pause_chooser"}:
+            return
+        from .study_path_runtime import StudyPathRuntimeMixin
+        change(StudyPathRuntimeMixin.study_arrangement(self).review_filter)
+        self.show_study_orientation(then=then)
+
+    @page_view()
+    def show_pause_chooser(self, widget=None, *, then=None, **kwargs):
+        """添加… under 暂不复习 (design 12 H9): the focus scope's choices not yet paused; a pick is stored at once."""
+        from .arrangement.ui.pause_chooser import pause_chooser_page
+        from .study_path_runtime import StudyPathRuntimeMixin
+        model = StudyPathRuntimeMixin.study_arrangement(self).presenter.pause_chooser()
+        self.screen("study_pause_chooser", model.header, *pause_chooser_page(
+            model, on_pick=lambda scope: self._review_filter_action(lambda service: service.pause(scope), then),
+            on_back=lambda: self.show_study_orientation(then=then)))
 
     def _choose_study_orientation(self, mode, then):
         """A card's button on the 学习方式 screen: store ``mode`` at once (one re-arrangement), show the screen again.

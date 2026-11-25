@@ -38,13 +38,29 @@ class HomeOverviewService:
 
     def __init__(self, store, learning_store, *, repository: Callable[[], Any], paths: Callable[[], Any],
                  presenter: Callable[[], Any], costs: Callable[[], Any], course_kinds: Callable[[], Sequence[str]],
-                 queue_kinds: Callable[[dict], Sequence[str]], word_count: Callable[[Any], int]):
+                 queue_kinds: Callable[[dict], Sequence[str]], word_count: Callable[[Any], int],
+                 arrangement: Callable[[], Any] | None = None):
         self._store, self._learning = store, learning_store
         self._repository, self._paths, self._presenter, self._costs = repository, paths, presenter, costs
         self._course_kinds, self._queue_kinds, self._word_count = course_kinds, queue_kinds, word_count
+        self._arrangement = arrangement   # the StoreArrangement (its review filter and extra practice), or None
 
     def overview(self, inputs: HomeInputs) -> HomeModel:
-        """The whole home page as the learner records are now; reads only."""
+        """The whole home page as the learner records are now; reads only.
+
+        Design 12 H10: the reads run under the learner's review filter of this moment (only what 继续学习
+        will serve is in the main numbers); what it leaves out is counted apart (the focus row's 范围外到期 and
+        the 暂不复习 line), and with 只做范围内 acting and nothing inside left the primary button says so.
+        """
+        arrangement = self._arrangement() if self._arrangement is not None else None
+        if arrangement is None:
+            return self._overview(inputs, None, None)
+        from ..domain import _utc
+        serve = arrangement.review_filter.current(_utc(None))
+        with arrangement.serving(serve):
+            return self._overview(inputs, arrangement, serve)
+
+    def _overview(self, inputs: HomeInputs, arrangement, serve) -> HomeModel:
         store, learning = self._store, self._learning
         service = self._paths()
         # Design 10 section 8.3: the current route's next section and counts;
@@ -69,8 +85,12 @@ class HomeOverviewService:
             orphans = len(view.orphaned_ids)
             # UI6 focus row: one settings read without a focus; only a resolving scope reads the due
             # reviews of "重点之外到期 N 题", under the kinds and the availability this refresh uses.
+            apart = (presenter.apart(read.moment(), course_kinds=enabled, kana_kinds=kana_kinds,
+                                     course_exclude=view.unavailable_ids, unqueued_course=teaching["planned"])
+                     if serve is not None else None)
             focus = presenter.home_focus(read.moment(), course_kinds=enabled, kana_kinds=kana_kinds,
-                                         course_exclude=view.unavailable_ids, unqueued_course=teaching["planned"])
+                                         course_exclude=view.unavailable_ids, unqueued_course=teaching["planned"],
+                                         apart=apart)
         for name in ("blocked", "blocked_content", "blocked_material"):
             counts[name] += courses[name]
         unqueued = self.unqueued_reviews(inputs, pending)
@@ -88,9 +108,16 @@ class HomeOverviewService:
         next_change_at = min(app_clock.localize(datetime.fromisoformat(d)) for d in dues) if dues else None
         next_section = path.get("next_section")
         others_in_progress = any(row["in_progress_sections"] for row in others)
-        has_work = bool(ready or counts["instruction"] or waiting or availability.blocked_count or counts["disabled"]
-                        or counts["blocked"] or counts.get('blocked_material') or counts.get('blocked_input')
-                        or path["in_progress_sections"] or others_in_progress)
+        inside = bool(ready or counts["instruction"] or waiting or availability.blocked_count or counts["disabled"]
+                      or counts["blocked"] or counts.get('blocked_material') or counts.get('blocked_input'))
+        has_work = bool(inside or path["in_progress_sections"] or others_in_progress)
+        # Design 12 H8, H10: under 只做范围内 with nothing inside to serve now (work that only waits shows the same
+        # page in 继续学习), the main action says so.
+        # The disabled count is the record's, not the scope's: it does not keep the button.
+        scope_done = bool(serve is not None and serve.limits_to_scope
+                          and not (ready or counts["instruction"] or availability.blocked_count or counts["blocked"]
+                                   or counts.get('blocked_material') or counts.get('blocked_input')))
+        has_work = has_work and not scope_done
         # Design 12 UI2, UI3 (B10), UI5: the arrangement's rows, from its presenter.
         facts = RouteFacts.from_overview(path)
         nothing_new = no_new_content(has_work=has_work, teaching_ready=summary.instruction, overview=path,
@@ -110,7 +137,31 @@ class HomeOverviewService:
             orphans=orphans, libraries_page=inputs.libraries_page, word_count=word_count,
             completed=path['required_completed_sections'], total=path['required_total_sections'],
             added=path['required_added_sections'], partial=path.get("required_partial_sections"),
-            next_change_at=next_change_at)
+            next_change_at=next_change_at, scope_done=scope_done,
+            paused_line=presenter.paused_line(apart) if apart is not None else None,
+            extra_entry=self._extra_entry(arrangement))
+
+    @staticmethod
+    def _extra_entry(arrangement) -> bool:
+        """加练… (design 12 E9): some learned state exists (extra practice's pool read; a failed read: no entry)."""
+        if arrangement is None:
+            return False
+        from ..domain import _utc
+        try:
+            return arrangement.extra.learned(_utc(None))
+        except Exception as exc:   # a busy database: the home is drawn without the entry
+            from ..diagnostic_events import record_error
+            record_error("practice_rating", "read", exc)
+            return False
+
+    def apart(self):
+        """Design 12 H10's apart counts now (rules/review_filter.Apart), under the enabled course kinds, the kana
+        kinds in force and this refresh's availability; H8's page 范围内的都做完了 reads its line from them."""
+        learning = self._learning
+        with learning.read_operation() as read:
+            view = learning.availability(projection=read)
+            return self._presenter().apart(read.moment(), course_kinds=self._course_kinds(),
+                                           course_exclude=view.unavailable_ids)
 
     def can_continue(self, inputs: HomeInputs) -> bool:
         """Whether 继续学习 can reach anything now (the route page and the end pages ask; reads only).

@@ -528,3 +528,25 @@ class RouteFacts:
         section = overview.get("next_section")
         return cls(int(overview.get("required_completed_sections", 0)), int(overview.get("required_total_sections", 0)),
                    None if not section else str(section["id"]), None if not section else str(section["title"]))
+
+
+class Part(str, Enum):
+    """What extra practice may be limited to (design 12 E9): one part per start, memory only."""
+
+    TODAY = "today"      # lessons with a course state first formally rated on this study day
+    RECENT = "recent"    # lessons with a recent course state (rules/recent.is_recent)
+    SCOPE = "scope"      # the focus scope (only while it resolves)
+    ALL = "all"          # everything extra practice may serve (as before E9)
+
+
+@dataclass(frozen=True)
+class ReviewFilterSetting:
+    """The learner's two switches over what 继续学习 and 加练 serve (design 12 H8, H9; setting study_review_filter_v1).
+
+    ``only``: 只做范围内 (acts only while the focus scope resolves). ``excluded``:
+    the scopes paused by 暂不复习, in the order they were added, at most
+    settings.MAX_EXCLUDED, no duplicates.
+    """
+
+    only: bool = False
+    excluded: tuple[FocusScope, ...] = ()
