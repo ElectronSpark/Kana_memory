@@ -1757,6 +1757,19 @@ class LearningStore:
         return _latest_due(self.effective_question_due(unit, question, now=now,
             exposure_times=exposure_times, tables=tables), effective_due, cooldown)
 
+    def planned_question_due(self, unit, question, *, now=None, exposure_times=None, tables=None):
+        """When a planned (not yet queued) ``question`` of ``unit`` will be served (design 12 N2, N10).
+
+        The question is read as the append would store it (question_not_before
+        as its floor) and then exactly as a queued one is read
+        (effective_question_due): the stored floor alone keeps the stored due, so
+        a recent unit's short interval served after one day (N2) is the time
+        here as it is on the wait page once the question is queued.
+        """
+        floor = self.question_not_before(unit, question, now=now, exposure_times=exposure_times, tables=tables)
+        return self.effective_question_due(unit, {**dict(question), "not_before_utc": floor}, now=now,
+                                           exposure_times=exposure_times, tables=tables)
+
     def content_exposure_times(self, now=None):
         """Read active feedback delays once per queue pass, without rewriting due dates."""
         now = _utc(now)

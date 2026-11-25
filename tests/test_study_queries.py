@@ -113,3 +113,32 @@ def test_readers_see_transactional_enrollment_and_do_not_commit_it(stores):
     assert reader.course_introduction_header("grammar:existing")["stage"] == "intro"
     assert not store.in_transaction
     assert tuple(store._db.iterdump()) == before
+
+
+def test_untaught_lessons_are_those_whose_first_teaching_was_not_shown():
+    """Design 12 N14 (the add page's 待初学): an ability that opens later on a taught lesson does not count."""
+    import json
+    from kanamemory.study_queries import StudyQueries
+
+    def row(cid, stage, checkpoint, scope=None):
+        return {"content_id": cid, "stage": stage, "checkpoint_json": json.dumps(checkpoint),
+                "guided_at_utc": None, **({"instruction_scope": scope} if scope else {})}
+    probe = {"supports_initial_familiarity": True, "initial_familiarity": {
+        "version": 1, "evidence": "probe_v1", "levels": {"understanding": "familiar"}, "route": "diagnostic",
+        "selected_at_utc": "2026-11-25T12:45:15+00:00", "diagnostic_state": "active"}}
+    declined = {"supports_initial_familiarity": True, "initial_familiarity": {
+        **probe["initial_familiarity"], "route": "full", "diagnostic_state": "needs_teaching", "probe_declined": True}}
+    rows = [
+        # Taught and rated; its listening ability, opened later, still waits in teaching.
+        row("word:taught", "done", {"instruction_exposed_at_utc": "2026-11-25T12:09:19+00:00"}),
+        row("word:taught", "intro", {"supports_initial_familiarity": True}, "listening"),
+        row("grammar:probing", "check", probe),          # its probe is open: never taught yet
+        row("grammar:declined", "intro", declined),      # 还不会: its teaching is ready, not shown yet
+        row("word:fresh", "intro", {"supports_initial_familiarity": True}),
+        row("word:finished", "done", {"instruction_exposed_at_utc": "2026-11-25T12:09:19+00:00"}),
+        row("word:batch", "intro", {"intro_route": "batch_v1"}),   # an earlier release's cards were shown
+    ]
+    reader = StudyQueries(Mock())
+    assert reader.untaught_course_ids(rows) == ("grammar:probing", "grammar:declined", "word:fresh")
+    assert set(reader.unfinished_course_ids(rows)) == {"word:taught", "grammar:probing", "grammar:declined",
+                                                       "word:fresh", "word:batch"}

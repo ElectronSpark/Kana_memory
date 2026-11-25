@@ -472,6 +472,8 @@ DECK_SHOW_ANSWER = "想好了，看答案"
 DECK_SELF_RIGHT = "我答对了"
 DECK_SELF_WRONG = "没答对"
 DECK_NEXT = "下一题"
+DECK_AGAIN = "再来一组"   # extra practice: after the last question of a deck, while the mode can serve more (N13)
+DECK_GO_ON = "继续学习"   # the consolidation deck: after its last question 继续学习 goes on (N5, N13)
 DECK_LEAVE = "结束练习"
 DECK_FINISH = "完成"
 DECK_PLAY = "播放读音"
@@ -516,6 +518,7 @@ class DeckQuestionModel:
     audio_text: str = ""
     answer: str = ""
     answer_cells: object = field(default=None, compare=False)   # DeckTexts.answer_cells, for the shown answer
+    cue: object = field(default=None, compare=False)   # DeckTexts.cue: the task as the question page shows it (N12)
     play_caption: str = DECK_PLAY
     submit_caption: str = DECK_SUBMIT
     input_hint: str = DECK_INPUT
@@ -535,7 +538,7 @@ class DeckResultModel:
     answer_line: str = ""
     answer_cells: object = field(default=None, compare=False)   # DeckTexts.answer_cells, for answer_line
     explanation: str = ""
-    next_caption: str = DECK_NEXT
+    next_caption: str | None = DECK_NEXT   # None: no way on after the deck's last question (N13)
     leave_caption: str = DECK_LEAVE
     scored: bool = True   # False: the answer could not be scored; the page offers the same question again
 

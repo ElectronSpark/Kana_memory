@@ -1288,6 +1288,35 @@ N6 一次一个块，并照试探优先的间隔。试探优先流程里已经�
 N7 间隔常数只有一个定义：probe_rules.OTHER_ANSWERS／MAX_WAIT 与 learning_store.RETRIEVAL_OTHER_ANSWERS／
    PROBE_RETRIEVAL_DELAY_SECONDS 合为一处（后两者由前两者得出）。
 N8 加练不变，只是到了时候的巩固组与 N2 的复习是它先出的排定工作，与别的到期工作一样。
+N9 试探之后的讲解是现成的新内容（2026-11-25）。一课的试探没过、显示了答案或答“还不会”，它的讲解此刻就可以开始。冻结的一轮是在
+   试探之前收集的，里面没有讲解的题；原先只有份额规则拿到一个复习候选时 B5 才为这一轮外的讲解重排一次，两条线此刻什么都出不了时
+   直接出结局：一轮里还有以后才到期的复习就是等待页（“稍后继续”，下次复习可能是第二天），什么都没有就是“本轮已保存”，要按
+   “开始新一轮”或重启才见到讲解；首页在这一轮里也不数它（同一课后来开放的能力已有排着的题时，“可开始初学”把这一课算作已排的、
+   而那一行又被过滤掉）。现在两种情形是同一个结局：两条线此刻什么都出不了、将要出等待页或结束页时（这次“继续学习”之前这一轮就
+   已封存），先看有没有这一轮装不下、此刻可以开始的讲解（首页未排题预览的同一读法，在当时的过滤之下）；有就像“什么都不剩”的一轮
+   那样结束这一轮，出“本轮已保存”，它的“开始新一轮”收集新的一轮、出这课的讲解（原生记录 N12 的做法，第一课在走查里就是这样）；
+   首页的主按钮与等待页的“检查并继续”也走到它（结束了的一轮由下一次“继续学习”重新开始）。不选“直接出讲解”，因为这一结局与
+   “什么都不剩”的结局相同，已由 N12 的测试钉住。每课每个教学状态（介绍号、阶段、试探档案的状态）至多这样结束一次（记在 B5 的
+   重排记录里），不会打转。准备好的巩固组照 N4 (iii) 先出，离开或做完那一组之后才是“本轮已保存”。首页的“可开始初学”在这一轮里
+   与重启之后相同（home_counts.teaching_count：未排题的讲解总是算上）。加练开着时不这样做（E11）。两种取向相同。0.36.17、0.36.19
+   已经如此，不是上一步才有的。
+N10 一个“下次复习”（2026-11-25）。首页、等待页（“稍后继续”）与添加内容页的到期时刻都是应用真正会出题的时刻，在当时的过滤之下：
+   已排上的题按 LearningStore.effective_question_due（N2 的读法在内）；还没排上的题（每次启动都结束所有待答的课程题，改设置重排
+   一轮也一样，题在下一次收集时才建）按它排上之后会被读成的样子（LearningStore.planned_question_due：把排题时存的下限交给同一个
+   effective_question_due）。原先未排上的题读的是存着的到期时间，近期状态（满 24 小时就出）在首页写晚了一天，排上之后又改回来。
+   首页一行取各来源（两条线已排与未排的）的最早者；“范围内的都做完了”一页不写下次复习，它在首页时首页那一行同样取这个时刻。
+N11 刚看过一课就加入（2026-11-25）。看过一课自己的页面（讲解页）之后 RETRIEVAL_DELAY_SECONDS＝60 秒内，同一能力不独立出题（防泄题
+   的曝光间隔，retention_check.exposure_times）；加入之后的试探题也照等。这条保留。等待比这个长度短时，课程的等待结局出“马上开始”
+   一页：下次出题的时刻与“回到今日”，不给别的工作（继续下一节、添加内容、加练等），到时自动出题。没有这样的曝光时试探题立即出。正好 60 秒的
+   等待（早期版本记录讲解后的第一次检查、答题反馈后的冷却，都在作答的那一刻开始）出现时仍是普通的“稍后继续”；之后再按“检查并继续”而剩下不到 60 秒时，出的是“马上开始”。
+N12 牌组的题面（2026-11-25）。加练与巩固组的课程题，任务行与普通题页由同一处决定（question_instruction_ui.instruction_view：
+   question_presentation 的短提示、它的文字角色、中文意思与是否收起，以及未学汉字的注音），由同一个排版函数显示
+   （instruction_layout）：日文短提示，其下是中文意思，或收在“中文提示”后面。自评形式的按钮不变；结果页不重复任务行。
+N13 牌组最后一题之后的按钮（2026-11-25）。组内是“下一题”；最后一题（答完后组里没有等着再出的题）之后：加练里是“再来一组”，模式
+   已经出不了什么时（ExtraSession.available 与到时的排定工作都没有）不给这个按钮，“结束加练”照旧；巩固组是“继续学习”（做完一组
+   “继续学习”接着走，N5）；本批末的练习组照旧“下一题”，之后是它的结束页。
+N14 添加内容页的“待初学 N 项”（2026-11-25）数的是还没讲过的课：一课只要有一个范围显示过讲解（probe_rules.explanation_shown）就
+   不算；讲过的课后来才开放的能力（例如听词选词需要语音时的“听”）不算待初学。原先数的是还有一个范围没做完的课。
 界面文字：广度优先的一句话改为“新内容和复习穿插着来；刚学的先巩固，旧课的复习做不完也继续学新的。”；给学习者列出三样的地方
 （复习记录页的“时间与进度”、首页的今日用时）多一行“刚学的内容当天的巩固算在新内容里；最近 14 天新学的，到期复习排在最前。”，三样的名称不变。本步没有
 别的新设置或新页面。
@@ -1320,6 +1349,17 @@ practice:consolidation: 开头）；假名线不变。
   extra_practice_runtime（N8）：到了时候的巩固组先于加练的练习组，两张练习卡之间也问。
   N7：learning_store 的两个常数由 probe_rules 得出。
   N5 的换题：组里的题由现有出题规划选（course_planning.iter_question_plans 与 learning_practice_policy.select_practice_plan，按这个单位的正式作答历史）；巩固组另外把这个状态最近一次接触（最近一次正式作答或练习作答，取较晚的）的题目模板（题型与变体）告诉规划，只要这种能力还有别的可出模板就不选它，只有一个模板时照出（sources/deck_course 的 avoid_last）。正式出题不受影响。
+[I 2026-11-25（N9–N14）；纯规则、合成存储与 fake UI 测试，原生未验]
+  N9：study_path_runtime._continue_dispatch 的“两条线都不出”分支，在巩固组（nothing_else）与等待／结束页之前问
+    _ready_teaching_outside（home_service.unqueued_teaching_states，身份带教学状态，probe_memo.may_rearrange），有就记下、
+    mark_finished 并出“本轮已保存”；home_counts.teaching_count 总是算上未排题的讲解。
+  N10：LearningStore.planned_question_due；home/previews.course_preview 与 admission_workload._course_dues 用它代替 question_not_before。
+  N11：learning_ui.short_wait、SHORT_WAIT_TITLE／SHORT_WAIT_TEXT（continue_learning 的等待分支）。
+  N12：question_instruction_ui.instruction_view／instruction_layout（instruction_widgets 由二者组成）；DeckTexts.cue 与
+    DeckQuestionModel.cue（sources/deck_course 给出），ui/practice_deck_page 用 instruction_layout 显示。
+  N13：DeckPresenter 的 last_caption 与 result(last, more)；DeckResultModel.next_caption 可为 None；DeckFlow 的 more；
+    display.DECK_AGAIN、DECK_GO_ON；extra_practice_runtime.ExtraPracticeFlow._more。
+  N14：StudyQueries.untaught_course_ids（admission_workload 的“待初学”）。
 
 22 学习者决定复习什么：只做一部分、不做一部分、多练一部分（决定 H8–H10、E9）
 来由：所有者 2026-11-23 要求能一直复习下去，并能多复习某一部分、只复习某一部分、不复习某一部分。在此之前：加练没有上限，但只在结束页与

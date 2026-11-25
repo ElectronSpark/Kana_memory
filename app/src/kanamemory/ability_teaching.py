@@ -120,6 +120,27 @@ def rows(db, states=None, *, teaching_only=False):
             yield {**dict(row), **values, 'instruction_scope': scope}
 
 
+def untaught_ids(scope_rows):
+    """Content ids of unfinished lessons whose first teaching was shown in none of their scopes (design 12 N14).
+
+    ``scope_rows``: rows(..., teaching_only=True). A lesson taught in one scope
+    whose later ability still waits in teaching is not untaught;
+    probe_rules.explanation_shown decides "shown".
+    """
+    from .probe_rules import explanation_shown
+    scopes = {}
+    for row in scope_rows:
+        scopes.setdefault(row['content_id'], []).append(row)
+    result = []
+    for content_id, found in scopes.items():
+        if all(row['stage'] == 'done' for row in found):
+            continue
+        checkpoints = [json.loads(row['checkpoint_json'] or '{}') for row in found]
+        if not explanation_shown(checkpoints, batch_route=checkpoints[0].get('intro_route') == 'batch_v1'):
+            result.append(content_id)
+    return tuple(result)
+
+
 def first_events(db, states=None):
     """First post-guide score per added/original scope, using per-unit seeks."""
     states = state_map(db) if states is None else states

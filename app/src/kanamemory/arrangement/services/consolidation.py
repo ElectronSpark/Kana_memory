@@ -61,5 +61,7 @@ class Consolidation:
 
     @staticmethod
     def presenter() -> DeckPresenter:
-        from ..display import CONSOLIDATION_HEADER, CONSOLIDATION_LEAVE, CONSOLIDATION_NOTE
-        return DeckPresenter(CONSOLIDATION_NOTE, header=CONSOLIDATION_HEADER, leave_caption=CONSOLIDATION_LEAVE)
+        from ..display import CONSOLIDATION_HEADER, CONSOLIDATION_LEAVE, CONSOLIDATION_NOTE, DECK_GO_ON
+        # After the last question 继续学习 goes on (N5); its button says so (N13).
+        return DeckPresenter(CONSOLIDATION_NOTE, header=CONSOLIDATION_HEADER, leave_caption=CONSOLIDATION_LEAVE,
+                             last_caption=DECK_GO_ON)

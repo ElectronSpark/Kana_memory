@@ -30,18 +30,22 @@ class DeckFlow:
     def __init__(self, deck, presenter, *, show: Show, failed: Callable[[BaseException], object],
                  speak: Callable[[str], object], now: Callable[[], object], leave: Callable[[], object],
                  unreadable: Callable[[BaseException], object] | None = None,
-                 finish: Callable[[], object] | None = None, before_next: Callable[[], bool] | None = None):
+                 finish: Callable[[], object] | None = None, before_next: Callable[[], bool] | None = None,
+                 more: Callable[[], bool] | None = None):
         """``deck``: a services.PracticeDeck; ``presenter``: its services.DeckPresenter.
 
         ``finish`` (extra practice, design 12 E1): called instead of the end
         page when the deck is used up, and when ``before_next`` (asked before
         each card after the first) says the deck is to end early; without it
-        the end page is shown and its button leaves.
+        the end page is shown and its button leaves. ``more`` (design 12 N13):
+        asked on the result page of the deck's last question, whether the
+        mode can serve more after it; False leaves that page without a way on
+        but its leave button (none: it always can).
         """
         self._deck, self._presenter = deck, presenter
         self._show, self._failed, self._speak, self._now, self._leave = show, failed, speak, now, leave
         self._unreadable = unreadable
-        self._finish, self._before_next = finish, before_next
+        self._finish, self._before_next, self._more = finish, before_next, more
 
     def start(self) -> bool:
         """Show the first question (or the end). False: the deck could not be read and nothing was shown."""
@@ -101,6 +105,8 @@ class DeckFlow:
         self._result(outcome)
 
     def _result(self, outcome: DeckOutcome) -> None:
-        model = self._presenter.result(outcome)
+        last = self._deck.pending == 0
+        more = self._more() if last and outcome.correct is not None and self._more is not None else True
+        model = self._presenter.result(outcome, last=last, more=more)
         self._page(model.header, lambda live: pages.deck_result_page(
             model, on_next=live(self._question), on_leave=live(self._leave)))

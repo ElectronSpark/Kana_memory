@@ -216,6 +216,19 @@ class HomeOverviewService:
         have no queued question yet, so a running planned round cannot show them (design 12 B5)."""
         return frozenset(self._course_preview(projection=projection, round_limited=False)[1]["unqueued"])
 
+    def unqueued_teaching_states(self, projection=None) -> frozenset[tuple]:
+        """unqueued_teaching, each lesson with its teaching state: ("teaching", content id, introduction id, stage,
+        the probe profile's diagnostic state). Design 12 N9 ends a frozen round once per such state."""
+        import json
+        states = set()
+        for content_id in self.unqueued_teaching(projection=projection):
+            row = self._learning.instruction_row(content_id)
+            checkpoint = json.loads(row["checkpoint_json"] or "{}") if row else {}
+            profile = checkpoint.get("initial_familiarity") or {}
+            states.add(("teaching", content_id, row["introduction_id"] if row else None,
+                        row["stage"] if row else None, profile.get("diagnostic_state")))
+        return frozenset(states)
+
     def untaught_lessons(self, now, projection=None) -> int:
         """Added lessons (and added abilities) with a queued question still to be taught (counts' "instruction")."""
         return int(self._learning.counts(self._course_kinds(), now, projection=projection).get("instruction", 0))

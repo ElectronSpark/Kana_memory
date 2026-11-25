@@ -958,6 +958,26 @@ class StudyPathRuntimeMixin:
             return Consolidate(items), None
         return None
 
+    def _ready_teaching_outside(self, read, serve):
+        """Design 12 N9: the identities of ready teaching the sealed round cannot show (None: none, or a round
+        was already ended for each of them).
+
+        Reached where the lanes of this round serve nothing now (a wait page or an end page would follow):
+        lessons whose teaching has no queued question (home_service.unqueued_teaching, under the filter in
+        force), as after a probe that failed or was answered 还不会 in this round. Not inside extra practice
+        (E11: it never serves new content). An identity carries the lesson's teaching state (introduction,
+        stage, the probe profile's state) and is kept with the probe memo's re-arrangements (B5), so a lesson
+        that already had one for its probe gets one more for the teaching that probe sent it to, never two for
+        the same state.
+        """
+        if getattr(serve, "learned_only", False):
+            return None
+        from .home_runtime import home_service
+        identities = home_service(self).unqueued_teaching_states(projection=read)
+        if identities and StudyPathRuntimeMixin.study_arrangement(self).probe_memo.may_rearrange(identities):
+            return identities
+        return None
+
     def _show_consolidation(self, items, show):
         """The consolidation deck (design 12 N5): header 巩固, leave 先到这里; afterwards 继续学习 goes on.
 
@@ -1116,12 +1136,30 @@ class StudyPathRuntimeMixin:
             self.continue_learning(_projection=read)
             place_enrollment_notice(self, hold)
         else:
+            # Design 12 E1: while extra practice is on, an end or "only waiting" outcome is its next step.
+            from .extra_practice_runtime import extra_button_rows, take_over
+
+            def round_saved():
+                self.screen("learning_done", "本轮已保存",
+                    u.label("作答记录和复习安排已保存。", size=17),
+                    u.button("开始新一轮", self.continue_study_path, primary=True),
+                    *self.learning_next_content_controls(),
+                    *extra_button_rows(self),
+                    u.button("回到今日", self.leave_learning))
+            # Design 12 N9: teaching that is ready but outside this frozen round (a probe that sent its lesson
+            # to teaching) ends the round as a round with nothing left does (N12 of the native notes): 本轮已保存,
+            # whose 开始新一轮 (and the home's 继续学习) collects a round that teaches it; never a wait page alone.
+            outside = (StudyPathRuntimeMixin._ready_teaching_outside(self, read, serve)
+                       if rearrange and sealed_before else None)
+            if outside is not None:
+                StudyPathRuntimeMixin.study_arrangement(self).probe_memo.rearranged(outside)
+                mark_finished(self.store)
+                round_saved()
+                return
             # Design 12 N5: with nothing else to serve, one ready consolidation repeat is enough for a deck.
             items = StudyPathRuntimeMixin.study_arrangement(self).consolidation.due_deck(now, nothing_else=True)
             if items and StudyPathRuntimeMixin._show_consolidation(self, items, KanaMemory.show_practice_deck):
                 return
-            # Design 12 E1: while extra practice is on, an end or "only waiting" outcome is its next step.
-            from .extra_practice_runtime import extra_button_rows, take_over
             # A round with nothing left ends, also when all that remains is
             # course work it could not admit (never a dead "题型已关闭" page).
             left_out = sealed_before and StudyPathRuntimeMixin._sealed_round_left_out(self, current, read)
@@ -1134,12 +1172,7 @@ class StudyPathRuntimeMixin:
                     if StudyPathRuntimeMixin._scope_done_instead(self, serve):
                         StudyPathRuntimeMixin.show_scope_done(self)
                         return
-                    self.screen("learning_done", "本轮已保存",
-                        u.label("作答记录和复习安排已保存。", size=17),
-                        u.button("开始新一轮", self.continue_study_path, primary=True),
-                        *self.learning_next_content_controls(),
-                        *extra_button_rows(self),
-                        u.button("回到今日", self.leave_learning))
+                    round_saved()
                     return
             # Reference-only symbols have no made-up independent audio cards.
             path = service.overview()

@@ -140,7 +140,8 @@ def _existing_work(ctx, repo, pending, entries, enabled, kana_kinds, now, read):
                               if entry["kind"] == "kana" and entry.get("state") in {"added", "started"})
 
     def reading():
-        introduction_ids = {("learning", cid) for cid in ctx.store.queries.unfinished_course_ids(
+        # 待初学 (design 12 N14): lessons whose first teaching has not been shown.
+        introduction_ids = {("learning", cid) for cid in ctx.store.queries.untaught_course_ids(
             read.course_rows if read is not None else None) if cid not in unavailable}
         introduction_ids.update(("kana", entry["content_id"], entry["script"])
                                 for entry in entries.values() if entry["kind"] == "kana"
@@ -195,8 +196,8 @@ def _course_dues(ctx, enabled, now, unavailable=frozenset()):
                 system_japanese_input=system_input, unavailable_ids=unavailable):
             if unit and unit["unit_id"] in units:
                 # The append planner also includes per-attempt retry and late
-                # feedback delays; use exactly that due for missing snapshots.
-                dues[unit["unit_id"]] = learning.question_not_before(unit, q, now=now, exposure_times=exposures)
+                # feedback delays; read as a queued question is (design 12 N10).
+                dues[unit["unit_id"]] = learning.planned_question_due(unit, q, now=now, exposure_times=exposures)
     return [datetime.fromisoformat(due) if due else None for due in dues.values()]
 
 

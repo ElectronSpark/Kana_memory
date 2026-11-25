@@ -39,11 +39,16 @@ def teaching_count(queued_count: int, queued: Iterable[tuple[str, str | None]] =
     yet. When the filters kept every key the queued side is its distinct
     content ids; otherwise it is the store's count capped at those ids, so
     the result is always in content units (review 2026-11-08 N2).
+    An unqueued content id is always counted (its teaching is ready for the
+    next round, design 12 N9), also when a queued row of the same content was
+    filtered out; a queued content the store counted is taken to be one of
+    those ids first, so no content is counted twice.
     """
     pairs = set(queued)
     queued_ids = {content_id for content_id, _ in pairs}
     queued_contents = len(queued_ids) if queued_count == len(pairs) else min(queued_count, len(queued_ids))
-    return queued_contents + len(set(unqueued) - queued_ids)
+    unqueued = set(unqueued)
+    return len(unqueued) + max(0, queued_contents - len(unqueued & queued_ids))
 
 
 def home_counts(*, kana_ready: int = 0, course_ready: int = 0, unqueued_course_ready: int = 0,

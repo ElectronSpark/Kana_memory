@@ -119,7 +119,16 @@ class CourseDeckLane:
                          # line that is the answer sentence is dropped; the sentence is shown once, in the
                          # answer line with its readings above (before, the inline-kana answer never matched).
                          explanation=distinct_explanation(question.get("feedback", ""), answer),
-                         audio_text=str(question.get("audio_text") or "") if question.get("requires_audio") else "")
+                         audio_text=str(question.get("audio_text") or "") if question.get("requires_audio") else "",
+                         # Design 12 N12: the task as the course question page shows it, read when it is shown.
+                         cue=lambda shown=dict(question): self.cue(shown))
+
+    def cue(self, question: Mapping[str, object]) -> tuple:
+        """The task of ``question`` as the course question page shows it (instruction_view with the known set)."""
+        from ...course_planning import known_ids
+        from ...question_instruction_ui import instruction_view
+        queries = getattr(getattr(self, "_store", None), "queries", None)
+        return instruction_view(dict(question), known_ids(queries) if queries is not None else None)
 
     @staticmethod
     def judge(ref: StateRef, question: Mapping[str, object], answer: str) -> tuple[bool | None, str]:

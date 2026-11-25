@@ -8,7 +8,7 @@ ArrangementPresenter.extra_parts.
 """
 from __future__ import annotations
 
-from ..display import EXTRA_DECK_NOTE, EXTRA_END, EXTRA_HEADER, ExtraButtonModel
+from ..display import DECK_AGAIN, EXTRA_DECK_NOTE, EXTRA_END, EXTRA_HEADER, ExtraButtonModel
 from .deck_presenter import DeckPresenter
 from .launch_notes import LaunchNotes
 
@@ -26,5 +26,5 @@ class ExtraPresenter:
 
     @staticmethod
     def deck() -> DeckPresenter:
-        """The presenter of a practice deck inside extra practice."""
-        return DeckPresenter(EXTRA_DECK_NOTE, header=EXTRA_HEADER, leave_caption=EXTRA_END)
+        """The presenter of a practice deck inside extra practice (after its last question 再来一组, N13)."""
+        return DeckPresenter(EXTRA_DECK_NOTE, header=EXTRA_HEADER, leave_caption=EXTRA_END, last_caption=DECK_AGAIN)

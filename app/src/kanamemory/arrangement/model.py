@@ -429,6 +429,9 @@ class DeckTexts:
     # A callable giving the answer's (surface, kana or "") cells, called only when the answer is shown
     # (course questions, owner 2026-11-18: kana above the standard spelling); None: the answer as text.
     answer_cells: object = field(default=None, compare=False)
+    # A callable giving the task as the ordinary question page shows it (question_instruction_ui.instruction_view:
+    # the short cue, its role, the Chinese hint, whether it is folded; design 12 N12); None: ``task`` as text.
+    cue: object = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

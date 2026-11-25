@@ -142,7 +142,7 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
                     teaching.add(content_row['introduction_id'])
                     ids["unqueued"].add(item['id'])
                 continue
-            due = learning_store.question_not_before(unit, plan, now=now, exposure_times=exposures)
+            due = learning_store.planned_question_due(unit, plan, now=now, exposure_times=exposures)
             if content_row["stage"] == "bridge" and not learning_store.retrieval_ready(content_row, now):
                 due = max(due or "", content_row["retrieval_at_utc"])
             if due and datetime.fromisoformat(due) > now:

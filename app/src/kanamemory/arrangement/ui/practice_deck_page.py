@@ -32,6 +32,31 @@ def _answer(line: str, cells, *, size: int):
                  cells_widget(None, shown, size=size, margin_bottom=0), margin_bottom=8)
 
 
+SHOW_HINT, HIDE_HINT = "中文提示", "收起提示"   # the question page's captions (question_instruction_ui)
+
+
+def _cue_rows(view) -> list:
+    """A task's view (cue, its text role, the Chinese hint, folded) as the question page lays it out (design 12
+    N12; question_instruction_ui.instruction_layout, whose captions and sizes it keeps): the cue, then the
+    hint as a line under it, or behind 中文提示 when folded. What is visible is decided by the view."""
+    text, role, hint, folded = view
+    rows = [u.label(text, size=13, color=u.MUTED, text_role=role)] if text else []
+    if hint and not folded:
+        rows.append(u.label(hint, size=13, color=u.MUTED))
+    elif hint:
+        holder, line = u.col(), u.label(hint, size=13, color=u.MUTED)
+
+        def toggle(widget=None, **kwargs):
+            if line in holder.children:
+                holder.remove(line)
+                widget.text = SHOW_HINT
+            else:
+                holder.add(line)
+                widget.text = HIDE_HINT
+        rows.extend((u.button(SHOW_HINT, toggle, compact=True, font_size=12), holder))
+    return rows
+
+
 def practice_result_rows(model: PracticeResultModel, *, on_continue: Callable[[], object] | None = None) -> list:
     """The verdict, the further sentences and, with ``on_continue``, the one button that goes on."""
     rows = []
@@ -60,7 +85,10 @@ class _QuestionForm:
         rows = [u.label(model.progress, size=12, color=u.MUTED)]
         if model.note:
             rows.append(u.label(model.note, size=13, color=u.MUTED))
-        if model.task:
+        if model.cue is not None:
+            # Design 12 N12: the task as the ordinary question page shows it (short cue, gloss or fold).
+            rows.extend(_cue_rows(model.cue()))
+        elif model.task:
             rows.append(u.label(model.task, size=14))
         rows.append(u.label(model.prompt, size=22, text_role="study"))
         if model.audio_text and self._on_play is not None:
@@ -107,8 +135,9 @@ def deck_result_page(model: DeckResultModel, *, on_next: Callable[[], object],
         rows.append(_answer(model.answer_line, model.answer_cells, size=18))
     if model.explanation:
         rows.append(u.label(model.explanation, size=14, color=u.MUTED))
-    rows.extend([u.button(model.next_caption, lambda widget: on_next(), primary=True),
-                 u.button(model.leave_caption, lambda widget: on_leave())])
+    if model.next_caption:   # none after the last question when the mode cannot serve more (design 12 N13)
+        rows.append(u.button(model.next_caption, lambda widget: on_next(), primary=True))
+    rows.append(u.button(model.leave_caption, lambda widget: on_leave()))
     return rows
 
 

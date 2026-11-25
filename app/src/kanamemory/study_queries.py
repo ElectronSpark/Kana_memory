@@ -70,6 +70,16 @@ class StudyQueries:
         rows = self.course_progress_rows() if rows is None else rows
         return tuple(dict.fromkeys(row['content_id'] for row in rows if row['stage'] != 'done'))
 
+    def untaught_course_ids(self, rows: Iterable | None = None) -> tuple[str, ...]:
+        """Unfinished lessons whose first teaching has not been shown in any scope (the add page's 待初学).
+
+        An ability that opens later on a taught lesson (a later scope still in
+        teaching) leaves the lesson out (design 12 N14); probe_rules.explanation_shown
+        decides "shown" (ability_teaching.untaught_ids). ``rows``: as unfinished_course_ids.
+        """
+        from .ability_teaching import untaught_ids
+        return untaught_ids(self.course_progress_rows() if rows is None else rows)
+
     def active_review_units(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
         """Scored, unsuspended abilities, regardless of pending/reservation state; none of an ability the lesson no
         longer lists (J6 R4)."""

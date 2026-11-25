@@ -37,6 +37,18 @@ from .content_library_ui import ContentLibraryUIMixin
 from . import ui_components as u
 
 LEARNING_BUSY_STATUS = "草稿暂未保存（数据库正忙），继续输入或提交时会重试。"
+# Design 12 N11: the page of a wait shorter than the exposure guard (RETRIEVAL_DELAY_SECONDS).
+SHORT_WAIT_TITLE, SHORT_WAIT_TEXT = "马上开始", "题目马上出现，到时自动继续。"
+
+
+def short_wait(due) -> bool:
+    """Whether ``due`` (ISO or datetime) lies ahead by less than the exposure guard's length (design 12 N11)."""
+    if not due:
+        return False
+    from .domain import utc_now
+    from .learning_store import RETRIEVAL_DELAY_SECONDS
+    instant = datetime.fromisoformat(due) if isinstance(due, str) else due
+    return 0 < (instant - utc_now()).total_seconds() < RETRIEVAL_DELAY_SECONDS
 
 LEARNING_ACTIVE = {"learning_familiarity", "learning_intro", "learning_prerequisite", "learning_guide", "learning_question", "learning_feedback", "study_reference"} | INTRO_BATCH_PAGES
 LEARNING_PAGES = LEARNING_ACTIVE | {"learning_wait", "learning_done"}
@@ -1178,6 +1190,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             return self.continue_diagnostic(current['episode_id'])
         if current["type"] == "waiting":
             due = current.get("due_at_utc")
+            if short_wait(due):
+                # Design 12 N11: a wait shorter than the exposure guard (a lesson's page seen a moment
+                # ago) shows the question when it is ready, with no page of other work in between.
+                self.screen("learning_wait", SHORT_WAIT_TITLE, u.label(self._learning_due_label(due), size=20),
+                    u.label(SHORT_WAIT_TEXT, color=u.MUTED), u.button("回到今日", self.leave_learning))
+                self.arm_learning_wait(due)
+                return
             when = self._learning_due_label(due) if due else "当前题型没有可答题目。"
             from .extra_practice_runtime import extra_button_rows
             self.screen("learning_wait", "稍后继续", u.label(when, size=20),

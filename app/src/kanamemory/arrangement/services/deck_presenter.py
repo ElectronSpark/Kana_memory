@@ -7,7 +7,8 @@ that moved the next formal review adds 下次复习提前了一点.
 """
 from __future__ import annotations
 
-from ..display import (DECK_ANSWER_PREFIX, DECK_DONE_TITLE, DECK_LEAVE, DECK_MISSES_NOTE, PRACTICE_ADVANCED,
+from ..display import (DECK_ANSWER_PREFIX, DECK_DONE_TITLE, DECK_LEAVE, DECK_MISSES_NOTE, DECK_NEXT,
+                       PRACTICE_ADVANCED,
                        PRACTICE_CORRECT,
                        PRACTICE_HEADER, PRACTICE_ONLY_MOVED_NOTE, PRACTICE_ONLY_NOTE, PRACTICE_RETRY, PRACTISED_LINE,
                        DeckEndModel, DeckQuestionModel, DeckResultModel, PracticeResultModel)
@@ -28,9 +29,11 @@ class DeckPresenter:
     HEADER = PRACTICE_HEADER
 
     def __init__(self, note: str = DECK_MISSES_NOTE, *, header: str = PRACTICE_HEADER,
-                 leave_caption: str = DECK_LEAVE):
+                 leave_caption: str = DECK_LEAVE, last_caption: str = DECK_NEXT):
+        """``last_caption``: the way on after the deck's last question (design 12 N13): 再来一组 in extra
+        practice, 继续学习 in the consolidation deck; the batch's deck keeps 下一题 (its end page follows)."""
         self._note = note
-        self._header, self._leave = header, leave_caption
+        self._header, self._leave, self._last = header, leave_caption, last_caption
 
     def question(self, card: DeckCard, pending: int) -> DeckQuestionModel:
         """The question page; ``pending`` is the number of items still waiting behind it."""
@@ -38,6 +41,7 @@ class DeckPresenter:
         progress = f"第 {card.number} 题" + (f" · 还有 {pending} 题" if pending else " · 最后一题")
         return DeckQuestionModel(
             header=self._header, progress=progress, prompt=texts.prompt, mode=card.mode, task=texts.task,
+            cue=texts.cue,
             note=self._note if card.number == 1 else "",
             options=texts.options if card.mode is DeckAnswerMode.CHOICE else (),
             audio_text=texts.audio_text,
@@ -45,10 +49,20 @@ class DeckPresenter:
             answer_cells=texts.answer_cells if card.mode is DeckAnswerMode.SELF_CHECK else None,
             leave_caption=self._leave)
 
-    def result(self, outcome: DeckOutcome) -> DeckResultModel:
-        """The result page of one deck answer: UI8 result, the answer and its explanation."""
+    def result(self, outcome: DeckOutcome, *, last: bool = False, more: bool = True) -> DeckResultModel:
+        """The result page of one deck answer: UI8 result, the answer and its explanation.
+
+        ``last``: nothing of the deck waits behind this answer (design 12 N13): the way on is the deck's
+        last caption, and none when ``more`` is False (the mode cannot serve more; its leave button stays).
+        """
         texts = outcome.card.texts
         scored = outcome.correct is not None
+        if scored and last:
+            return DeckResultModel(header=self._header, result=practice_result(outcome.correct, outcome.effect,
+                                                                                outcome.message),
+                                   answer_line=_answer_line(texts.answer), answer_cells=texts.answer_cells,
+                                   explanation=texts.explanation, scored=True, leave_caption=self._leave,
+                                   next_caption=self._last if more else None)
         return DeckResultModel(header=self._header, result=practice_result(outcome.correct, outcome.effect,
                                                                             outcome.message),
                                answer_line=_answer_line(texts.answer) if scored else "",

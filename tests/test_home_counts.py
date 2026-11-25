@@ -39,6 +39,9 @@ def test_teaching_is_counted_once_per_content_id():
     scoped = {("word:a", None), ("word:a", "speaking"), ("word:a", "listening"), ("word:b", None)}
     assert teaching_count(3, scoped) == 2
     assert teaching_count(4, scoped, {"word:a", "word:c"}) == 3
+    # Design 12 N9: a lesson whose probe sent it to teaching has no queued teaching row of its own scope
+    # while a later ability's row is queued and filtered out: its unqueued teaching is still counted.
+    assert teaching_count(0, {("grammar:b", "application")}, {"grammar:b"}) == 1
 
 
 def test_texts():

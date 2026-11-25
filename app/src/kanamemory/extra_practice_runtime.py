@@ -309,8 +309,17 @@ class ExtraPracticeFlow:
             return self._arranged()   # design 12 N8: a due consolidation deck is scheduled work, served first
         deck = self.session.deck(step)
         shown = self.app.show_practice_deck(deck, presenter=self.presenter.deck(), leave=self.end,
-                                            finish=self._after_deck, before_next=self._arranged_due)
+                                            finish=self._after_deck, before_next=self._arranged_due,
+                                            more=self._more)
         return bool(shown) or self.carry_on()
+
+    def _more(self):
+        """Design 12 N13: after a deck's last question, whether the mode can serve more (再来一组 or no button)."""
+        try:
+            return bool(self.session.available(_now()) or self._arranged_due())
+        except Exception as exc:   # a busy database: offer the button; pressing it settles the next step
+            _record(exc)
+            return True
 
     def _after_deck(self):
         if self._consolidation_due():
