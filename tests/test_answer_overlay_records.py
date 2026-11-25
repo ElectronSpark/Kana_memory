@@ -49,6 +49,7 @@ def test_restart_between_showing_and_answering_keeps_the_question_and_judges_wit
     learning.enroll(item(), now=START)
     when = ready(learning)
     learning.append_questions(question(qid="q1", **TYPED), now=when)
+    learning.save_draft("q1", {"presented": True})  # what the question page stores when it shows the question
     shown = snapshot_of(learning, "q1")
     overlay[SHA] = {"accepted": ["よんでます"]}  # the overlay changes while the question is open
     assert snapshot_of(learning, "q1") == shown  # nothing is copied into the stored question

@@ -183,7 +183,10 @@ def test_owned_course_is_left_to_its_protocol(stores, owner):
 def test_receipt_never_exempts_another_or_mutated_course_row(stores, column, value):
     store, learning = stores
     when = course(learning)
+    # Shown once (the mark the question page stores), so the question is archived, not removed.
+    learning.save_draft('q1', {'presented': True})
     archive_previous_rounds(store, now=when)
+    assert archived_question(store, 'q1') is not None
     with store._db:
         store._db.execute('UPDATE learning_question SET ' + column + '=? WHERE question_id=?', (value, 'q1'))
     with pytest.raises(ValueError):
@@ -196,6 +199,7 @@ def test_whole_transaction_rolls_back_on_failure(stores):
     store, learning = stores
     native(store)
     when = course(learning)
+    learning.save_draft('q1', {'presented': True})  # a met question: its row is completed, not removed
     before = {name: rows(store, name) for name in ('session_checkpoint', 'learning_question', 'app_setting')}
     store._db.execute("CREATE TEMP TRIGGER refuse_archive BEFORE UPDATE OF status ON learning_question "
                       "BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END")

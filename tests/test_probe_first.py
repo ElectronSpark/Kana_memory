@@ -534,7 +534,7 @@ def test_old_self_report_records_stay_valid(stores, tmp_path):
 # An app start ends the queue (practice_archive): an open probe is planned again (2026-11-22)
 
 def restart(app):
-    """What a new app start does: every pending course question is archived, the run's plans are new."""
+    """What a new app start does: pending course questions end (a met one archived, an untouched one removed), the run's plans are new."""
     archive_previous_rounds(app.store, now=app._test_clock[0])
     practice_round.reset(app.store)
     practice_round.enable(app.store)
@@ -605,18 +605,28 @@ def test_a_probe_kept_as_queued_is_planned_again_as_a_probe(learning_app):
     assert app.learning_store.current(KINDS)["question"]["id"] == again
 
 
-def test_an_exchanged_round_copy_is_planned_again_as_a_probe(learning_app):
+@pytest.mark.parametrize("met", [True, False])
+def test_an_exchanged_round_copy_is_planned_again_as_a_probe(learning_app, met):
+    from kanamemory.practice_archive import archived_question
     app = learning_app
     start(app)
     answer(app, "词一")
     click(app, "很轻松")
-    restart(app)   # the reading question of the first run is archived before its probe opens
+    [first] = [row["question_id"] for row in queued(app, "reading") if row["status"] == "pending"]
+    if met:
+        app.learning_store.save_draft(first, {"presented": True})   # the mark of a page that showed it
+    # The reading question of the first run ends before its probe opens: archived when it was met
+    # (the next one is a round copy), removed without a trace when untouched (the next one reuses its id).
+    restart(app)
     later(app)
     app.continue_learning()
     probe = app._learning_question["id"]
     assert app._learning_question["ability"] == "reading" and probe.startswith("replacement:")
     exchanged = json.loads(queued(app, "reading")[-1]["snapshot_json"])["replacement_of"]
-    assert ":round:" in exchanged
+    if met:
+        assert exchanged.startswith(first + ":round:") and archived_question(app.store, first) is not None
+    else:
+        assert exchanged == first and archived_question(app.store, first) is None
     restart(app)
     app.continue_learning()
     # Before the fix the re-created question was the ordinary choice plan.

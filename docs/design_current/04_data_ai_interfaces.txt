@@ -4,6 +4,10 @@
 原生题目行保留供既有历史和能力路由引用；课程旧pending置为completed仅表示结束排队，
 必须有精确归档回执才能豁免learning_event，get_question公开status为archived并阻止再提交。
 新一轮使用新的题实例ID，内容ID/能力ID/attempt_count不因归档而变更。
+记录格式不变（无新表、新列、新键）。从未被碰过的课程pending题（未显示——显示时题页存
+presented草稿——、无草稿、无作答、无event/evidence/其他设置或课时checkpoint引用）结束一轮时
+直接删除：它不含学习者信息，回执只会重复题库可再生的快照；其单元下次照常重新入队，
+此时沿用原提议ID（该ID从未留下痕迹）。已存回执与completed副本不删除、格式与读取不变。
 备份导出换连接保留本进程计划；成功导入按新启动归档导入队列。独立AI/诊断事务不被抢占。
 完整合同与验证见docs/practice_round_0300.txt，覆盖下文旧活动队列跨进程续接描述。
 2026-11-03增量：0.29.0学习路线/全题型接口见docs/learning_route_ai_0290_20261103.txt。

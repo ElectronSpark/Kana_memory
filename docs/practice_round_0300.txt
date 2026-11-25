@@ -28,6 +28,28 @@ practice_archive拥有一次BEGIN IMMEDIATE事务：归档原生checkpoint并解
 不会因为新轮次被盲目结算或变成独立复习证据。
 备份校验严格核对归档回执与原冻结行；伪造completed-without-event不能绕过验证。
 
+未碰过的题不留痕迹
+每次启动都结束所有待做课程题；以前每道都写一张约4 KB的回执并留completed副本，
+其中绝大多数是学习者从未见过的题，记录随启动次数无限增长，启动校验也越来越慢。
+规则：
+R1 未碰过的题直接移出队列，不写回执、不留completed副本。判定只有一个函数
+   practice_archive.untouched_course_questions：未被独立协议持有（无保留测试reservation/
+   handoff/source guard、非AI题）的pending行，同时满足——result_json为空；draft_json为{}
+   （题页显示课程题时即存{'presented': True}，见过的题必有草稿键）；快照无replacement_of；
+   无learning_event、无learning_evidence快照指向它（只读不早于本次最早一道候选题创建时间的证据行：
+   更早的行不可能引用它；时间筛选走现有索引evidence_target_time，旧行的快照不被解析）；
+   除本模块回执外，任何app_setting键不含其ID
+   或其ID/ID的JSON文本的sha256，任何app_setting值及课时checkpoint不含它这一完整JSON字符串。
+   理由：这样的题只是题库按当时规则生成的快照，不含任何学习者事实；下次收集照常重新入队
+   （沿用原提议ID，该ID从未留下痕迹），单元、顺序与原来相同。
+R2 碰过的题照旧归档：回执与completed行与原写法逐字节相同（测试以冻结的原函数对照）。
+R3 启动只校验本次写入的回执，每张一次；全部回执的完整校验仍在外来记录进入处：
+   备份检查inspect_backup、恢复import_backup、旧版转换convert_legacy_backup
+   （均经learning_store.validate_backup_rows）。导出本来不做语义校验，维持不变。
+R4 已存的旧回执和completed副本本步不删除、不VACUUM；各读取方照常读取，启动不再逐张校验它们。
+结束一轮的其余步骤不变：原生checkpoint仍各写回执；事务仍是一次BEGIN IMMEDIATE，
+中途失败整体回滚；下次收集照常重新排队。
+
 模块边界
 practice_archive是显式归档事务所有者及只读查询服务；页面不新增SQL/_db访问。
 practice_round持有内存计划，按需调用归档读取服务，不导入App/UI或网络。

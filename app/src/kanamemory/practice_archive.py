@@ -1,8 +1,11 @@
-"""End local runtime plans without grading, deleting questions, or changing memory.
+"""End local runtime plans without grading, deleting met questions, or changing memory.
 
 Receipts own only the checkpoint removal / pending-to-completed transition.
 Their complete before images remain ordinary long-term learner records. They
 cannot authorize a reviewed event, replace its answer, or settle a diagnostic.
+A queued course question the learner never met (untouched_course_questions)
+carries no information about the learner: ending a round removes it from the
+queue without a receipt or a completed copy.
 """
 from __future__ import annotations
 
@@ -10,6 +13,7 @@ from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
+import re
 
 PREFIX = 'practice_archive_v1:'
 NATIVE_PREFIX = PREFIX + 'native:'
@@ -356,11 +360,86 @@ def _owned_course(db, row):
     return None
 
 
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def untouched_course_questions(db, rows) -> set[str]:
+    """The ids among ``rows`` that the learner never met; the one definition of "untouched".
+
+    ``rows``: pending learning_question rows that no independent protocol owns
+    (_owned_course: no retention reservation, handoff or source guard, not AI
+    work). Such a row is untouched exactly when all of these hold:
+    (1) result_json is NULL: no submitted answer;
+    (2) draft_json decodes to {}: no draft at all. The question page stores
+        {'presented': True} when it shows a course question, so a question that
+        was ever on screen has a draft key;
+    (3) its snapshot has no 'replacement_of': it is not the new end of a
+        replacement chain, whose receipt names it;
+    (4) no learning_event row has its question_id;
+    (5) no learning_evidence row's snapshot names it as question_id (only rows
+        written at or after the earliest creation among ``rows`` can, so only
+        those are read);
+    (6) no other stored row names it: no app_setting key outside this module's
+        receipts contains the id or the sha256 hex of the id or of its JSON
+        text (the hashed keys of handoffs, guards and replacement receipts), and
+        neither those app_setting values nor any learning_content checkpoint
+        contain the id as a complete JSON string. This module's own receipts
+        are left out: each owns only a completed row, never a pending one.
+    Anything that fails a test is archived as before. The test is read-only.
+    """
+    rows = [row for row in rows if row['result_json'] is None and _load(row['draft_json']) == {}
+            and 'replacement_of' not in _load(row['snapshot_json'])]
+    if not rows:
+        return set()
+    ids = {row['question_id'] for row in rows}
+    used = {row[0] for row in db.execute('SELECT question_id FROM learning_event')}
+    if _table(db, 'learning_evidence'):
+        # Older rows are filtered by their time column alone (the inner select never reads a snapshot);
+        # only the remaining rows' snapshots are parsed. Both columns hold UTC instants; julianday
+        # compares them by value (to the millisecond, ties are scanned), and a time it cannot read is
+        # still scanned.
+        earliest = min((row['created_at_utc'] for row in rows), key=datetime.fromisoformat)
+        used.update(row[0] for row in db.execute(
+            "SELECT json_extract(snapshot_json,'$.question_id') FROM learning_evidence WHERE rowid IN "
+            "(SELECT rowid FROM learning_evidence WHERE NOT julianday(occurred_at_utc) < julianday(?))",
+            (earliest,)))
+    keys, strings = [], set()
+    for key, raw in db.execute('SELECT key,value_json FROM app_setting WHERE key NOT GLOB ?', (PREFIX + '*',)):
+        keys.append(key)
+        strings.update(_JSON_STRING.findall(raw))
+    for (raw,) in db.execute('SELECT checkpoint_json FROM learning_content'):
+        strings.update(_JSON_STRING.findall(raw))
+    keys = '\n'.join(keys)
+    result = set()
+    for question_id in ids - used:
+        names = (question_id, hashlib.sha256(question_id.encode('utf-8')).hexdigest(),
+                 hashlib.sha256(_dump(question_id).encode('utf-8')).hexdigest())
+        texts = {json.dumps(question_id, ensure_ascii=False), json.dumps(question_id)}
+        if not any(name in keys for name in names) and not texts & strings:
+            result.add(question_id)
+    return result
+
+
+def _validate_written(db, keys):
+    """Validate exactly the receipts this pass wrote, each once, from their stored text."""
+    for key in keys:
+        value = _load(db.execute('SELECT value_json FROM app_setting WHERE key=?', (key,)).fetchone()[0])
+        if key.startswith(NATIVE_PREFIX):
+            _validate_native(db, key, value)
+        else:
+            _validate_course(db, key, value)
+
+
 def archive_previous_rounds(store, *, now=None):
     """One idempotent commit ending local plans, preserving every observation.
 
     Retention reservations, handoffs, source guards and AI-owned course work
-    belong to their independent protocols and remain pending.
+    belong to their independent protocols and remain pending. An untouched
+    course question (untouched_course_questions) leaves the queue without a
+    trace; every other pending course question is archived. Only the receipts
+    this pass writes are validated here: the full check of all receipts runs
+    where a record comes in from outside (backup inspection, restore, legacy
+    conversion: learning_store.validate_backup_rows).
     """
     from .domain import _utc
     db = store._db
@@ -370,7 +449,7 @@ def archive_previous_rounds(store, *, now=None):
     summary = {'native': 0, 'course': 0, 'skipped_course': 0, 'skipped_owners': {}}
     with db:
         db.execute('BEGIN IMMEDIATE')
-        validate_database(db, deep=False)
+        written = []
         for row in db.execute('SELECT * FROM session_checkpoint').fetchall():
             before = dict(row)
             head = db.execute('SELECT snapshot_json FROM session_question WHERE session_id=? AND question_index=?',
@@ -385,23 +464,34 @@ def archive_previous_rounds(store, *, now=None):
                 raise ValueError('Archived session identity is too long')
             db.execute('INSERT INTO app_setting VALUES (?,?)', (key, _dump(value)))
             db.execute('DELETE FROM session_checkpoint WHERE session_id=?', (row['session_id'],))
+            written.append(key)
             summary['native'] += 1
         if _table(db, 'learning_question'):
+            unowned = []
             for row in db.execute("SELECT * FROM learning_question WHERE status='pending'").fetchall():
                 owner = _owned_course(db, row)
                 if owner:
                     summary['skipped_course'] += 1
                     summary['skipped_owners'][owner] = summary['skipped_owners'].get(owner, 0) + 1
                     continue
+                unowned.append(row)
+            untouched = untouched_course_questions(db, unowned)
+            for row in unowned:
+                if row['question_id'] in untouched:
+                    db.execute("DELETE FROM learning_question WHERE question_id=? AND status='pending'",
+                               (row['question_id'],))
+                    continue
                 before = dict(row)
                 value = {'version': 1, 'kind': 'course', 'archived_at_utc': stamp,
                          'before': before, 'before_sha256': _sha(before),
                          'after_sha256': _sha({**before, 'status': 'completed'}),
                          'evidence': _evidence(before)}
-                db.execute('INSERT INTO app_setting VALUES (?,?)', (_course_key(row['question_id']), _dump(value)))
+                key = _course_key(row['question_id'])
+                db.execute('INSERT INTO app_setting VALUES (?,?)', (key, _dump(value)))
                 db.execute("UPDATE learning_question SET status='completed' WHERE question_id=?", (row['question_id'],))
+                written.append(key)
                 summary['course'] += 1
-        validate_database(db, deep=False)
+        _validate_written(db, written)
     return summary
 
 

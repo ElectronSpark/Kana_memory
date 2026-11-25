@@ -38,6 +38,10 @@ app/native/java/.../KanaRestart.java；桌面不能），内容库页“立即�
 practice_archive是本地轮次归档事务所有者，以精确回执结束checkpoint/普通课程pending所有权，
 保留原题、草稿、未评级作答及已评分历史/SRS，跳过诊断和AI独立所有权。其读取接口返回
 已校验的分离值；原生已记录答案先幂等返回，归档保护再拒绝新提交。验证范围见本轮报告。
+归档事务内先按untouched_course_questions（唯一判定函数）把未碰过的普通课程pending题直接删除，
+其余照旧写回执并置completed；事务末只校验本次写入的回执各一次（_validate_written），
+validate_database的全量校验只由learning_store.validate_backup_rows在备份检查/恢复/旧版转换时调用。
+测试：tests/test_practice_archive_untouched.py；旧归档写法冻结在tests/support/practice_archive_original.py供逐字节对照。
 0.29.9：ai_prompt_policy只生成任务专用指令和合法候选示例，无网络、平台、数据库或评分副作用。
 tutor_service按问答、普通下一步、纯路由收窄schema；纯路由的实时响应校验拒绝记忆更新，
 不重验或迁移历史笔记。候选枚举和示例共享本地policy目标筛选；最终采纳仍经现有校验。

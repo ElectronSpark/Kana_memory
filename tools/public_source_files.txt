@@ -483,6 +483,8 @@ app/src/kanamemory/practice_archive.py
 docs/practice_round_0300.txt
 tests/test_practice_round.py
 tests/test_practice_archive.py
+tests/test_practice_archive_untouched.py
+tests/support/practice_archive_original.py
 tests/support/__init__.py
 tests/support/dex_files.py
 tests/support/learning_store_fixtures.py
