@@ -1,4 +1,4 @@
 """Release identity shared by the app UI and packaging checks."""
-VERSION = "0.36.19"
-BUILD_NUMBER = 361900
+VERSION = "0.36.20"
+BUILD_NUMBER = 362000
 BUILD_DATE = "2026-11-25"
