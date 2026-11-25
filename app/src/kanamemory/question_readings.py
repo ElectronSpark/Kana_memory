@@ -228,6 +228,18 @@ def _unmarked_target(question):
                 or any(question.get(flag) for flag in _UNMARKED_FLAGS))
 
 
+def hides_card_reading(question):
+    """Rule 2 for teaching-card text shown on the page of ``question`` (card_quote_readings): a function
+    (surface, reading) -> whether kana there would give away what the question tests, or None when it hides
+    nothing. A reading-sensitive question hides every word sharing a kanji or its reading with its target or an
+    accepted answer; a pronunciation or pitch question, whose tested word is not marked, hides every word."""
+    if not isinstance(question, Mapping) or not reading_sensitive(question):
+        return None
+    if _unmarked_target(question):
+        return lambda surface, reading: True
+    return _Rules(question, ()).gives_away
+
+
 def _checked_spans(text, spans, id_count):
     if not isinstance(text, str) or not isinstance(spans, list):
         return None

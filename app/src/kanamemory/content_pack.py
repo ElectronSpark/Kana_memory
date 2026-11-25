@@ -761,6 +761,44 @@ def lexicon_path() -> Path:
     return _resources() / "content.sqlite3"
 
 
+_side_files = {}  # (name, teaching override, library root) -> resolved path; clear_cache
+
+
+def side_file_path(name) -> Path:
+    """A side file (content_library_rules.SIDE_FILES) through the teaching database's resolution (design 08
+    section 4.1): with KANAMEMORY_TEACHING_PACK set the bundled copy; else the active core library's copy when
+    its pack lists the file in its layer, else the bundled copy. A pack without the file keeps the bundled one.
+    Resolved once per registry (the app restarts after an install; clear_cache forgets it)."""
+    configured = os.environ.get("KANAMEMORY_TEACHING_PACK")
+    bundled = _resources()
+    key = (name, configured, os.environ.get("KANAMEMORY_LIBRARY_ROOT"), str(bundled))
+    found = _side_files.get(key)
+    if found is None:
+        member, layer = library_rules.side_file_member(name), library_rules.SIDE_FILES[name]
+        core = None if configured else _core_layer()
+        if core is not None and member in core.manifest["layers"][layer]:
+            found = core.directory / member
+        else:
+            found = bundled / name
+            # A folder standing in for the bundled resources (isolated builds, tests) without this file: the
+            # build's own copy, which every reader used before side files followed this resolution.
+            own = Path(__file__).with_name("resources") / name
+            if not found.exists() and own.exists():
+                found = own
+        _side_files[key] = found
+    return found
+
+
+def lexicon_side_file(lexicon, name) -> Path:
+    """A side file that belongs to a lexicon (the lexical sentence review): side_file_path for the active
+    lexicon (lexicon_path), else the file beside ``lexicon`` (a database opened by its own path)."""
+    try:
+        active = Path(lexicon).resolve() == lexicon_path().resolve()
+    except OSError:
+        active = False
+    return side_file_path(name) if active else Path(lexicon).with_name(name)
+
+
 def _connect(path):
     connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     connection.execute("PRAGMA query_only=ON")
@@ -1542,6 +1580,7 @@ def clear_cache():
     _teaching_sha256.cache_clear()
     _layers_for.cache_clear()
     _frozen.clear()
+    _side_files.clear()
     library_index.clear_cache()
     with _effective_lock:
         _effective.clear()

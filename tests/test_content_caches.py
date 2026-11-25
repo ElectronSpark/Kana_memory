@@ -55,6 +55,7 @@ CACHES = {
     "content_pack.py::_mirror": "the registry mirror, by path and stamp; clear_cache",
     "content_pack.py::_layers_for": "the checked library layers of the frozen registry; clear_cache",
     "content_pack.py::_pack_manifest": "a pack's manifest, by path and stamp; clear_cache",
+    "content_pack.py::_side_files": "resolved side-file paths of the frozen registry; clear_cache",
     "content_pack.py::_teaching_sha256": "the bundled teaching database's content_sha256, by path and stamp; clear_cache",
     "content_pack.py::_frozen": "the registry this process started with; clear_cache",
     "content_pack.py::_effective": "the effective catalogue itself; clear_cache",
@@ -70,7 +71,10 @@ CACHES = {
     "example_store.py::_CATALOGUE_FINGERPRINTS": "validated encodings, keyed by their sha256",
     "learning_questions.py::_GRAMMAR_FOLD": "keyed by the reading table it compiles",
     "material_review.py::_INDEX": "keyed by the identity of the review data object",
-    "material_review.py::review_data": "the review file bundled with the app build, not the catalogue",
+    "material_review.py::_review_data": "the review file of the active core library or the bundled one, by its "
+                                        "path (an installed library's folder names its version)",
+    "card_quote_readings.py::_items": "the card readings file of the active core library or the bundled one, by "
+                                      "its path (an installed library's folder names its version)",
     "learning_store.py::_DICTIONARY_WORDS": "keyed by the lexicon path (an installed core library has its own)",
     "natural_translations.py::_lookup": "keyed by database path, stamp and text",
     "order_translations.py::_lookup": "keyed by database path, stamp and text",

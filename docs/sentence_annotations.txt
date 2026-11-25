@@ -19,7 +19,8 @@
 主动查看讲解先保存辅助作答状态；返回读音或听力题后仍隐藏题干注音，不把讲解显示状态带回题目。
 
 资源与可复现构建
-读取 app/src/kanamemory/resources/sentence_annotations.sqlite3，独立于学习数据库。
+读取当前核心库的 sentence_annotations.sqlite3：已安装的核心库带了这个文件就用库里的，否则用应用自带的
+（app/src/kanamemory/resources；规则见 08 第 4.1.1 节），独立于学习数据库。
 格式 kanamemory-sentence-annotations，版本1；SQLite user_version也为1。
 sentence表按原文SHA256与原文双重核对；每段保存start/end/surface/reading/accent_number及来源。
 start/end使用Python Unicode codepoint，必须精确锚定原句；表层调号还必须同时匹配accent_surface与accent_reading。
@@ -39,3 +40,23 @@ data/enrichment/sentence_annotation_review_v1.json保存后续人工核对；too
 运行时只依赖Python标准库和已有App模块，不将分析器及其大词典装进手机。
 来源版本、依赖版本、覆盖数及未决清单写入 environment/sentence_annotation_coverage.json；许可文本随资源打包。
 自动上下文读法与音高连接规则并不等同逐词人工认证，覆盖率与语言准确性分别记录。
+
+补全注音（内容侧）
+例句、题干日文和讲解卡「」里的日文，凡有汉字而还没有注音的，用 tools/annotate_readings.py 补出候选：
+  python -X utf8 tools/annotate_readings.py --out <候选目录> --analyser-python <装有 pyopenjtalk-plus 的解释器> --agreement
+分析器只在单独的环境里，经工具里的一个适配器以子进程调用；App 与测试从不导入它。没有分析器时工具说明缺什么并以
+退出码 3 结束。工具只补没有注音的：已有一行的例句、已有读法的引号不碰。每个词的读法依次取：已审核的读法修正
+（config/question_reading_overrides.json）、同形词规则（config/grammar_form_markers.json 的 homograph_by_context，
+例如「店は九時に開く」读 あく）、课程单词的读法（活用形取词干加原文假名尾）、最后才是分析器；每段记下来源。
+候选目录里：
+  sentence_annotations.candidates.sqlite3  与本文件同格式的候选行（不带调号；状态 candidate）
+  card_quote_readings.candidates.json      讲解卡读法的整份文件（原有条目加新条目）
+  review.json      要看的：分析器为多读法词（课程词条或词典里不止一个读法，或工具里列出的常见多读词）定的读法
+                   （heteronym），分析器的词切不准原文的文字（coverage），没有可用读法或不是日文汉字的词（unknown）
+  agreement.json   分析器单独读已审核文字时与审校读法的一致率（总体与多读词），以及不一致的样例
+  summary.json     按来源、按标记的总数
+  annotation_source.json  课程判定读法的来源条目（course-lesson-reading）
+审校：review.json 的 heteronym 与 coverage 按抽样核对，一致率低的那一类多抽；改正写进读法修正或同形词规则后重跑，
+不手改候选文件。并入：先把 annotation_source.json 的条目加进 presentation_metadata 的 annotation_sources（否则用到它的
+整行注音按规则不显示），再把候选行并入 sentence_annotations.sqlite3、把讲解卡候选作为 card_quote_readings.json
+放进资源目录，随下一个核心库发出；本工具不装任何东西。

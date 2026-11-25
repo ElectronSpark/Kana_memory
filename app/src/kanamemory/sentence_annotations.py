@@ -15,7 +15,7 @@ import re
 import sqlite3
 
 from .pitch_accent import morae
-from .content_pack import load_namespace
+from .content_pack import load_namespace, side_file_path
 
 FORMAT = "kanamemory-sentence-annotations"
 VERSION = 1
@@ -26,7 +26,7 @@ ANNOTATION_SOURCES = load_namespace("presentation_metadata", {}).get("annotation
 
 
 def _database_path():
-    return Path(__file__).with_name("resources") / "sentence_annotations.sqlite3"
+    return side_file_path("sentence_annotations.sqlite3")  # the active core library's copy, else the bundled one
 
 
 def _plain(text, status="unavailable"):

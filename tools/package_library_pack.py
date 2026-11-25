@@ -87,9 +87,11 @@ from kanamemory.build_info import VERSION as APP_VERSION  # noqa: E402
 from kanamemory.library_file_open import EXTENSION as PACK_SUFFIX  # noqa: E402
 
 LEARNER_TABLES = {"study_card", "review_event", "session_checkpoint", "learning_unit", "app_setting"}
-ANNOTATION_FILES = ("sentence_annotations.sqlite3", "natural_translations.sqlite3", "order_translations.sqlite3",
-                    "lexical_sentence_review.sqlite3")
-REVIEW_FILE = "learning_material_review.json"
+# The side files (content_library_rules.SIDE_FILES: annotations/ and review/) a core pack carries when the resources
+# hold them; the app reads an installed core's copy in place of the bundled one (content_pack.side_file_path). An
+# app that does not read one of them yet installs the pack and keeps its bundled copy (validate_library_pack accepts
+# any .sqlite3/.json/.txt member in those layers), so no minimum app version follows from them.
+SIDE_FILES = tuple(rules.SIDE_FILES)
 # The first app version that reads the answer_overlay namespace (design 08): set by the version bump that
 # ships it. An older app accepts a pack with the namespace and ignores it.
 ANSWER_OVERLAY_MIN_APP = "0.36.17"
@@ -437,11 +439,9 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
     if not extension:
         add(rules.TEACHING_PACK_FILE, _check_file(teaching_db, resources), "teaching")
         add(rules.LEXICON_FILE, _check_file(resources / "content.sqlite3", resources), "lexicon")
-        for name in ANNOTATION_FILES:
+        for name in SIDE_FILES:
             if (resources / name).is_file():
-                add("annotations/" + name, _check_file(resources / name, resources), "annotations")
-        if (resources / REVIEW_FILE).is_file():
-            add("review/" + REVIEW_FILE, _check_file(resources / REVIEW_FILE, resources), "review")
+                add(rules.side_file_member(name), _check_file(resources / name, resources), rules.SIDE_FILES[name])
         if include_media and (resources / "media").is_dir():
             for path in sorted(p for p in (resources / "media").rglob("*") if p.is_file()):
                 add(path.relative_to(resources).as_posix(), _check_file(path, resources), "media")

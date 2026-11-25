@@ -221,6 +221,7 @@ app/src/kanamemory/backup_ui.py
 app/src/kanamemory/backup_worker.py
 app/src/kanamemory/build_info.py
 app/src/kanamemory/card_management.py
+app/src/kanamemory/card_quote_readings.py
 app/src/kanamemory/content.py
 app/src/kanamemory/content_pack.py
 app/src/kanamemory/content_library_rules.py
@@ -569,6 +570,8 @@ tools/extend_practice_annotations.py
 tools/practice_grammar_expansion.py
 tools/practice_word_expansion.py
 tools/sentence_annotation_corpus.py
+tools/annotate_readings.py
+tools/annotate_readings_analyser.py
 tools/sentence_annotation_overrides.py
 
 # Design and engineering documents; [private] blocks are dropped on export (2026-11-07).
@@ -814,6 +817,7 @@ tests/test_content_bundle.py
 tests/test_content_library_rules.py
 tests/test_content_library_service.py
 tests/test_package_library_pack.py
+tests/test_content_side_files.py
 tests/test_content_library_ui.py
 tests/test_content_exposure_spacing.py
 tests/test_content_link_navigation.py
@@ -949,6 +953,8 @@ tests/test_scheduler_audit.py
 tests/test_selection_layout.py
 tests/test_semantic_task_equivalence.py
 tests/test_sentence_annotation_corpus.py
+tests/test_annotate_readings.py
+tests/test_card_quote_readings.py
 tests/test_sentence_annotation_sequences.py
 tests/test_session_kind_filter.py
 tests/test_session_snapshot_journal.py

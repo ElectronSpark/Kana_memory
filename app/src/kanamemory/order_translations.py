@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from .content_pack import side_file_path
+
 FORMAT = 'kanamemory-order-translations'
 VERSION = 1
 FIELDS = frozenset({'version', 'status', 'source_text', 'source_translation', 'text'})
@@ -51,7 +53,7 @@ def validate_order_translation(value, *, source_text, source_translation=''):
 
 
 def _database_path():
-    return Path(__file__).with_name('resources') / 'order_translations.sqlite3'
+    return side_file_path('order_translations.sqlite3')  # the active core library's copy, else the bundled one
 
 
 @lru_cache(maxsize=512)

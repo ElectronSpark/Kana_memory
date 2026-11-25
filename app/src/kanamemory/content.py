@@ -63,8 +63,11 @@ class ContentRepository:
         self._practice_word_candidates_cache = {}
         self._kana_records_cache = None
         self._kana_context_symbols_cache = {}
+        from .content_pack import lexicon_side_file
         from .lexical_review import LexicalReview, RESOURCE
-        review_path = self.path.with_name(RESOURCE)
+        # The active lexicon's review comes from the same library (design 08 section 4.1); another database
+        # opened by its path keeps the review beside it.
+        review_path = lexicon_side_file(self.path, RESOURCE)
         self.lexical_review = LexicalReview(review_path, self._db) if review_path.is_file() else None
 
     def close(self):

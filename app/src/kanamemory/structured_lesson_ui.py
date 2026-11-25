@@ -3,6 +3,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
+from .card_quote_readings import CardReadings
 from .structured_lessons import lesson_view, original_sections
 from .typography import configure_study_ranges
 
@@ -35,12 +36,16 @@ def unbroken_groups(text):
     return "　".join(groups)
 
 
-def block_widget(u, block, index=0):
+def block_widget(u, block, index=0, readings=None):
+    """One teaching block; readings (card_quote_readings.CardReadings of its card) adds the readings of the
+    Japanese inside its 「」 (field blocks.<index>...); without it the texts are shown as they are."""
+    def shown(field, text):
+        return readings.text(f"blocks.{index}.{field}", text) if readings is not None else text
     if block['kind'] == 'prosody':
         from .prosody_cue_ui import cue_widget
         result = cue_widget({'prompt': block['text'], 'prosody_cue': block['prosody_cue']})
         if block.get('caption'):
-            result.add(lesson_label(u, block['caption'], size=14, color=u.MUTED))
+            result.add(lesson_label(u, shown('caption', block['caption']), size=14, color=u.MUTED))
         result._lesson_block_kind = 'prosody'
         result._feedback_fragment = {'kind': 'teaching_block', 'index': index, 'block': deepcopy(block)}
         return result
@@ -51,7 +56,7 @@ def block_widget(u, block, index=0):
         data['label'] = block['label']
         result = fixed_pitch_diagram(u, **data, show_counts=False)
         if block.get('caption'):
-            result.add(lesson_label(u, block['caption'], size=14, color=u.MUTED))
+            result.add(lesson_label(u, shown('caption', block['caption']), size=14, color=u.MUTED))
         result._lesson_block_kind = 'pitch_sequence'
         result._feedback_fragment = {'kind': 'teaching_block', 'index': index, 'block': deepcopy(block)}
         return result
@@ -60,25 +65,27 @@ def block_widget(u, block, index=0):
         data = {key: block[key] for key in ('morae', 'levels', 'word_mora_count', 'label', 'number') if key in block}
         result = pitch_diagram(u, **data, show_counts=True)
         if block.get('caption'):
-            result.add(lesson_label(u, block['caption'], size=14, color=u.MUTED))
+            result.add(lesson_label(u, shown('caption', block['caption']), size=14, color=u.MUTED))
         result._lesson_block_kind = 'pitch'
         result._feedback_fragment = {'kind':'teaching_block', 'index':index, 'block':deepcopy(block)}
         return result
     children = [u.label(block["label"], size=12, bold=True, color=u.MUTED, margin_bottom=5)]
     kind = block["kind"]
     if kind == "pattern":
-        children.append(lesson_label(u, unbroken_groups(block["text"]), size=19, bold=True, color=u.GREEN))
+        children.append(lesson_label(u, unbroken_groups(shown("text", block["text"])), size=19, bold=True,
+                                     color=u.GREEN))
     elif kind == "flow":
         # A vertical path keeps every node readable at large accessibility
         # font sizes; it never squeezes several sentences into narrow columns.
         for n, node in enumerate(block["nodes"]):
             if n:
                 children.append(u.label("↓", size=16, color=u.MUTED, margin_bottom=3))
-            children.append(lesson_label(u, node, size=17, bold=True, margin_bottom=3))
+            children.append(lesson_label(u, shown(f"nodes.{n}", node), size=17, bold=True, margin_bottom=3))
     elif kind == "compare":
         for n, (title, text) in enumerate(block["rows"]):
-            children.append(u.col(lesson_label(u, title, size=16, bold=True, color=u.GREEN, margin_bottom=3),
-                                  lesson_label(u, text, size=16, margin_bottom=2),
+            children.append(u.col(lesson_label(u, shown(f"rows.{n}.0", title), size=16, bold=True, color=u.GREEN,
+                                              margin_bottom=3),
+                                  lesson_label(u, shown(f"rows.{n}.1", text), size=16, margin_bottom=2),
                                   margin_top=5 if n else 0, padding_left=8))
     elif kind == "beats":
         # Keep a beat in its own tile. A joined text line may wrap a separator
@@ -91,15 +98,16 @@ def block_widget(u, block, index=0):
             tiles = []
             for offset, cell in enumerate(cells[start:start + columns]):
                 tiles.append(u.col(u.label(str(start + offset + 1), size=11, color=u.MUTED, margin_bottom=2),
-                    lesson_label(u, cell, size=19, bold=True, color=u.GREEN, margin_bottom=0),
+                    lesson_label(u, shown(f"cells.{start + offset}", cell), size=19, bold=True, color=u.GREEN,
+                                 margin_bottom=0),
                     flex=1, padding=5, margin_right=4, background_color=u.WHITE))
             tiles.extend(u.col(flex=1, margin_right=4) for _ in range(columns - len(tiles)))
             children.append(u.row(*tiles, margin_bottom=5))
     else:
-        for value in block["items"]:
-            children.append(lesson_label(u, "• " + value, size=16, margin_bottom=5))
+        for j, value in enumerate(block["items"]):
+            children.append(lesson_label(u, "• " + shown(f"items.{j}", value), size=16, margin_bottom=5))
     if block.get("caption"):
-        children.append(lesson_label(u, block["caption"], size=14, color=u.MUTED, margin_top=5))
+        children.append(lesson_label(u, shown("caption", block["caption"]), size=14, color=u.MUTED, margin_top=5))
     result = u.col(*children, padding=12, margin_bottom=10,
                    background_color=u.ENTRY_BACKGROUNDS[index % len(u.ENTRY_BACKGROUNDS)])
     result._lesson_block_kind = kind
@@ -107,8 +115,11 @@ def block_widget(u, block, index=0):
     return result
 
 
-def teaching_block(u, item, *, compact=False, speak=None):
+def teaching_block(u, item, *, compact=False, speak=None, question=None):
+    """The teaching card of ``item``. question: the question shown on the same page; the readings of the
+    Japanese inside the card's 「」 leave out what that question hides (card_quote_readings)."""
     view = lesson_view(item)
+    readings = CardReadings(item.get("id"), question)
     blocks = deepcopy(view["blocks"][:1] if compact else view["blocks"])
     from .lesson_diagram_ui import diagram_widget
     diagram = view.get('diagram')
@@ -135,9 +146,9 @@ def teaching_block(u, item, *, compact=False, speak=None):
                 break
     diagrams = ([diagram_widget(u, diagram, speak=speak)]
                 if diagram and not compact and not duplicate_pitch else [])
-    result = u.col(lesson_label(u, view["focus"], size=18, margin_bottom=12),
+    result = u.col(lesson_label(u, readings.text("focus", view["focus"]), size=18, margin_bottom=12),
                    *diagrams,
-                   *[block_widget(u, block, index) for index, block in enumerate(blocks)])
+                   *[block_widget(u, block, index, readings) for index, block in enumerate(blocks)])
     result._lesson_view = view
     result._feedback_fragment = {"kind": "teaching_plan", "target_id": item.get("id"),
         "content_revision": item.get("revision"), "item_snapshot": deepcopy(item),
@@ -148,6 +159,7 @@ def teaching_block(u, item, *, compact=False, speak=None):
 def original_notes(u, item):
     """Secondary, local expansion; never changes navigation or study progress."""
     sections = original_sections(item)
+    readings = CardReadings(item.get("id"))
     body = u.col()
     opened = [False]
 
@@ -157,8 +169,9 @@ def original_notes(u, item):
         body.clear()
         if opened[0]:
             body.add(*[u.col(u.label(label, size=12, color=u.MUTED, bold=True),
-                             *[lesson_label(u, text, size=14) for text in values])
-                       for label, values in sections])
+                             *[lesson_label(u, readings.text(f"notes.{i}.{j}", text), size=14)
+                               for j, text in enumerate(values)])
+                       for i, (label, values) in enumerate(sections)])
         trigger.text = "收起补充说明" if opened[0] else "补充说明"
 
     trigger = u.button("补充说明", toggle, compact=True, font_size=12)

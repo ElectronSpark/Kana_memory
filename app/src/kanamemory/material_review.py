@@ -69,10 +69,20 @@ def question_explanation_fingerprint(question):
     return fingerprint(value)
 
 
-@lru_cache(maxsize=1)
+REVIEW_FILE = "learning_material_review.json"
+
+
 def review_data():
-    path = Path(__file__).with_name("resources") / "learning_material_review.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
+    """The review of the active core library when its pack carries one, else the bundled review (design 08
+    section 4.1, content_pack.side_file_path)."""
+    from .content_pack import side_file_path
+    return _review_data(str(side_file_path(REVIEW_FILE)))
+
+
+@lru_cache(maxsize=1)
+def _review_data(path):
+    # Keyed by the path: an installed library's folder names its version and content hash.
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     if data.get("format") != "kanamemory-material-review" or data.get("version") != 1:
         raise ValueError("Unsupported bundled material review")
     return data

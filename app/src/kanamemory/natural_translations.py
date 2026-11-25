@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from .content_pack import side_file_path
 from .order_translations import context_id
 
 FORMAT = 'kanamemory-natural-translations'
@@ -17,7 +18,7 @@ VERSION = 1
 
 
 def _database_path():
-    return Path(__file__).with_name('resources') / 'natural_translations.sqlite3'
+    return side_file_path('natural_translations.sqlite3')  # the active core library's copy, else the bundled one
 
 
 @lru_cache(maxsize=512)

@@ -1696,7 +1696,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                     demonstration, *choices, self._learning_guide_result, *reference, *self._learning_guide_archive(checkpoint))
             else:
                 self.screen("learning_guide", "跟着做",
-                    *([] if shared_intro else [teaching_block(u, item, compact=True)]), *task,
+                    *([] if shared_intro else [teaching_block(u, item, compact=True, question=q)]), *task,
                     *stimulus,
                     *([] if is_pitch_question(q) else [guide_prompt]),
                     *reference, *choices, self._learning_guide_result, *self._learning_guide_archive(checkpoint))
@@ -1792,7 +1792,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 body.clear()
                 widget.text = '讲解'
             else:
-                body.add(teaching_block(u, item, speak=self.speak_text))
+                body.add(teaching_block(u, item, speak=self.speak_text, question=question))
                 widget.text = '收起讲解'
         # Current practice guides already show an ability-specific demonstration.
         # Old simple word guides still need this small first-use explanation.
@@ -2342,7 +2342,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 u.button("返回题目", self.continue_learning, primary=True))
             return
         instruction = item["instruction"]
-        self.screen("learning_prerequisite", "回看讲解", teaching_block(u, item, speak=self.speak_text),
+        self.screen("learning_prerequisite", "回看讲解", teaching_block(u, item, speak=self.speak_text, question=q),
             self._learning_instruction_example(instruction),
             self.natural_translation_label(instruction.get('example', ''), instruction.get('translation', '')),
             *self.order_translation_rows(instruction.get('example', ''), instruction.get('translation', ''),

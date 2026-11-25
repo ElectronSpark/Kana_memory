@@ -67,6 +67,16 @@ LEXICON_FILE = "lexicon/content.sqlite3"
 LAYERS = ("teaching", "lexicon", "annotations", "media", "review", "notice")
 LAYER_PREFIX = {"teaching": "teaching/", "lexicon": "lexicon/", "annotations": "annotations/",
                 "media": "media/", "review": "review/", "notice": ""}
+# Side files (design 08 section 4.1): per-text data beside the teaching content, read from the active core library
+# when its pack carries the file, else from the bundled resources (content_pack.side_file_path). name -> layer.
+SIDE_FILES = {"sentence_annotations.sqlite3": "annotations", "natural_translations.sqlite3": "annotations",
+              "order_translations.sqlite3": "annotations", "lexical_sentence_review.sqlite3": "annotations",
+              "card_quote_readings.json": "annotations", "learning_material_review.json": "review"}
+
+
+def side_file_member(name):
+    """The pack member path of a side file (annotations/<name> or review/<name>); KeyError for another name."""
+    return LAYER_PREFIX[SIDE_FILES[name]] + name
 PROFILES = frozenset({"core", "extension"})
 TEACHING_PROFILES = frozenset({"personal", "demo"})
 STATES = frozenset({"ready", "pending_restart", "damaged"})

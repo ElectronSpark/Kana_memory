@@ -174,11 +174,31 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   manifest.json
   teaching/<namespace>.json      —— kanamemory-teaching-namespace v1 文档，一个命名空间一文件
   lexicon/content.sqlite3        —— 仅核心库；第三方包不得携带（首版）
-  annotations/*.sqlite3          —— 可选
+  annotations/<附属文件>          —— 可选（见 4.1.1）
   media/…                        —— 可选
   review/learning_material_review.json —— 可选
   NOTICE.txt                     —— 必需
   signature.json                 —— 可选，见 4.5
+
+4.1.1 附属文件（每段文字的注音、译文与审校资料）
+  核心库可以带这些文件，名单在 content_library_rules.SIDE_FILES（名称 → 分层）：
+    annotations/sentence_annotations.sqlite3      例句与题干日文的逐词注音
+    annotations/natural_translations.sqlite3      现代中文显示译文
+    annotations/order_translations.sqlite3        语序参考译文
+    annotations/lexical_sentence_review.sqlite3   词典例句审校（属于同一库的 lexicon/content.sqlite3）
+    annotations/card_quote_readings.json          讲解卡「」里日文的读法（02 讲解卡；格式见 card_quote_readings）
+    review/learning_material_review.json          教学材料审校叠加
+  读取与教学数据库同一条规则（content_pack.side_file_path）：设了 KANAMEMORY_TEACHING_PACK 时用应用自带的那份；
+  否则当前有效的已安装核心库（未损坏、清单的该分层列出这个文件）带了这个文件就用库里的，没带就用应用自带的。
+  所以没带附属文件的核心库照常可用（用自带的那份），带了的装上之后取代自带的那份；改正一处读法只需发新的
+  内容库，不必发新的应用。词典例句审校跟着它所属的词典走：读的是当前有效词典（lexicon_path）时按上面的规则，
+  按路径另开的词典读它旁边的那份。安装后应用会自行重启，所以不做运行中的重新装载；各读取模块的缓存以文件路径
+  （已装库的文件夹名带版本与内容哈希）或路径加文件时间为键，新版本的库自然读新文件。扩展库的附属文件不读。
+  打包工具 package_library_pack 把资源目录里有的附属文件放进核心包（清单的 files 列出大小与 sha256，同其他成员），
+  导入的大小上限照常适用。0.35.0 起的应用接受 annotations/ 与 review/ 里任何 .sqlite3／.json／.txt 成员，不认识
+  的文件随包安装、不读，所以带附属文件不需要提高最低应用版本。成员校验不过（sha256 或大小不符）照样拒绝整个包；
+  已安装的文件大小变了，下次启动时整个库按损坏处理（回到自带内容）。预检页的数字与注册表条目不因附属文件而变：
+  条目的 content_sha256 覆盖全部成员。
 
 4.2 manifest.json 字段
   format: "kanamemory-library-pack", version: 1
@@ -589,8 +609,8 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
 
 10.1 核心库 kanamemory.core
 - 由现有 tools/build_app_content.py / build_teaching_content.py 的产物加 manifest 组成：
-  teaching/ 为现有全部命名空间，lexicon/content.sqlite3，annotations/ 三个 sqlite，
-  review/learning_material_review.json，media/，NOTICE.txt。library_version 取 content_version。
+  teaching/ 为现有全部命名空间，lexicon/content.sqlite3，annotations/ 与 review/ 的附属文件（4.1.1），
+  media/，NOTICE.txt。library_version 取 content_version。
 - 随 APK 预装于资源目录（不复制到库目录），注册表第一条固定为它，enabled 恒 true，不可移除。
 - demo 构建产出 kanamemory.demo（profile core 的 demo 子型），同一机制。
 - 所有 ID、revision、指纹、模板绑定、路线摘要不变：迁移前后以 data/content_packs/full/baseline
@@ -725,8 +745,8 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
 - 核心库槽位：注册表恒有一条 kanamemory.core；导入 profile=core 的包（library_id 必须为 kanamemory.core）替换其教学
   sqlite 与词典路径（pack_path/lexicon_path），source 变为 file；移除即恢复内置条目。这用于 demo/空资源 App 导入
   完整核心库的验证，也是 10.2 “KANAMEMORY_TEACHING_PACK 继续覆盖”之外的第二条覆盖路径（环境变量优先级更高）。
-- 扩展库教学分层按 JSON 文档读取并在读取时校验 sha256，不做分片懒加载；annotations/media/review 分层随包安装但
-  本阶段不装载。validate_library_pack 只做形状校验，typed 值解码与捆绑 sqlite 的学习者表检查在服务 stage_bytes 中进行
+- 扩展库教学分层按 JSON 文档读取并在读取时校验 sha256，不做分片懒加载；media 分层随包安装但不装载；核心库的
+  annotations/review 附属文件按 4.1.1 读取，扩展库的不读。validate_library_pack 只做形状校验，typed 值解码与捆绑 sqlite 的学习者表检查在服务 stage_bytes 中进行
   （2026-11-24 起导入按流进行，解码在解包的同一遍里，见 16.10）。
 - 尺寸：完整核心库包约 306 MiB（未压缩），故 MAX_PACK_BYTES=512 MiB、单文件 256 MiB，高于 5.2 建议的 256 MiB
   （2026-11-24 起的上限见 16.10：文件 512 MiB、单个成员 400 MiB、成员合计 1024 MiB、成员 20000 个）。
