@@ -24,6 +24,9 @@ from ..model import Lane, StateRef
 from .states import StoreStates
 
 EVENT_PREFIX = "practice:"   # evidence event ids of practice misses; source and role carry the meaning
+# Evidence event ids of consolidation answers (design 12 N5): the count and last exposure are read back
+# from them (TeachingQueries.consolidation_exposures, CONSOLIDATION_EVENTS) and the study clock reads them.
+CONSOLIDATION_PREFIX = EVENT_PREFIX + "consolidation:"
 
 
 class StorePracticeMoves:

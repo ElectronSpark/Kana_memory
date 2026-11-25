@@ -84,7 +84,8 @@ def preview_question_plans(cache: dict | None, content_id: str, load_item, *, en
 def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,
                         learning_store: CourseProgressReader, system_japanese_input: bool,
                         unit_states: dict | None = None,
-                        unavailable_ids: Iterable[str] = ()) -> Iterator[CourseQuestionPlan]:
+                        unavailable_ids: Iterable[str] = (),
+                        avoid_templates: dict | None = None) -> Iterator[CourseQuestionPlan]:
     """Read missing ability candidates; existing snapshots remain owners.
 
     Explicit templates carry the response mode and reviewed scaffold needed
@@ -162,8 +163,10 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
                 yield CourseQuestionPlan(state, dict(probe, id=f"{item['id']}:{ability}:review:{count}"))
                 continue
         history = learning_store.practice_history(item["id"], ability)
+        # avoid_templates ({ability: (kind, variant)}): only the consolidation deck passes it (design 12 N5).
         selected = select_practice_plan(item, ability, kinds, policy_state, history,
-                                        templates=templates, shared=True)
+                                        templates=templates, shared=True,
+                                        avoid=(avoid_templates or {}).get(ability))
         if selected is None:
             continue
         kind, variant = selected["kind"], selected["variant"]

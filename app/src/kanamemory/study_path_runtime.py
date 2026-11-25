@@ -244,6 +244,12 @@ class Rearrange:
 
 
 @dataclass(frozen=True)
+class Consolidate:
+    """A dispatch's choice of a consolidation deck (design 12 N5): its items; nothing else was shown."""
+    items: tuple
+
+
+@dataclass(frozen=True)
 class PreparedKana:
     """Proof that continue already reconciled and prepared the stored main queue.
 
@@ -767,6 +773,7 @@ class StudyPathRuntimeMixin:
         the kinds with a candidate inside it share the time first.
         """
         from .arrangement.model import Unit
+        from .arrangement.rules.recent import REVIEW_TIER
         from .arrangement.sources.candidates import DispatchCandidates, LaneHead, head_member, review_head
         from .first_teaching_dispatch import explicit_start_head
         from .practice_round import promote, promote_initial, sealed
@@ -786,16 +793,22 @@ class StudyPathRuntimeMixin:
         normal = self.store.teaching_queries.choose_lane(kana_priority, course_priority,
                      course_started=bool(current and current.get("new_dispatch_continue")))
         priority = kana_priority if normal == "kana" else course_priority if normal == "course" else None
-        # The share rule decides once the normal head is review of its lane (tier 3, or a first check of
-        # something already learned: candidates.review_head, 2026-11-18); tiers 0-2 and new work keep their order.
-        if priority is None or not review_head(normal, normal_kana if normal == "kana" else current, priority):
-            return None, None
         arrangement = StudyPathRuntimeMixin.study_arrangement(self)
         source = DispatchCandidates(self.store, self.learning_store, pending=pending,
             kana=LaneHead(normal_kana, kana_priority) if normal_kana else None,
             course=LaneHead(current, course_priority) if course_priority is not None else None,
             enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read, skipped=skipped,
             memo=arrangement.probe_memo, scope_contents=scope)
+        if priority is None or priority[0] >= REVIEW_TIER:
+            # Design 12 N4 (revised): after tiers 0-2, before the share rule, a recent state's due review,
+            # then a ready consolidation deck; nobody's candidate, charged to new content (N3).
+            before = StudyPathRuntimeMixin._before_share(self, source, now)
+            if before is not None:
+                return before
+        # The share rule decides once the normal head is review of its lane (tier 3, or a first check of
+        # something already learned: candidates.review_head, 2026-11-18); tiers 0-2 and new work keep their order.
+        if priority is None or not review_head(normal, normal_kana if normal == "kana" else current, priority):
+            return None, None
         dispatcher = arrangement.dispatcher
         decision = dispatcher.decide(source, now)
         memo = arrangement.probe_memo
@@ -832,6 +845,53 @@ class StudyPathRuntimeMixin:
                 if due and memo.may_rearrange(due):
                     return Rearrange(due), None
         return None, {Unit.COURSE: "course", Unit.KANA: "kana"}.get(decision.unit)
+
+    def _before_share(self, source, now):
+        """Design 12 N4 (revised) (ii) and (iii) under breadth first, once no head is in tiers 0-2: a protected
+        (lane, head) / lane pair as _share_dispatch returns it, a Consolidate, or None (the share rule decides).
+
+        (ii) The first due review of a recent state in the course order (N1: the scope first, then the due;
+        N2 decides "due"): the course head itself when it is one (rules/recent via candidates.recent_head), else
+        the first one behind it (LearningStore.current(only_recent=True): a scope, or the round's frozen order,
+        can put other rows first). (iii) A consolidation deck that is ready by N5's rule (three states ready,
+        or one for READY_WAIT; "nothing else can be served" is the end branch of _continue_dispatch), outside
+        the leave pause.
+        """
+        head = source.first_recent_review()
+        if head is not None:
+            # The course head itself is served as the course lane; one behind it is shown as that head.
+            return (None, "course") if source.course_head() is head else (("course", head), None)
+        items = StudyPathRuntimeMixin.study_arrangement(self).consolidation.due_deck(now)
+        if items:
+            return Consolidate(items), None
+        return None
+
+    def _show_consolidation(self, items, show):
+        """The consolidation deck (design 12 N5): header 巩固, leave 先到这里; afterwards 继续学习 goes on.
+
+        Leaving starts the pause before the next deck (its unanswered items stay
+        unpractised); a deck that could serve nothing pauses too, so that the
+        dispatch never offers it again at once. False: nothing was shown.
+        ``show``: the app's show_practice_deck (KanaMemory's, passed by the dispatch).
+        """
+        from .arrangement.services.consolidation import Consolidation
+        from .domain import utc_now
+        consolidation = StudyPathRuntimeMixin.study_arrangement(self).consolidation
+        deck = consolidation.deck(items)
+
+        def leave():
+            consolidation.left(utc_now())
+            self.continue_study_path(_checkpoint_saved=True)
+
+        def finish():
+            if not deck.served:
+                consolidation.left(utc_now())
+            self.continue_study_path(_checkpoint_saved=True)
+
+        shown = show(self, deck, presenter=Consolidation.presenter(), leave=leave, finish=finish)
+        if not shown:
+            consolidation.left(utc_now())
+        return bool(shown)
 
     def _continue_dispatch(self, pending, now, read, service, prepared_kana, scope=_UNREAD, rearrange=True):
         """``scope``: the focus scope's content the caller read for this action (None: no scope); read here when not given.
@@ -895,6 +955,18 @@ class StudyPathRuntimeMixin:
             if isinstance(protected, Rearrange):
                 return protected
         else:
+            protected = None
+            if not any(priority is not None and priority[0] <= 3 for priority in (kana_priority, course_priority)):
+                # Design 12 N5 under 深度优先: after the due reviews, before new lessons.
+                items = StudyPathRuntimeMixin.study_arrangement(self).consolidation.due_deck(now)
+                if items:
+                    protected = Consolidate(items)
+        if isinstance(protected, Consolidate):
+            seal(self.store)
+            if StudyPathRuntimeMixin._show_consolidation(self, protected.items, KanaMemory.show_practice_deck):
+                return
+            protected, share_lane = None, None   # nothing could be shown: the lanes as usual
+        if not StudyPathRuntimeMixin.study_arrangement(self).dispatcher.active():
             protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
                 enabled_kinds=self.learning_preferences()["enabled"],
                 kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now, projection=read,
@@ -943,6 +1015,10 @@ class StudyPathRuntimeMixin:
             self.continue_learning(_projection=read)
             place_enrollment_notice(self, hold)
         else:
+            # Design 12 N5: with nothing else to serve, one ready consolidation repeat is enough for a deck.
+            items = StudyPathRuntimeMixin.study_arrangement(self).consolidation.due_deck(now, nothing_else=True)
+            if items and StudyPathRuntimeMixin._show_consolidation(self, items, KanaMemory.show_practice_deck):
+                return
             # Design 12 E1: while extra practice is on, an end or "only waiting" outcome is its next step.
             from .extra_practice_runtime import extra_button_rows, take_over
             # A round with nothing left ends, also when all that remains is

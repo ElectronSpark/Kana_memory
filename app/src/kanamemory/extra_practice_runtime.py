@@ -274,12 +274,17 @@ class ExtraPracticeFlow:
         return True
 
     def _practice(self, step):
+        if self._consolidation_due():
+            return self._arranged()   # design 12 N8: a due consolidation deck is scheduled work, served first
         deck = self.session.deck(step)
         shown = self.app.show_practice_deck(deck, presenter=self.presenter.deck(), leave=self.end,
                                             finish=self._after_deck, before_next=self._arranged_due)
         return bool(shown) or self.carry_on()
 
     def _after_deck(self):
+        if self._consolidation_due():
+            self._arranged()
+            return
         try:
             step = self.session.next(_now())
         except Exception as exc:   # a busy database: the mode stays on and the deck's page stays (retry)
@@ -293,8 +298,17 @@ class ExtraPracticeFlow:
 
     def _arranged_due(self):
         try:
-            return self.session.arranged_due(_now())
+            return self.session.arranged_due(_now()) or self._consolidation_due()
         except Exception as exc:
+            _record(exc)
+            return False
+
+    def _consolidation_due(self):
+        """Design 12 N8: a consolidation deck that is due is scheduled work extra practice serves first."""
+        from .study_path_runtime import StudyPathRuntimeMixin
+        try:
+            return bool(StudyPathRuntimeMixin.study_arrangement(self.app).consolidation.due_deck(_now()))
+        except Exception as exc:   # a busy database: extra practice goes on
             _record(exc)
             return False
 

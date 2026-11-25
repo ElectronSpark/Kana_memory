@@ -187,7 +187,11 @@ class TeachingQueries:
     # the answer logs are append-only while the app runs; clock_log_tail and
     # clock_log_holds let the caller see when that did not hold (import, reset).
 
-    _CLOCK_LOGS = {'learning_event': 'event_id', 'review_event': 'event_id', 'word_spelling_attempt': 'attempt_id'}
+    _CLOCK_LOGS = {'learning_event': 'event_id', 'review_event': 'event_id', 'word_spelling_attempt': 'attempt_id',
+                   'learning_evidence': 'event_id'}
+    # Evidence event ids of consolidation practice answers (design 12 N5; arrangement.sources.practice_moves).
+    CONSOLIDATION_EVENTS = 'practice:consolidation:*'
+
 
     @staticmethod
     def _clock_range(rowid: str, at: str, since: datetime, after: int | None) -> tuple[str, str, tuple]:
@@ -240,6 +244,39 @@ class TeachingQueries:
         return (row for row in self._connection.execute(f'''SELECT rowid AS row,content_id,script,skill,
             occurred_at_utc AS at
             FROM word_spelling_attempt WHERE {where} ORDER BY {order} LIMIT ?''', (*values, limit)))
+
+    def clock_consolidation_events(self, since: datetime, limit: int,
+                                   after: int | None = None) -> Iterator[sqlite3.Row]:
+        """Consolidation practice answers (design 12 N5: evidence rows of role exposure whose event id
+        starts with practice:consolidation:) at or after ``since``.
+
+        Columns: row (rowid), target_id, ability, kind, at (occurred_at_utc).
+        Newest first, at most ``limit``; with ``after`` only rows whose rowid
+        is greater, in rowid order.
+        """
+        where, order, values = self._clock_range('rowid', 'occurred_at_utc', since, after)
+        return (row for row in self._connection.execute(f'''SELECT rowid AS row,target_id,ability,kind,
+            occurred_at_utc AS at FROM learning_evidence
+            WHERE {where} AND event_id GLOB ? AND source='course' AND role='exposure'
+            ORDER BY {order} LIMIT ?''', (*values, self.CONSOLIDATION_EVENTS, limit)))
+
+    def latest_practice_exposure(self, target_id: str, ability: str) -> sqlite3.Row | None:
+        """The latest practice answer (an extra-practice or consolidation deck row, event id practice:...) of one
+        course unit: kind, variant (of its frozen question), at; None without one."""
+        return self._connection.execute('''SELECT kind,json_extract(snapshot_json,'$.assessment_question.variant') AS variant,
+            occurred_at_utc AS at FROM learning_evidence WHERE target_id=? AND ability=? AND source='course'
+            AND role='exposure' AND event_id GLOB 'practice:*'
+            ORDER BY julianday(occurred_at_utc) DESC,rowid DESC LIMIT 1''', (target_id, ability)).fetchone()
+
+    def consolidation_exposures(self, since: datetime) -> Iterator[sqlite3.Row]:
+        """Every consolidation practice answer at or after ``since`` (the N5 count and last exposure).
+
+        Columns: target_id, ability, kind, at (occurred_at_utc), oldest first.
+        """
+        return (row for row in self._connection.execute('''SELECT target_id,ability,kind,occurred_at_utc AS at
+            FROM learning_evidence WHERE event_id GLOB ? AND source='course' AND role='exposure'
+            AND julianday(occurred_at_utc)>=julianday(?) ORDER BY julianday(occurred_at_utc),rowid''',
+            (self.CONSOLIDATION_EVENTS, since.isoformat())))
 
     def clock_log_tail(self, log: str) -> tuple[int, str] | None:
         """(rowid, id) of the newest row of one answer log, or None when it is empty."""

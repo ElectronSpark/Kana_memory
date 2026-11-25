@@ -7,6 +7,11 @@
   abilities without a pending question; here every other ability of the
   lesson is reported pending, so it plans exactly this one, whether or not the
   unit has a pending question of its own (that question is never touched).
+- avoid_last (the consolidation deck, design 12 N5): the planner is told the
+  (kind, variant) of the state's most recent exposure (its latest formal
+  question, LearningStore.practice_history, or its latest practice answer,
+  TeachingQueries.latest_practice_exposure, whichever is later) and chooses
+  another template whenever the ability has one; with one template it repeats it.
 - judge: learning_questions.grade_learning_answer, the course pages' judge; an
   answer it cannot score (empty, unresolved) is reported as None.
 - mode: a choice question without a special stimulus (pitch, multi-gap) is
@@ -45,10 +50,25 @@ class _OneAbility:
 class CourseDeckLane:
     """The course lane of ports.DeckQuestions over one LearningStore; ``enabled_kinds``: the learner's course kinds."""
 
-    def __init__(self, store, learning, enabled_kinds: Iterable[str] = (), *, system_japanese_input: bool = False):
+    def __init__(self, store, learning, enabled_kinds: Iterable[str] = (), *, system_japanese_input: bool = False,
+                 avoid_last: bool = False):
         self._store, self._learning = store, learning
         self._enabled = frozenset(enabled_kinds)
         self._system_japanese = bool(system_japanese_input)
+        self._avoid_last = bool(avoid_last)   # the consolidation deck (design 12 N5)
+
+    def last_template(self, ref: StateRef) -> tuple[str, object] | None:
+        """(kind, variant) of the state's most recent exposure: its latest formal question or practice answer."""
+        formal = self._learning.practice_history(ref.content_id, ref.ability, limit=1)
+        practice = self._store.teaching_queries.latest_practice_exposure(ref.content_id, ref.ability)
+        candidates = []
+        if formal:
+            question = formal[-1]["question"]
+            candidates.append((datetime.fromisoformat(formal[-1]["occurred_at_utc"]),
+                               (question.get("kind"), question.get("variant"))))
+        if practice is not None and practice["kind"]:
+            candidates.append((datetime.fromisoformat(practice["at"]), (practice["kind"], practice["variant"])))
+        return max(candidates, key=lambda value: value[0])[1] if candidates else None
 
     @staticmethod
     def scheduled(ref: StateRef) -> bool:
@@ -63,10 +83,12 @@ class CourseDeckLane:
         if item is None:
             return None
         admitted = item.get("enrolled_abilities", item.get("abilities", []))
+        avoid = {ref.ability: self.last_template(ref)} if self._avoid_last else None
         plan = next(iter(iter_question_plans(item, enabled_kinds=self._enabled,
                                              queries=_OneAbility(self._store.queries, admitted, ref.ability),
                                              learning_store=self._learning,
-                                             system_japanese_input=self._system_japanese)), None)
+                                             system_japanese_input=self._system_japanese,
+                                             avoid_templates=avoid)), None)
         if plan is None or plan.question.get("ability") != ref.ability:
             return None
         question = plan.question

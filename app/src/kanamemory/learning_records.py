@@ -6,7 +6,7 @@ from datetime import datetime
 from .domain import _utc
 from .learning_questions import stored_enabled_kinds
 from .content_availability import AVAILABLE, state_text
-from .learning_store import _ability_due, _latest_due
+from .learning_store import _latest_due
 
 ABILITY_LABELS = {"understanding": "理解", "reading": "读法", "use": "提取与使用",
                   "listening": "听辨理解", "application": "应用"}
@@ -45,7 +45,7 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
         if content["stage"] == "bridge" and not learning.retrieval_ready(content, now):
             continue
         question = learning.get_question(pending["question_id"])
-        effective_due = _latest_due(_ability_due(pending, question), pending["not_before_utc"])
+        effective_due = _latest_due(learning.serviceable_ability_due(pending, question, now), pending["not_before_utc"])
         if question["result"] is not None or not effective_due or datetime.fromisoformat(effective_due) <= now:
             ready_content.add(pending["content_id"])
     due = len(ready_content)
@@ -66,7 +66,8 @@ def learning_records_snapshot(learning, *, offset=0, limit=PAGE_SIZE, now=None):
             unit["has_pending"] = question is not None
             unit["awaiting_rating"] = bool(question and question["result"] is not None)
             unit["prerequisite_blocked"] = item["dependency_status"]["blocked"]
-            effective_due = _latest_due(_ability_due(unit, question), question["not_before_utc"]) if question else None
+            effective_due = (_latest_due(learning.serviceable_ability_due(unit, question, now), question["not_before_utc"])
+                             if question else None)
             if content["stage"] == "bridge" and not learning.retrieval_ready(content, now):
                 effective_due = _latest_due(effective_due, content["retrieval_at_utc"])
             unit["practice_due_at_utc"] = effective_due

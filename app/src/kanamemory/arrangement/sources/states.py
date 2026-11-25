@@ -14,7 +14,9 @@ Implements ports.StateSource for both lanes; read-only, no SQL here.
   confirmation). The independence guards (floors, the feedback, tutor,
   retention and teaching exposure waits) are left out: they delay serving
   a question but do not make a due unit "not due"; the mastery check and
-  the queues keep their own guards.
+  the queues keep their own guards. It is the queue's reading (design 12
+  N2): a recent unit's short interval is due after one day; ``early`` says
+  that the unit is due at ``now`` only by that reading.
 
 ``last_rated`` is the scheduler state's last_review: only a formal rating
 sets it (observations, unscored attempts, exposures and auxiliary
@@ -72,12 +74,12 @@ class StoreStates:
             return StateView(ref.key, None, None)
         question_id = self._store.queries.first_pending_question_id(unit["unit_id"])
         question = self.learning.get_question(question_id) if question_id else None
-        due = self.learning.scheduled_question_due(unit, question or {}, now)
-        return state_view(self._store.scheduler, ref.key, unit["scheduler_state"], due, now)
+        due, early = self.learning.serviceable_due(unit, question or {}, now)
+        return state_view(self._store.scheduler, ref.key, unit["scheduler_state"], due, now, early=early)
 
 
 def state_view(scheduler, key: str, state: dict, due: str | None, now: datetime, *,
-               in_scope: bool = True) -> StateView:
+               in_scope: bool = True, early: bool = False) -> StateView:
     """The StateView of one scheduler state (a card's or unit's scheduler_state) with the lane's ``due``.
 
     ``scheduler``: the store's fsrs Scheduler (StudyStore.scheduler), whose
@@ -92,4 +94,4 @@ def state_view(scheduler, key: str, state: dict, due: str | None, now: datetime,
         in_step=card.last_review is not None and card.state in (State.Learning, State.Relearning),
         retrievability=(scheduler.get_card_retrievability(card, current_datetime=now)
                         if card.last_review is not None else None),
-        in_scope=in_scope)
+        in_scope=in_scope, early=early)

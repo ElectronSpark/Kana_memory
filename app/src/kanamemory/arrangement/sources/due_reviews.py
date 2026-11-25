@@ -53,8 +53,17 @@ class DueReviews:
         kinds = tuple(enabled_kinds)
         if not kinds:
             return []
-        rows = [row for row in self._store.queries.review_unit_queue_rows(exclude=unavailable)
-                if row["due_at_utc"] and datetime.fromisoformat(row["due_at_utc"]) <= now]
+        from .recent import RecentFirsts, serviceable
+        firsts = RecentFirsts(self._store)
+
+        def due(row) -> bool:
+            # Design 12 N2: the queue's reading of the due (a recent unit's short interval after one day).
+            value = serviceable(row, row["due_at_utc"], firsts, now)[0]
+            return bool(value) and datetime.fromisoformat(value) <= now
+
+        candidates = list(self._store.queries.review_unit_queue_rows(exclude=unavailable))
+        firsts.prime(row["unit_id"] for row in candidates)
+        rows = [row for row in candidates if row["due_at_utc"] and due(row)]
         if not rows:
             return []
         from ...learning_questions import KIND_ABILITIES

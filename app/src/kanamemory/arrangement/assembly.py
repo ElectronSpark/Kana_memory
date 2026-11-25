@@ -12,7 +12,8 @@ kana queue (QueuePractice: the practice-only answers of reinforce batches
 and the misses held for the deck at the end of a batch; practice_deck builds
 a deck over this store), and extra practice (ExtraSession: the 加练 mode,
 its pool of learned states read through sources/extra_states and its
-sitting). Built lazily by its user and replaced together with the store
+sitting), and the consolidation deck of what was taught today
+(Consolidation over sources/consolidation, design 12 N5). Built lazily by its user and replaced together with the store
 object (a restore or reset swaps the connection): the clock's memory and
 the extra-practice mode belong to one store.
 """
@@ -23,6 +24,7 @@ from dataclasses import dataclass
 
 from .services import ArrangementPreferences, ArrangementPresenter, FocusService, LaunchNotes, ShareDispatcher
 from .model import DeckItem
+from .services.consolidation import Consolidation
 from .services.extra_session import ExtraSession
 from .services.kana_depth import KanaDepthSetting
 from .services.practice import PracticeCredit
@@ -30,13 +32,14 @@ from .services.practice_deck import PracticeDeck
 from .services.practice_sitting import PracticeSitting
 from .services.queue_practice import QueuePractice
 from .services.probe_memo import ProbeMemo
+from .sources.consolidation import StoreConsolidation
 from .sources.deck_course import CourseDeckLane
 from .sources.deck_kana import KanaDeckLane
 from .sources.deck_questions import StoreDeckQuestions
 from .sources.due_reviews import DueReviews
 from .sources.events import StoreEventSource
 from .sources.extra_states import StoreExtraStates
-from .sources.practice_exposure import StorePracticeExposure
+from .sources.practice_exposure import ConsolidationExposure, StorePracticeExposure
 from .sources.practice_moves import StorePracticeMoves
 from .sources.scope_catalog import StoreScopeCatalog
 from .sources.states import StoreStates
@@ -56,6 +59,7 @@ class StoreArrangement:
     credit: PracticeCredit       # what one answer counts as (design 12 E3)
     practice: QueuePractice      # the kana queue's practice-only answers and held deck items (E3, E4)
     extra: ExtraSession          # extra practice (加练), memory only (E1-E8)
+    consolidation: Consolidation   # the consolidation deck of what was taught today (section 21, N5)
 
     @classmethod
     def for_store(cls, store, *, routes: Callable[[], object] | None = None,
@@ -86,7 +90,9 @@ class StoreArrangement:
                                         due=DueReviews(store)),
                    catalog, focus, practice_credit(store), queue_practice(store, repository=repository),
                    extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
-                                 course_kinds=course_kinds, japanese_input=japanese_input))
+                                 course_kinds=course_kinds, japanese_input=japanese_input),
+                   consolidation(store, repository=repository, course_kinds=course_kinds,
+                                 japanese_input=japanese_input))
 
     def serves(self, store) -> bool:
         return self.store is store
@@ -161,21 +167,25 @@ def practice_sitting(store, learning=None) -> PracticeSitting:
 
 def practice_deck(store, items: Iterable[DeckItem], *, sitting: PracticeSitting | None = None, learning=None,
                   repository: Callable[[], object] | None = None, course_kinds: Iterable[str] = (),
-                  system_japanese_input: bool = False) -> PracticeDeck:
+                  system_japanese_input: bool = False, consolidation: bool = False) -> PracticeDeck:
     """A practice deck of ``items`` over ``store`` (design 12 E5).
 
     ``sitting``: the sitting it belongs to (a new one when None);
     ``repository``: the content repository, for kana questions built on the
     spot; ``course_kinds``: the learner's enabled course kinds, for course
     questions built on the spot (none: no course question is built).
+    ``consolidation``: a consolidation deck (design 12 N5): its exposure
+    rows carry practice:consolidation: event ids.
     """
     states = StoreStates(store, learning)
     sitting = sitting or PracticeSitting(states, StorePracticeMoves(store, states))
     questions = StoreDeckQuestions(KanaDeckLane(store, repository),
                                    CourseDeckLane(store, states.learning if course_kinds else learning, course_kinds,
-                                                  system_japanese_input=system_japanese_input))
+                                                  system_japanese_input=system_japanese_input,
+                                                  avoid_last=consolidation))
+    exposure = StorePracticeExposure(store, learning)
     return PracticeDeck(items, credit=PracticeCredit(states), sitting=sitting, questions=questions,
-                        exposure=StorePracticeExposure(store, learning))
+                        exposure=ConsolidationExposure(exposure) if consolidation else exposure)
 
 
 def queue_practice(store, *, repository: Callable[[], object] | None = None) -> QueuePractice:
@@ -209,6 +219,21 @@ def extra_session(store, *, scope: Callable[[], frozenset[str] | None] = lambda:
                              system_japanese_input=japanese_input())
 
     return ExtraSession(states, new_sitting=lambda: practice_sitting(store), new_deck=new_deck)
+
+
+def consolidation(store, *, repository: Callable[[], object] | None = None,
+                  course_kinds: Callable[[], Iterable[str]] | None = None,
+                  japanese_input: Callable[[], bool] | None = None) -> Consolidation:
+    """The consolidation deck over ``store`` (design 12 N5): its facts from the store, its decks practice only."""
+    course_kinds = course_kinds or (lambda: _stored_course_kinds(store))
+    japanese_input = japanese_input or (lambda: False)
+    source = StoreConsolidation(store)
+
+    def new_deck(items: Sequence[DeckItem]) -> PracticeDeck:
+        return practice_deck(store, items, repository=repository, course_kinds=course_kinds(),
+                             system_japanese_input=japanese_input(), consolidation=True)
+
+    return Consolidation(source.facts, new_deck)
 
 
 def _stored_course_kinds(store) -> tuple[str, ...]:

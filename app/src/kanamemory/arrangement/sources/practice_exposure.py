@@ -19,7 +19,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from ..model import Lane, StateRef
-from .practice_moves import EVENT_PREFIX
+from .practice_moves import CONSOLIDATION_PREFIX, EVENT_PREFIX
 
 
 class StorePracticeExposure:
@@ -44,3 +44,16 @@ class StorePracticeExposure:
             from ...learning_store import LearningStore
             self._learning = LearningStore(self._store)
         self._learning.record_practice_exposure(event_id, question, result, now=now)
+
+
+class ConsolidationExposure:
+    """ports.PracticeExposure of a consolidation deck (design 12 N5): the same rows, with event ids that
+    start with CONSOLIDATION_PREFIX, so the repeats survive a restart and the study clock charges them."""
+
+    def __init__(self, inner: StorePracticeExposure):
+        self._inner = inner
+
+    def record(self, ref: StateRef, question: Mapping[str, object], now: datetime, *, correct: bool,
+               answered_text: str = "", assisted: bool = False, event_id: str | None = None) -> None:
+        self._inner.record(ref, question, now, correct=correct, answered_text=answered_text, assisted=assisted,
+                           event_id=event_id or CONSOLIDATION_PREFIX + uuid4().hex)

@@ -16,6 +16,8 @@ def progress_block(model: ProgressModel) -> list:
     rows = [u.label(model.heading, size=17, bold=True), u.label(model.route_line), u.label(model.learned_line),
             u.label(model.days_heading, bold=True)]
     rows += [u.label(day.line, size=13) for day in model.days]
+    if model.units_note:
+        rows.append(u.label(model.units_note, size=12, color=u.MUTED))
     rows.append(u.label(model.reviews_heading, bold=True))
     rows += [u.label(figures.line, size=13) for figures in model.reviews]
     rows.append(u.label(model.note, size=12, color=u.MUTED))

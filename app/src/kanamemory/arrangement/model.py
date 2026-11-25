@@ -136,6 +136,7 @@ class RawEvent:
     state: str
     formal: bool = False
     teaching_mark: bool = False
+    consolidation: bool = False   # a consolidation practice answer (design 12 N5): new content (N3)
 
     def __post_init__(self):
         if self.lane not in ("course", "kana"):
@@ -261,6 +262,34 @@ class StateRef:
 
 
 @dataclass(frozen=True)
+class ConsolidationFacts:
+    """What rules/consolidation needs to know about one course state taught today (design 12 N5).
+
+    ``taught_at``: its lesson's teaching mark in the probe-first flow (None:
+    none); ``due``: the queue's serviceable due; ``repeats``: consolidation
+    answers since the teaching mark; ``last_exposure``: its latest formal or
+    practice answer; ``last_kind``: the question kind it was last shown with.
+    """
+
+    ref: StateRef
+    taught_at: datetime | None
+    last_rated: datetime | None
+    due: datetime | None
+    in_step: bool = False
+    repeats: int = 0
+    last_exposure: datetime | None = None
+    last_kind: str = ""
+
+    @property
+    def key(self) -> str:
+        return self.ref.key
+
+    @property
+    def content_id(self) -> str:
+        return self.ref.content_id
+
+
+@dataclass(frozen=True)
 class StateView:
     """What the credit and extra-practice rules need to know about one scheduling state.
 
@@ -275,6 +304,7 @@ class StateView:
     in_step: bool = False
     retrievability: float | None = None
     in_scope: bool = True
+    early: bool = False   # due only by the short-interval reading of a recent state (rules/recent.serviceable_due)
 
 
 class PracticeEffect(str, Enum):

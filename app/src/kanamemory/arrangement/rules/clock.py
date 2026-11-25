@@ -12,6 +12,7 @@ from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from ..model import ClockEvent, FirstRatings, RawEvent, Unit, Usage
+from .recent import learning_day
 
 # Product parameters (design 12 section 11): starting values, not memory-model constants.
 GAP_CAP = 300.0               # an ordinary action is charged at most this many seconds
@@ -27,27 +28,40 @@ _REVIEW_UNIT = {"course": Unit.COURSE, "kana": Unit.KANA}
 
 def attribute(events: Sequence[RawEvent], firsts: Mapping[str, FirstRatings],
               later: Collection[str] = frozenset()) -> list[ClockEvent]:
-    """Give each action its unit (design 12 section 3, "新内容的归属"; since 2026-11-18 new lessons only).
+    """Give each action its unit (design 12 section 3, "新内容的归属"; section 21, N3 final).
 
-    New content is learning a new lesson or a new kana: a teaching mark, and
-    on the item's FIRST state anything before that state's first formal
-    rating and that rating. ``later`` names the states that are not their
-    item's first state (an additional ability of a lesson, a kana direction
-    opened later): all of their actions are review of their lane, as are the
-    same-day step and every later rating. Only a teaching mark is a teaching
-    action for the gap caps.
+    New content is learning a new lesson or a new kana: a teaching mark; on
+    the item's FIRST state anything before that state's first formal rating
+    and that rating; every formal answer on a course state within
+    LEARNING_DAY of its first formal rating (the same-day steps, a same-day
+    relearning); and every consolidation practice answer. ``later`` names the
+    states that are not their item's first state (an additional ability of a
+    lesson, a kana direction opened later): their actions up to and including
+    the first formal rating are review of their lane (the first check of an
+    ability opened later is the course review's candidate). Every later
+    formal answer of a course state -- recent or not -- is course review, as
+    is everything else after the first rating; kana as before. Recency
+    (rules/recent.is_recent) orders and serves reviews; it does not decide who
+    pays. Only a teaching mark is a teaching action for the gap caps.
     """
     attributed = []
     for event in events:
-        info = firsts.get(event.state)
-        unit = _REVIEW_UNIT[event.lane]
-        if event.teaching_mark:
-            unit = Unit.NEW
-        elif event.state not in later and (info is None or event.at < info.first
-                                           or (event.formal and event.at == info.first)):
-            unit = Unit.NEW
-        attributed.append(ClockEvent(event.at, event.day, unit, event.teaching_mark))
+        attributed.append(ClockEvent(event.at, event.day, unit_of(event, firsts.get(event.state),
+                                                                   event.state in later), event.teaching_mark))
     return attributed
+
+
+def unit_of(event: RawEvent, info: FirstRatings | None, later: bool) -> Unit:
+    """The unit one action is charged to (attribute's rule for one event)."""
+    if event.teaching_mark or event.consolidation:
+        return Unit.NEW
+    rated = info is not None and (event.at > info.first or (event.at == info.first and not event.formal))
+    if not rated:
+        # Up to and including the first formal rating.
+        return _REVIEW_UNIT[event.lane] if later else Unit.NEW
+    if event.lane == "course" and event.formal and learning_day(info.first, event.at):
+        return Unit.NEW
+    return _REVIEW_UNIT[event.lane]
 
 
 def charges(events: Sequence[ClockEvent]) -> list[tuple[ClockEvent, float]]:

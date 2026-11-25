@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
-from ..display import (BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
+from ..display import (RECENT_UNITS_NOTE, BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
                        DIRECTION_TITLES, FOCUS_SET_TEXT, INVITE_TEXT, UNCHOSEN_TEXT, KANA_TILT_TITLES, KEEP_TEXT, KEEP_TITLE,
                        NO_REVIEWS_TEXT, NO_SCOPE_TITLE, PASS_RATE_REVIEWS, PLAN_UNCHANGED_TEXT, SCOPE_GONE_TEXT,
                        SCOPE_GONE_TITLE, SCOPE_KIND_TITLES, SCOPE_TEXT, SET_FOCUS, SINGLE_KIND_UNCHANGED_TEXT,
@@ -250,7 +250,8 @@ class ArrangementPresenter:
                 usage_line = f"今日 新内容 {spent[0]} 分 · 课程复习 {spent[1]} 分 · 假名练习 {spent[2]} 分"
         lessons = len(self._events.learned(now, days).lessons) if held_from is None or held_from < days[0] else None
         return HomeRowsModel(progress_line=self._progress_line(route, lessons), usage_line=usage_line,
-                             note=self._note(route, no_new_content))
+                             note=self._note(route, no_new_content),
+                             usage_note=RECENT_UNITS_NOTE if usage_line else None)
 
     # UI6 -------------------------------------------------------------------
 

@@ -64,6 +64,7 @@ tests/test_answer_overlay.py
 tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
 tests/test_probe_first.py
+tests/test_arrangement_recent.py
 tests/test_reading_form_answers.py
 tests/test_reading_form_stored_results.py
 tests/test_word_block_structure.py
@@ -156,6 +157,8 @@ app/src/kanamemory/arrangement/rules/gates.py
 app/src/kanamemory/arrangement/rules/background.py
 app/src/kanamemory/arrangement/rules/depth.py
 app/src/kanamemory/arrangement/rules/reinforce.py
+app/src/kanamemory/arrangement/rules/recent.py
+app/src/kanamemory/arrangement/rules/consolidation.py
 app/src/kanamemory/arrangement/services/__init__.py
 app/src/kanamemory/arrangement/services/dispatch.py
 app/src/kanamemory/arrangement/services/preferences.py
@@ -171,6 +174,7 @@ app/src/kanamemory/arrangement/services/deck_presenter.py
 app/src/kanamemory/arrangement/services/queue_practice.py
 app/src/kanamemory/arrangement/services/extra_session.py
 app/src/kanamemory/arrangement/services/extra_presenter.py
+app/src/kanamemory/arrangement/services/consolidation.py
 app/src/kanamemory/arrangement/sources/__init__.py
 app/src/kanamemory/arrangement/sources/candidates.py
 app/src/kanamemory/arrangement/sources/deck_course.py
@@ -186,6 +190,8 @@ app/src/kanamemory/arrangement/sources/scope_kinds.py
 app/src/kanamemory/arrangement/sources/scope_prerequisites.py
 app/src/kanamemory/arrangement/sources/scope_reads.py
 app/src/kanamemory/arrangement/sources/states.py
+app/src/kanamemory/arrangement/sources/recent.py
+app/src/kanamemory/arrangement/sources/consolidation.py
 app/src/kanamemory/arrangement/ui/__init__.py
 app/src/kanamemory/arrangement/ui/home_rows.py
 app/src/kanamemory/arrangement/ui/focus_part.py

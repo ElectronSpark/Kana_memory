@@ -6,6 +6,9 @@ The new-content head is expensive to find, so it is asked for only when it
 could be chosen: when no review is waiting, when new content would go before
 the review units that have a candidate (shares.prefer_new over those units),
 or when the focus scope leaves no review candidate inside it.
+
+Recent course states' due reviews and consolidation decks never reach this
+rule (design 12 N4 revised): they are served before it.
 """
 from __future__ import annotations
 

@@ -96,8 +96,8 @@ class StoreExtraStates:
                 continue
             seen.add(row["unit_id"])
             ref = StateRef.course(row["content_id"], row["ability"])
-            due = learning.scheduled_question_due(dict(row), json.loads(row["snapshot_json"]), now, tables=tables)
+            due, early = learning.serviceable_due(dict(row), json.loads(row["snapshot_json"]), now, tables=tables)
             view = state_view(scheduler, ref.key, json.loads(row["scheduler_state_json"]), due, now,
-                              in_scope=scope is None or row["content_id"] in scope)
+                              in_scope=scope is None or row["content_id"] in scope, early=early)
             result.append(ExtraEntry(ref, view))
         return result

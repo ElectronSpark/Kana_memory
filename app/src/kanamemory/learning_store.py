@@ -18,7 +18,7 @@ from .learning_dispatch_types import LearningCurrent
 
 from .domain import ALGORITHM_VERSION, _utc
 from . import ability_teaching as _teaching
-from .probe_rules import EVIDENCE as PROBE_EVIDENCE, DECLINED_KEY
+from .probe_rules import EVIDENCE as PROBE_EVIDENCE, DECLINED_KEY, MAX_WAIT as _PROBE_MAX_WAIT, OTHER_ANSWERS as _PROBE_OTHER_ANSWERS
 
 SCHEMA_VERSION = 1
 TABLES = ("learning_meta", "learning_content", "learning_unit", "learning_question", "learning_event")
@@ -34,8 +34,9 @@ WORD_LISTENING_DAILY_LIMIT = 8
 # releases (self_report or no profile) and the card batch wait RETRIEVAL_DELAY_SECONDS or until another
 # item has a formal answer.
 RETRIEVAL_DELAY_SECONDS = 60
-PROBE_RETRIEVAL_DELAY_SECONDS = 600
-RETRIEVAL_OTHER_ANSWERS = 3
+# The probe-first spacing has one definition (design 12 N7): probe_rules.OTHER_ANSWERS and MAX_WAIT.
+PROBE_RETRIEVAL_DELAY_SECONDS = int(_PROBE_MAX_WAIT.total_seconds())
+RETRIEVAL_OTHER_ANSWERS = _PROBE_OTHER_ANSWERS
 FEEDBACK_COOLDOWN_SECONDS = 60
 # An unscored (unresolved) answer is a queue pause, never an FSRS update:
 # re-asking within a minute only repeats the same unscorable attempt.
@@ -55,6 +56,7 @@ class _ExposureTimes(dict):
     retention = None
     confirmation = None
     additional_teaching = None
+    first_rated = None   # arrangement.sources.recent.RecentFirsts of the pass (design 12 N1, N2)
 
 
 class _LearningRead:
@@ -1604,6 +1606,15 @@ class LearningStore:
             AND e.role='primary' AND e.occurred_at_utc>? LIMIT 1""",
             (row["content_id"], row["guided_at_utc"])).fetchone())
 
+    def probe_spacing_waits(self, content_id, ability, now):
+        """Read only: whether this ability's lesson (probe-first flow) is taught and its first formal question
+        still waits for the spacing (bridge stage, retrieval not ready yet; design 12 N6)."""
+        if not content_id or not ability:
+            return False
+        row = self.ability_instruction_row(content_id, ability)
+        return bool(row is not None and row["stage"] == "bridge" and row["guided_at_utc"]
+                    and _probe_era(row["checkpoint_json"]) and not self.retrieval_ready(row, _utc(now)))
+
     def other_answers_since(self, content_id, since, *, limit=RETRIEVAL_OTHER_ANSWERS):
         """Answers of other items after ``since``, counted up to ``limit`` (read only).
 
@@ -1730,7 +1741,26 @@ class LearningStore:
         from .retention_schedule import active_due
         result.confirmation = active_due(self.store, now)
         result.additional_teaching = _teaching.exposure_times(self._db, now)
+        from .arrangement.sources.recent import RecentFirsts
+        result.first_rated = RecentFirsts(self.store)
         return result
+
+    def _first_rated(self, exposure_times=None, tables=None):
+        """The pass's RecentFirsts (first formal ratings, read on demand), or a new one for a single read."""
+        firsts = getattr(exposure_times, "first_rated", None) or getattr(tables, "first_rated", None)
+        if firsts is None:
+            from .arrangement.sources.recent import RecentFirsts
+            firsts = RecentFirsts(self.store)
+        return firsts
+
+    def serviceable_ability_due(self, unit, question, now=None, *, exposure_times=None, tables=None):
+        """_ability_due as the course queue serves it: a recent unit's short interval after one day (design 12 N2).
+
+        The stored due is never changed; rules/recent.serviceable_due decides.
+        """
+        from .arrangement.sources.recent import serviceable
+        return serviceable(unit, _ability_due(unit, question), self._first_rated(exposure_times, tables),
+                           _utc(now))[0]
 
     def exposure_tables(self, now=None):
         """The exposure records every question of one queue pass is checked against, read once.
@@ -1808,12 +1838,23 @@ class LearningStore:
         The ability's due with this question (_ability_due: the stored due,
         which carries any bounded auxiliary adjustment, or an earlier
         free-retrieval probe) or an earlier active confirmation
-        (retention_schedule.active_due), whichever is earlier. The floors
+        (retention_schedule.active_due), whichever is earlier, read as the
+        queue serves it (design 12 N2: a recent unit with an interval of at
+        most three days is due once a day has passed since its last formal
+        rating; serviceable_due). The floors
         (not_before) and the feedback, tutor, retention and teaching exposure
         waits are left out: they delay serving a question, they do not make a
         due unit "not due" (design 12 E3). effective_question_due adds them on
         top of this value. ``exposure_times``/``tables``: a queue pass's tables,
-        read for their confirmation map only.
+        read for their confirmation map and first ratings only.
+        """
+        return self.serviceable_due(unit, question, now, exposure_times=exposure_times, tables=tables)[0]
+
+    def serviceable_due(self, unit, question, now=None, *, exposure_times=None, tables=None):
+        """(scheduled_question_due, whether the unit is due at ``now`` only by the N2 reading).
+
+        The second value is what PracticeCredit reads as an early formal
+        rating (StateView.early): the stored due still lies ahead.
         """
         scheduled = _ability_due(unit, question)
         from .retention_schedule import active_due
@@ -1822,8 +1863,9 @@ class LearningStore:
         if confirmation is None: confirmation = active_due(self.store, _utc(now))
         earlier = confirmation.get(unit.get('unit_id'))
         if earlier and scheduled and datetime.fromisoformat(earlier) < datetime.fromisoformat(scheduled):
-            return earlier
-        return scheduled
+            scheduled = earlier
+        from .arrangement.sources.recent import serviceable
+        return serviceable(unit, scheduled, self._first_rated(exposure_times, tables), _utc(now))
 
     def record_practice_exposure(self, event_id, question, result, *, now=None):
         """A practice-only answer showed this lesson's answer (design 12 E5, 10 (6), AC17).
@@ -2101,7 +2143,8 @@ class LearningStore:
 
     def current(self, enabled_kinds=None, now=None, *, fair_new=False, teaching_only=False,
                 teaching_content_ids=None, include_unassessed=False, prefer_unassessed=False,
-                projection=None, skip_teaching_ids=None, scope_content_ids=None) -> LearningCurrent | None:
+                projection=None, skip_teaching_ids=None, scope_content_ids=None,
+                only_recent=False) -> LearningCurrent | None:
         """Read a tagged dispatch state without consuming or rebuilding questions.
 
         Normal mode returns a course head or an explicit blocking/wait state;
@@ -2124,6 +2167,10 @@ class LearningStore:
         the order is frozen, so it is dropped (also from the read_operation
         key, so a worker's seeded result keeps matching), except for the
         include_unassessed pool choice.
+        only_recent: only the ordinary due reviews (tier 3) of recent units, in
+        the course order (design 12 N4 (ii): the first due review of a recent
+        state is served before the share rule, also when a scope or the frozen
+        order puts other rows before it); every other row is passed over.
         """
         skip = frozenset(skip_teaching_ids or ())
         if include_unassessed and (not teaching_only or teaching_content_ids is not None):
@@ -2133,14 +2180,16 @@ class LearningStore:
             now = projection.moment(now)
             key = self.current_key(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
                 teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
-                prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, scope_content_ids=scope)
+                prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, scope_content_ids=scope,
+                only_recent=only_recent)
             return projection.result(key, lambda: self._current(enabled_kinds, now, fair_new=fair_new,
                 teaching_only=teaching_only, teaching_content_ids=teaching_content_ids,
                 include_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed,
-                projection=projection, skip_teaching_ids=skip, focus_scope=scope))
+                projection=projection, skip_teaching_ids=skip, focus_scope=scope, only_recent=only_recent))
         return self._current(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
             teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
-            prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, focus_scope=scope)
+            prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, focus_scope=scope,
+            only_recent=only_recent)
 
     def _effective_scope(self, scope_content_ids, include_unassessed):
         """The focus scope where it can still act: None without one, or once the course order is frozen."""
@@ -2154,7 +2203,7 @@ class LearningStore:
     @staticmethod
     def current_key(enabled_kinds, now, *, fair_new=False, teaching_only=False, teaching_content_ids=None,
                     include_unassessed=False, prefer_unassessed=False, skip_teaching_ids=None,
-                    scope_content_ids=None):
+                    scope_content_ids=None, only_recent=False):
         """read_operation key of one current() call (see _LearningRead.seed).
 
         ``scope_content_ids`` is the effective scope of that call (current() drops it once the order is frozen).
@@ -2165,6 +2214,7 @@ class LearningStore:
                bool(include_unassessed), bool(prefer_unassessed))
         # Unchanged key without a skip or a scope, so seeded worker results still match.
         key = key + (frozenset(skip_teaching_ids),) if skip_teaching_ids else key
+        key = key + ("only-recent",) if only_recent else key
         return key + (("scope", frozenset(scope_content_ids)),) if scope_content_ids is not None else key
 
     @classmethod
@@ -2191,7 +2241,7 @@ class LearningStore:
 
     def _current(self, enabled_kinds, now, *, fair_new, teaching_only, teaching_content_ids,
                  include_unassessed, prefer_unassessed, projection=None, skip_teaching_ids=frozenset(),
-                 focus_scope=None):
+                 focus_scope=None, only_recent=False):
         # focus_scope: current()'s effective focus scope (not an instruction scope, which the loop below names "scope").
         from .learning_dependencies import independent_ready_ids, prerequisite_status, has_started_answer
         from .review_dispatch import review_priority, reviews_today
@@ -2202,6 +2252,8 @@ class LearningStore:
         ready_ids = projection.ready_ids() if projection is not None else independent_ready_ids(self)
         exposure_times = (projection.exposure_times(now) if projection is not None
                           else self.content_exposure_times(now))
+        firsts = self._first_rated(exposure_times)
+        from .arrangement.rules.recent import REVIEW_TIER, ordered_priority
         def has_text(value):
             return isinstance(value, str) and bool(value.strip())
 
@@ -2237,8 +2289,13 @@ class LearningStore:
                 started = (content["stage"] == "guide"
                            or bool(_load(content["checkpoint_json"]).get("instruction_exposed_at_utc")))
                 return (4, -1 if started else 0) if fair_new else (5, 0)
-            return review_priority(row, due=_ability_due(row, _load(row["snapshot_json"])), now=now,
-                day_start=review_day, reviewed_today=daily_counts.get(row["unit_id"], 0))
+            # Design 12 N2: a recent unit's short interval is served after one day (serviceable_ability_due).
+            return review_priority(row, due=self.serviceable_ability_due(row, _load(row["snapshot_json"]), now,
+                                                                         exposure_times=exposure_times),
+                now=now, day_start=review_day, reviewed_today=daily_counts.get(row["unit_id"], 0))
+
+        def recent_review(row, priority):
+            return priority[0] == REVIEW_TIER and firsts.recent(row["unit_id"], now)
 
         # A newly due step can interrupt untouched new lessons, but never a
         # frozen answer or real saved input. Sorting is read-only and stable;
@@ -2247,11 +2304,13 @@ class LearningStore:
             priority = dispatch_priority(row)
             from .practice_round import frozen_priority
             frozen_priority(self.store, "cross-course", row['question_id'], priority)
+            held = priority == (4, -1)
+            # Design 12 N1: inside the due reviews, recent units first (both orientations); the scope stays in front.
+            priority = ordered_priority(priority, recent_review(row, priority))
             if focus_scope is not None:
                 # Design 12 H3: inside the focus scope first, in this collection key only.
                 from .arrangement.rules.focus import scoped_priority, sort_component
-                priority = scoped_priority(priority, sort_component(row['content_id'], focus_scope),
-                                           held=priority == (4, -1))
+                priority = scoped_priority(priority, sort_component(row['content_id'], focus_scope), held=held)
             if not include_unassessed or priority[0] < 4:
                 return (0, priority)
             category = unassessed(row)
@@ -2276,8 +2335,11 @@ class LearningStore:
         from .learning_probe import GateReader
         gate_closed = self._batch_gate_reader(enabled_kinds)
         probe_gate = GateReader(self, now)
-        for row in freeze_course_rows(self.store, self.dispatch_pending(enabled_kinds, projection=projection),
-                                      service_priority):
+        pending_rows = list(self.dispatch_pending(enabled_kinds, projection=projection))
+        firsts.prime(row["unit_id"] for row in pending_rows if row["review_count"])
+        for row in freeze_course_rows(self.store, pending_rows, service_priority):
+            if only_recent and (row["result_json"] is not None or not recent_review(row, dispatch_priority(row))):
+                continue
             content_row = content_row_for(row)
             if _paused_practice_guide(content_row, enabled_kinds):
                 continue
@@ -2305,6 +2367,11 @@ class LearningStore:
                 continue
             result = {"content": content, "question": q, "draft": q["draft"], "result": q["result"],
                       "dispatch_priority": dispatch_priority(row)}
+            if row["review_count"] and firsts.recent(row["unit_id"], now):
+                # Design 12 N3/N4: a recent state; its due work is served before the share rule, never a candidate.
+                result["recent_unit"] = True
+                if recent_review(row, result["dispatch_priority"]):
+                    result["recent_review"] = True
             dependency_key = (content['id'], scope)
             if dependency_key not in dependencies:
                 dependencies[dependency_key] = self.prerequisite_status(content['id'], scope, ready_ids=ready_ids)

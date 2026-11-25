@@ -7,7 +7,14 @@ frozen priority tier is exactly 3 (an ordinary due review). The new-content
 candidate is found only when asked: first_teaching_dispatch.share_candidate
 (the "a block is due" branch of the first-teaching service, with the
 two-unscored-checks stop), and none while a block this round promoted is
-unfinished and can go on within the bridge wait ("one block at a time").
+unfinished and can go on within the bridge wait, or waits for the
+probe-first spacing ("one block at a time", design 12 N6).
+
+Recent course states (design 12 section 21, N4 revised): the due reviews of
+recent states and ready consolidation decks are served BEFORE the share rule
+(study_path_runtime._share_dispatch; recent_head tells such a head) and are
+nobody's candidate; the clock charges them to new content (rules/clock,
+N3). So the course head that reaches this source is not recent.
 found_nothing_in_round tells the caller that the probe found nothing the
 frozen round may show, so it can re-arrange the round once (design 12 B5).
 Reads only, apart from clearing the promotion marker of a block that no
@@ -39,6 +46,8 @@ def review_head(lane: str, head: dict | None, priority: tuple | None) -> bool:
     """
     if head is None or priority is None:
         return False
+    if lane == "course" and head.get("recent_unit"):
+        return False   # design 12 N4 (revised): a recent state's work is never a course-review candidate
     if priority[0] == REVIEW_TIER:
         return True
     if priority[0] != 4 or head.get("type") != "question":
@@ -90,6 +99,23 @@ class LaneHead:
     priority: tuple | None
 
 
+def recent_head(lane: str, head: dict | None, priority: tuple | None) -> bool:
+    """Whether a lane head is an ordinary due review of a recent course state (design 12 N4 (ii): served before
+    the share rule).
+
+    current() marks a rated recent unit (``recent_unit``) and its tier-3 due
+    review (``recent_review``). The frozen round priority may still be the
+    tier the row had when the round was collected (4: not due then, before
+    its step or its N2 day); a head that is due now by its live priority
+    (tiers 2-3) is served here all the same. A head frozen below tier 3
+    (feedback, a draft, a step, a promoted block) goes first by tiers 0-2.
+    """
+    if lane != "course" or head is None or priority is None or priority[0] < REVIEW_TIER or not head.get("recent_unit"):
+        return False
+    live = head.get("dispatch_priority")
+    return bool(head.get("recent_review")) or (live is not None and live[0] <= REVIEW_TIER)
+
+
 class DispatchCandidates:
     """ports.CandidateSource over one dispatch of the unified study path.
 
@@ -125,6 +151,28 @@ class DispatchCandidates:
         unit = unit or _LANE_UNIT[lane]
         ref = (lane, head)
         return Candidate(unit, self._in_scope(unit, ref), ref)
+
+    def course_head(self) -> dict | None:
+        entry = self._heads["course"]
+        return None if entry is None else entry.head
+
+    def first_recent_review(self) -> dict | None:
+        """The first due review of a recent course state in the course order, or None (design 12 N4 (ii)).
+
+        The course head when it is one (recent_head); else LearningStore.current(only_recent=True) with this
+        dispatch's read context, skipped lessons and scope (a scope, or the round's frozen order, can put
+        other rows before it). Served before the share rule; never a candidate.
+        """
+        entry = self._heads["course"]
+        if entry is not None and recent_head("course", entry.head, entry.priority):
+            return entry.head
+        scoped = {} if self._scope is None else {"scope_content_ids": self._scope}
+        head = self._learning.current(self._enabled_kinds, now=self._now, fair_new=True, projection=self._projection,
+                                      only_recent=True, **({"skip_teaching_ids": self._skipped}
+                                                           if self._skipped else {}), **scoped)
+        if head and head.get("type") == "question" and head.get("recent_review"):
+            return head
+        return None
 
     def review_candidates(self) -> tuple[Candidate, ...]:
         return tuple(self._candidate(lane, entry.head) for lane, entry in self._heads.items()
@@ -194,18 +242,24 @@ class DispatchCandidates:
         return False
 
     def _goes_on(self, marker: tuple) -> bool:
-        """Unfinished AND servable now or within the bridge wait (design 12 B3).
+        """Unfinished AND servable now or within the bridge wait, or inside the probe-first spacing (design 12 B3, N6).
 
         A result (also an unresolved one), a skip, a question that is gone, or a
         wait longer than the bridge (its kind switched off, a prerequisite, a
-        deferral or retry wait) ends the hold.
+        deferral or retry wait) ends the hold. A lesson of the probe-first
+        flow whose explanation was shown and whose first formal question waits
+        for "three answers to other items or ten minutes" keeps the slot (N6):
+        the reviews fill the wait. The share rule is asked only while some
+        review can be served; when nothing else can, the existing order lets
+        the next lesson start.
         """
-        from ...first_teaching_dispatch import course_block_continues, kana_block_continues
+        from ...first_teaching_dispatch import course_block_continues, course_block_spacing, kana_block_continues
         if marker[0] == "course":
             content_id = self._store.teaching_queries.unanswered_course_question(marker[1])
             return (content_id is not None and content_id not in self._skipped
-                    and course_block_continues(self._learning, marker[1], enabled_kinds=self._enabled_kinds,
-                                               now=self._now, projection=self._projection))
+                    and (course_block_continues(self._learning, marker[1], enabled_kinds=self._enabled_kinds,
+                                                now=self._now, projection=self._projection)
+                         or course_block_spacing(self._learning, marker[1], now=self._now)))
         from ...practice_round import promoted_native_index
         from ...review_dispatch import kana_resume_priority
         _, session_id, key = marker

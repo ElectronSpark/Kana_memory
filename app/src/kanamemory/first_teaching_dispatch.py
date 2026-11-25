@@ -571,6 +571,20 @@ def course_block_continues(learning, question_id, *, enabled_kinds, now, project
                 and head['question']['id'] == question_id)
 
 
+def course_block_spacing(learning, question_id, *, now) -> bool:
+    """Whether an open course block of the probe-first flow waits for its spacing (design 12 N6).
+
+    Its lesson's explanation was shown and its first formal question waits for
+    "OTHER_ANSWERS answers to other items or MAX_WAIT" (probe_rules,
+    LearningStore.retrieval_ready). Such a block keeps the teaching slot
+    while other work fills the wait.
+    """
+    question = learning.get_question(question_id)
+    if not question or question.get("status") != "pending" or question.get("result") is not None:
+        return False
+    return learning.probe_spacing_waits(question.get("target_id"), question.get("ability"), _utc(now))
+
+
 def kana_block_continues(store, kana_kinds, key, now) -> bool:
     """Whether an open kana block's queue entry (its practice_round.native_key) can be served
     now or within the bridge wait: the kana teaching probe at that later moment

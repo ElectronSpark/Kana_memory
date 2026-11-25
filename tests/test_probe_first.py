@@ -658,6 +658,8 @@ def test_new_content_attribution_covers_probe_failure_teaching_and_first_rating(
     first = FirstRatings(NOW + timedelta(minutes=30), "d")
     events_ = [RawEvent(NOW, "d", "course", "u1"), RawEvent(NOW + timedelta(minutes=5), "d", "course", "u1", teaching_mark=True),
                RawEvent(NOW + timedelta(minutes=30), "d", "course", "u1", formal=True),
-               RawEvent(NOW + timedelta(days=2), "d2", "course", "u1", formal=True)]
+               RawEvent(NOW + timedelta(days=2), "d2", "course", "u1", formal=True),
+               RawEvent(NOW + timedelta(days=15), "d15", "course", "u1", formal=True)]
     units = [event.unit for event in attribute(events_, {"u1": first})]
-    assert units == [Unit.NEW, Unit.NEW, Unit.NEW, Unit.COURSE]
+    # Design 12 N3: reviews on later days (two and fifteen days after the first rating) are course review.
+    assert units == [Unit.NEW, Unit.NEW, Unit.NEW, Unit.COURSE, Unit.COURSE]

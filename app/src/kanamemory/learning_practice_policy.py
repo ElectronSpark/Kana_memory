@@ -383,7 +383,7 @@ def practice_candidates(item, kinds, *, known_background_ids=(), system_japanese
         yield from _candidate_questions(item, ability, kinds, state, **({} if admit is None else {"admit": admit}))
 
 
-def select_practice_plan(item, ability, kinds, state, history, *, templates=None, shared=False):
+def select_practice_plan(item, ability, kinds, state, history, *, templates=None, shared=False, avoid=None):
     """Choose one enabled, background-safe task, or None when none is available.
 
     History is oldest to newest, as returned by LearningStore.practice_history.
@@ -392,6 +392,8 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
     A row is recognised as a candidate's stimulus by _fingerprint: a heard-meaning
     row needs its audio_text and a sound-kind row its choices for that.
     shared / templates: see _candidate_questions.
+    avoid: a (kind, variant) not to choose while another candidate remains (the consolidation deck,
+    design 12 N5: never the template of the state's most recent exposure when it has another).
     """
     state = state or {}
     candidates = list(_candidate_questions(item, ability, kinds, state, templates=templates, shared=shared))
@@ -485,7 +487,8 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
                 bool(candidate.get("early_rules") or candidate.get("stem_gloss")),
                 stage_gap, rotating_rank[index])
 
-    chosen = min(enumerate(candidates), key=lambda pair: key(pair[1], pair[0]))[1]
+    pool = [pair for pair in enumerate(candidates) if (pair[1]["kind"], pair[1]["variant"]) != avoid] if avoid else []
+    chosen = min(pool or enumerate(candidates), key=lambda pair: key(pair[1], pair[0]))[1]
     return {name: chosen[name] for name in ("kind", "variant", "input_mode")}
 
 

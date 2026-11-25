@@ -70,14 +70,14 @@ class StudyQueries:
             "SELECT * FROM learning_unit WHERE suspended=0 AND review_count>0").fetchall(), exclude)
 
     def review_unit_queue_rows(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
-        """active_review_units (unit_id, content_id, ability, due_at_utc) with ``queued``.
+        """active_review_units (unit_id, content_id, ability, due_at_utc, scheduler_state_json) with ``queued``.
 
         ``queued``: whether a pending question of any kind holds the ability's
         queue place (also a paused, reserved or disabled one, as
         unqueued_course_ids decides "unqueued").
         """
         return _without(self._connection.execute("""SELECT u.unit_id,u.content_id,u.ability,u.due_at_utc,
-            EXISTS (SELECT 1 FROM learning_question q WHERE q.unit_id=u.unit_id AND q.status='pending') AS queued
+            u.scheduler_state_json,EXISTS (SELECT 1 FROM learning_question q WHERE q.unit_id=u.unit_id AND q.status='pending') AS queued
             FROM learning_unit u WHERE u.suspended=0 AND u.review_count>0""").fetchall(), exclude)
 
     def pending_course_headers(self, enabled: Iterable[str]) -> list[sqlite3.Row]:

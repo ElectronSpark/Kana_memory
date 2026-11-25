@@ -15,7 +15,7 @@ from .rules.depth import KanaDepth
 
 # Fixed wording (design 12 UI1, UI3, UI4, UI5).
 BREADTH_TITLE = "广度优先"
-BREADTH_TEXT = "新内容和复习穿插着来；复习做不完也继续学新的。"
+BREADTH_TEXT = "新内容和复习穿插着来；刚学的先巩固，旧课的复习做不完也继续学新的。"
 # The learner-facing name of THOROUGH since 2026-11-18 (it reads as the counterpart of 广度优先).
 THOROUGH_TITLE = "深度优先"
 THOROUGH_TEXT = "先把到期的复习做完，再学新的。"
@@ -42,6 +42,8 @@ ADD_NEXT_AND_START = "加入下一小节并开始"
 REVIEW_FIRST = "先复习"
 PROGRESS_NOTE = "广度优先时复习排得晚是正常的；想少一些，可以放慢加入新小节、停掉不需要的方向，或改用深度优先。"
 PROGRESS_HEADING = "时间与进度"
+# Where the three units are named (design 12 section 21, N3): the learning day's consolidation is new content.
+RECENT_UNITS_NOTE = "刚学的内容当天的巩固算在新内容里；最近 14 天新学的，到期复习排在最前。"
 REVIEWS_HEADING = "复习"
 NO_REVIEWS_TEXT = "还没有复习记录"
 # D2 when a depth level rewrites the mixed switches but the kinds in force stay the same (a single-kind plan).
@@ -172,6 +174,7 @@ class HomeRowsModel:
     progress_line: str | None = None
     usage_line: str | None = None
     note: SectionNote | None = None
+    usage_note: str | None = None   # RECENT_UNITS_NOTE under the usage line (design 12 N3)
 
 
 @dataclass(frozen=True)
@@ -351,7 +354,13 @@ class ProgressModel:
     heading: str = PROGRESS_HEADING
     reviews_heading: str = REVIEWS_HEADING
     note: str = PROGRESS_NOTE
+    units_note: str = RECENT_UNITS_NOTE
 
+
+# The consolidation deck of what was taught today (design 12 N5).
+CONSOLIDATION_HEADER = "巩固"
+CONSOLIDATION_NOTE = "刚学的再练一遍：只算练习，不评分。"
+CONSOLIDATION_LEAVE = "先到这里"
 
 # The practice deck and practice-only answers (design 12 E5, UI8). No rating word appears here:
 # a practice answer is never rated, and a miss is never called "重来" or "遗忘".

@@ -8,7 +8,9 @@ public methods; no SQL here. Nothing is stored.
 Events (B6):
 - kana formal answers (review_event) and auxiliary word-spelling answers
   (word_spelling_attempt); course answers (learning_event, role primary or
-  unresolved);
+  unresolved); consolidation practice answers of course states (design 12
+  N5: learning_evidence rows of role exposure with a practice:consolidation:
+  event id), never formal;
 - teaching marks: a completed course or added-ability guide (the shared
   first_teaching_dispatch.guide_evidence predicate, so a diagnostic title
   exposure is not one), a real kana introduction (kana_introductions_v1,
@@ -138,7 +140,7 @@ class _AnswerLogs:
         incremental read reaches the row limit.
         """
         queries = self._store.teaching_queries
-        logs = ("review_event", "word_spelling_attempt") + (("learning_event",) if course else ())
+        logs = ("review_event", "word_spelling_attempt") + (("learning_event", "learning_evidence") if course else ())
         if tails is not None and any(tails.get(log) and not queries.clock_log_holds(log, tails[log]) for log in logs):
             raise _Reread
 
@@ -151,6 +153,10 @@ class _AnswerLogs:
             for row in self._take(queries.clock_course_events(role, since, ROW_LIMIT + 1, after("learning_event")),
                                   batch, source, tails is not None):
                 self._course_row(batch, source, role, row)
+        if course:
+            for row in self._take(queries.clock_consolidation_events(since, ROW_LIMIT + 1, after("learning_evidence")),
+                                  batch, "learning_evidence", tails is not None):
+                self._practice_row(batch, row)
         for row in self._take(queries.clock_kana_events(since, ROW_LIMIT + 1, after("review_event")),
                               batch, "review_event", tails is not None):
             self._kana_row(batch, row)
@@ -171,6 +177,8 @@ class _AnswerLogs:
             source = "learning_event:" + role
             for row in queries.clock_course_events(role, since, -1):
                 self._course_row(batch, source, role, row)
+        for row in queries.clock_consolidation_events(since, -1) if course else ():
+            self._practice_row(batch, row)
         for row in queries.clock_kana_events(since, -1):
             self._kana_row(batch, row)
         for row in queries.clock_word_attempts(since, -1):
@@ -182,6 +190,15 @@ class _AnswerLogs:
         state = "course:" + row["unit_id"]
         batch.keys[state] = ("course", row["unit_id"])
         batch.raw.append((source, RawEvent(at, self.day(at), "course", state, formal=role == "primary")))
+
+    def _practice_row(self, batch: _Batch, row) -> None:
+        """A consolidation practice answer: an action on its course unit, never a formal rating."""
+        from ...learning_store import _unit_id
+        at = _instant(row["at"])
+        unit_id = _unit_id(row["target_id"], row["ability"])
+        state = "course:" + unit_id
+        batch.keys[state] = ("course", unit_id)
+        batch.raw.append(("learning_evidence", RawEvent(at, self.day(at), "course", state, consolidation=True)))
 
     def _kana_row(self, batch: _Batch, row) -> None:
         at = _instant(row["at"])

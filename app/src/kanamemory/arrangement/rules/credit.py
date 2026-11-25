@@ -26,9 +26,17 @@ CONFIRMING_MISSES = 2                  # consecutive misses in one sitting that 
 
 
 def classify(state: StateView, now: datetime) -> Credit:
-    """Formal (scheduled), formal (early) or practice only."""
-    if state.last_rated is None or (state.due is not None and state.due <= now):
-        return Credit.FORMAL_DUE       # a first check, a due review, or a step that has come due
+    """Formal (scheduled), formal (early) or practice only.
+
+    A recent state due only by the short-interval reading (StateView.early,
+    rules/recent.serviceable_due: a day after its last formal rating) is an
+    early formal rating, as the scheduler library counts it.
+    """
+    if state.last_rated is None:
+        return Credit.FORMAL_DUE       # a first check
+    if state.due is not None and state.due <= now:
+        # A due review or a step that has come due; due only by the recent reading: early.
+        return Credit.FORMAL_EARLY if state.early else Credit.FORMAL_DUE
     if state.in_step:
         return Credit.PRACTICE         # inside its steps and not yet due: the schedule owns it
     if now - state.last_rated >= FORMAL_SPACING:

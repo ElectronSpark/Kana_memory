@@ -26,6 +26,8 @@ def home_rows(model: HomeRowsModel, *, on_open_orientation: Callable[[], object]
         rows.append(u.label(model.progress_line, size=13, color=u.MUTED, margin_bottom=2))
     if model.usage_line:
         rows.append(u.button(model.usage_line, lambda widget: on_open_orientation(), compact=True, multiline=True))
+    if model.usage_note:
+        rows.append(u.label(model.usage_note, size=12, color=u.MUTED, margin_bottom=2))
     return rows
 
 
