@@ -70,6 +70,19 @@ class PlatformError(RuntimeError):
     pass
 
 
+LIBRARY_BLOCK_BYTES = 64 * 1024  # the block of a copied library file; the Android bridge's block size
+
+
+def copy_library_file(path, sink, block=LIBRARY_BLOCK_BYTES):
+    """Copy the library file at ``path`` into ``sink`` (the service's PackStaging, which refuses a file over
+    MAX_PACK_BYTES) block by block; the file's name. The desktop counterpart of Android's stream of a
+    document's blocks (platform_android._read_library_stream)."""
+    with Path(path).open("rb") as stream:
+        while data := stream.read(block):
+            sink.write(data)
+    return Path(path).name
+
+
 class ModelNotReady(PlatformError):
     pass
 
@@ -212,16 +225,20 @@ class DesktopPlatform:
             return data
         return await asyncio.to_thread(read)
 
-    async def import_library_pack(self):
-        """Pick one content library pack (.zip) through the backup import channel."""
+    async def import_library_pack(self, sink=None):
+        """Pick one content library pack (.kmlib, or an older .zip). With ``sink`` (the service's PackStaging)
+        the file is copied into it block by block on a worker thread and the file's name is returned (design
+        08 section 16.10); without it, the file's bytes. None when nothing was chosen."""
         import toga
         from .content_library_rules import MAX_PACK_BYTES, PACK_TOO_LARGE
         window = toga.App.app.current_window
         if self._closed or window is None:
             return None
-        path = await window.dialog(toga.OpenFileDialog("选择内容库文件", file_types=["zip"]))
+        path = await window.dialog(toga.OpenFileDialog("选择内容库文件", file_types=["kmlib", "zip"]))
         if path is None or self._closed:
             return None
+        if sink is not None:
+            return await asyncio.to_thread(copy_library_file, Path(path), sink)
         def read():
             with Path(path).open("rb") as stream:
                 data = stream.read(MAX_PACK_BYTES + 1)

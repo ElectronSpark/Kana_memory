@@ -28,6 +28,11 @@ Study routes (design 10 sections 9/10.4, WP-R4a): a library row with routes
 shows 本库路线 N 条; the precheck page shows the pack's route count, entries
 per route, identities outside the pack (required/optional/undeclared) and
 routes refused by the shape pre-check. Nothing is shown without routes.
+
+Section 16.10: a pack that is never installed (PackPrecheck.refusals, an invalid signature, a package error)
+gets a page with what it is (library, version, file name) and why, and only 返回; an installable pack keeps
+its buttons directly under the summary (library, version, file name, counts, signature) with the details
+below. The file is received into the service's staging block by block (the platform's read gets the sink).
 WP-R4b: the precheck's route_errors also hold routes failing the full route
 check; a library row lists its ignored routes (routes_ignored); the service
 gets the kana table's identities for that check.
@@ -234,7 +239,8 @@ class ContentLibraryUIMixin:
             outcome = "failed"
         state = library_activity.of(self)
         if outcome not in NO_AUTO_RESTART:
-            state.end()  # a real restart never returns; a platform that returns leaves no status behind
+            # A real restart never returns; a platform that returns before its process ends ("restarted"), or
+            # an app that ends, keeps the status: until then no page offers 添加内容库 or any other action.
             return
         state.note = NO_AUTO_RESTART[outcome]
         if getattr(self, "_backup_closing", False):
@@ -420,10 +426,10 @@ class ContentLibraryUIMixin:
         if not state.working:
             return []
         state.label = u.label(state.phase, size=15, bold=True)
-        lines = [u.activity_indicator(margin_bottom=6), state.label]
-        if state.file_name:
-            lines.append(u.label(state.file_name, size=13))
-        lines.append(u.label(library_activity.WAIT_NOTE, size=12, color=u.MUTED))
+        # The file's name, or an empty line that shows it once a picked file's name is known.
+        state.name_label = u.label(state.file_name or "", size=13)
+        lines = [u.activity_indicator(margin_bottom=6), state.label, state.name_label,
+                 u.label(library_activity.WAIT_NOTE, size=12, color=u.MUTED)]
         return [self.entry_card(*lines)]
 
     def _library_work_current(self, token):
@@ -485,15 +491,18 @@ class ContentLibraryUIMixin:
         if self._library_file_open_busy():
             self.alert(library_file_open.BUSY_NOTICE)
             return
-        shown = await self._precheck_content_library_file(lambda: self.platform.read_library_file(request),
-                                                          request.name, file_name=request.name)
+        shown = await self._precheck_content_library_file(
+            lambda sink: self.platform.read_library_file(request, sink=sink), request.name, file_name=request.name)
         if not shown:
             self.alert(library_file_open.BUSY_NOTICE)
 
     async def _precheck_content_library_file(self, read, source_name, *, file_name=None):
-        """Read one pack file (``read()``: its bytes, None when nothing was chosen), stage and precheck it, show
-        the precheck; the libraries page shows the status block meanwhile. ``file_name``: the file's name when
-        known (the status and an error message name it). False when the libraries page could not be shown.
+        """Read one pack file, stage and precheck it, show the precheck; the libraries page shows the status
+        block meanwhile. ``read(sink)``: the platform writes the file into ``sink`` (a PackStaging) block by
+        block and returns the file's display name ("" when unknown), or None when nothing was chosen; a
+        platform that hands over the file's bytes instead is written into the sink here. ``file_name``: the
+        file's name when known before (an opened file); a picked file's name is known once it was chosen. The
+        status, the precheck page and an error message name the file. False when the page could not be shown.
 
         Threads: the copy runs in the platform's reader (Java thread, then a worker), staging and the precheck
         on workers (asyncio.to_thread; the precheck on a ContentLibraryService.snapshot, which reads the store
@@ -501,21 +510,29 @@ class ContentLibraryUIMixin:
         state = library_activity.of(self)
         self._content_library_request = True
         state.begin(library_activity.READING, file_name)
-        failure = None
+        failure, staging = None, None
         try:
             self.show_content_libraries()
             if self.page != "content_libraries":
                 return False
             token = self._page_token
             await self._library_status_shown()
-            data = await read()
-            if data is None or not self._library_work_current(token):
+            service = self.content_library_service()
+            staging = service.open_staging(file_name or source_name)
+            received = await read(staging)
+            if received is None or not self._library_work_current(token):
                 return True
+            if isinstance(received, (bytes, bytearray)):
+                await asyncio.to_thread(staging.write_all, received)  # a platform that hands over the bytes
+            elif isinstance(received, str) and received.strip() and not file_name:
+                file_name = library_file_open.display_name(received, None)
+                staging.named(file_name)
+                state.named(file_name)
             state.advance(library_activity.CHECKING)
             await self._library_status_shown()
-            service = self.content_library_service()
             registry = service.registry()
-            staged = await asyncio.to_thread(service.stage_bytes, data, source_name, registry=registry)
+            staged = await asyncio.to_thread(service.stage_file, staging, registry=registry)
+            staging = None  # staged: discarded below with the inspection
             if not self._library_work_current(token) or self._content_library_blocked():
                 service.discard(staged)
                 return True
@@ -537,6 +554,8 @@ class ContentLibraryUIMixin:
             failure = error
             return True
         finally:
+            if staging is not None:
+                staging.discard()  # cancelled, refused while copying, or failed before staging
             self._content_library_request = False
             if state.end() and self.page == "content_libraries" and not getattr(self, "_backup_closing", False):
                 self.show_content_libraries()  # the status block goes
@@ -545,11 +564,14 @@ class ContentLibraryUIMixin:
 
     def _library_file_error(self, error, file_name=None, *, prefix="无法读取内容库："):
         """One sentence for an error about a library file (content_library_rules.learner_error), after the
-        file's name when known; anything else keeps its own message after ``prefix``."""
+        file's name when known; anything else keeps its own message after ``prefix``. A version refusal (the
+        pack needs a newer app) was read: its sentence never follows ``prefix`` (design 08 section 16.10)."""
         sentence = rules.learner_error(error)
         if sentence is not None:
             from .diagnostic_events import record_error
             record_error("content_library", "read", error)
+        if sentence is not None and rules.is_version_refusal(error):
+            return library_file_open.with_name(file_name, sentence)
         if file_name:
             return f"{file_name}：" + (sentence or prefix + _message(error))
         return prefix + (sentence or _message(error))
@@ -561,41 +583,28 @@ class ContentLibraryUIMixin:
             self.show_content_libraries()
             return
         manifest, check = inspection.manifest, inspection.precheck
-        blocking = check.blocking_reasons()
-        children = [u.label(manifest["title"], size=20, bold=True),
-                    u.label(f"{manifest['library_id']} · 版本 {manifest['library_version']}"
-                            + (f"（替换已安装的 {check.replaces_version}）" if check.replaces_version else ""), size=12, color=u.MUTED),
-                    u.label(_family_line(rules.count_families(manifest["provides"]["items"])), size=13),
-                    self.heading("预检结果"),
-                    u.label(f"新增内容 {check.new_item_count} 项", size=14),
-                    u.label(f"与已安装库相同的内容 {len(check.same_fingerprint_ids)} 项", size=14),
-                    u.label(f"同 ID 但内容不同（冲突） {len(check.conflicting_ids)} 项 · 默认保留已安装库的版本", size=14),
-                    u.label(f"未满足的必需引用 {len(check.missing_required_references)} 项", size=14),
-                    u.label(f"可选引用缺失 {len(check.missing_optional_references)} 项", size=14),
-                    u.label(f"将被本库标为不再提供的已学项 {len(check.retired_learned_ids)} 项", size=14),
-                    *_route_lines(check)]
-        for content_id in check.missing_required_references[:10]:
-            children.append(u.label("缺少：" + content_id, size=12, color=u.MUTED))
-        for warning in check.warnings:
-            children.append(u.label("提示：" + warning, size=12, color=u.MUTED))
         differences = getattr(self, "_content_library_differences", None) or {}
         signature = differences.get("signature") or rules.pack_signature(inspection.report)
-        children.extend(self._content_library_source_rows(inspection, signature, differences))
-        children.extend(self._content_library_difference_rows(check, differences))
-        if check.replaces_core:
-            children.append(self.note("这是核心库文件：安装后其教学数据与词典将替换内置内容；移除即恢复内置库。"))
-        children.append(self.note("安装后重启应用生效；重启前仍按当前内容出题。进度记录不会改动。"))
-        if differences.get("stays_disabled"):
-            children.append(self.note("这个内容库目前已停用：更新后仍保持停用，需要时请在内容库页重新启用。"))
-        package_errors = differences.get("revision_errors", ())
-        if signature.refused:
-            children.append(u.label(signature.refusal_reason() + "。请向库作者重新获取文件。", size=13))
-        elif package_errors:
-            children.append(u.label(f"包错误：{len(package_errors)} 项与已安装内容同 ID、同修订号但内容不同，不能安装。"
-                                    "请向库作者索取修订号已更新的版本。", size=13))
-        elif check.bundled_error:
-            children.append(u.label(check.bundled_error + "。", size=13))
-        elif blocking:
+        refusal = self._content_library_refusal_rows(check, signature, differences)
+        # What the file is, first: its library and version, then the file's name (both ways of opening it).
+        replaces = f"（替换已安装的 {check.replaces_version}）" if check.replaces_version and not refusal else ""
+        identity = [u.label(manifest["title"], size=20, bold=True),
+                    u.label(f"{manifest['library_id']} · 版本 {manifest['library_version']}{replaces}", size=12,
+                            color=u.MUTED),
+                    u.label(f"文件名：{inspection.source_name or library_file_open.NO_NAME}", size=13)]
+        if refusal:
+            # Design 08 section 16.10: a refused pack shows what it is and why it is refused; nothing that
+            # reads like an installation, and no 安装.
+            self.screen("content_library_precheck", "添加内容库", *identity, *refusal,
+                        u.button("返回", lambda w, **kw: self.show_content_libraries()))
+            return
+        blocking = check.blocking_reasons()
+        # The summary and the buttons fit a phone's first screen; the details follow below them.
+        children = [*identity,
+                    u.label(_family_line(rules.count_families(manifest["provides"]["items"]))
+                            + f" · 新增内容 {check.new_item_count} 项", size=13),
+                    u.label("签名状态：" + signature.status_text(), size=13)]
+        if blocking:
             children.append(u.label("默认不安装：" + "；".join(blocking), size=13))
             children.append(u.button("仍然安装（相关项标为依赖缺失、不可加入）",
                                      lambda w, **kw: self.loop.create_task(self.install_content_library(accept_missing_references=True)),
@@ -603,12 +612,53 @@ class ContentLibraryUIMixin:
         else:
             children.append(u.button("安装", lambda w, **kw: self.loop.create_task(self.install_content_library()), primary=True))
         replaceable = self._content_library_replaceable(check, differences)
-        if replaceable and not signature.refused and not package_errors and not blocking:
+        if replaceable and not blocking:
             children.append(u.button(f"安装并接受本库声明的替代（{len(replaceable)} 项，以本库版本为准）",
                                      lambda w, **kw: self.loop.create_task(self.install_content_library(accept_overrides=True)),
                                      multiline=True))
         children.append(u.button("取消", lambda w, **kw: self.show_content_libraries()))
+        children.append(self.note("安装后重启应用生效；重启前仍按当前内容出题。进度记录不会改动。"))
+        if differences.get("stays_disabled"):
+            children.append(self.note("这个内容库目前已停用：更新后仍保持停用，需要时请在内容库页重新启用。"))
+        if check.replaces_core:
+            children.append(self.note("这是核心库文件：安装后其教学数据与词典将替换内置内容；移除即恢复内置库。"))
+        children += [self.heading("预检结果"),
+                     u.label(f"与已安装库相同的内容 {len(check.same_fingerprint_ids)} 项", size=14),
+                     u.label(f"同 ID 但内容不同（冲突） {len(check.conflicting_ids)} 项 · 默认保留已安装库的版本", size=14),
+                     u.label(f"未满足的必需引用 {len(check.missing_required_references)} 项", size=14),
+                     u.label(f"可选引用缺失 {len(check.missing_optional_references)} 项", size=14),
+                     u.label(f"将被本库标为不再提供的已学项 {len(check.retired_learned_ids)} 项", size=14),
+                     *_route_lines(check)]
+        for content_id in check.missing_required_references[:10]:
+            children.append(u.label("缺少：" + content_id, size=12, color=u.MUTED))
+        for warning in check.warnings:
+            children.append(u.label("提示：" + warning, size=12, color=u.MUTED))
+        children.extend(self._content_library_source_rows(inspection, signature, differences))
+        children.extend(self._content_library_difference_rows(check, differences))
         self.screen("content_library_precheck", "添加内容库", *children)
+
+    def _content_library_refusal_rows(self, check, signature, differences):
+        """The rows of a pack that is never installed (PackPrecheck.refusals, an invalid signature, a package
+        error), each sentence with its reason; [] when the pack is installable (maybe after consent)."""
+        package_errors = differences.get("revision_errors", ())
+        sentences, details = [], []
+        if check.bundled_error:
+            sentences.append(check.bundled_error + "。")
+        if check.same_version_error:
+            sentences.append(check.same_version_error + "。")
+        if signature.refused:
+            sentences.append(signature.refusal_reason() + "。请向库作者重新获取文件。")
+            details.append(u.label("签名状态：" + signature.status_text(), size=12))
+        if package_errors:
+            sentences.append(f"包错误：{len(package_errors)} 项与已安装内容同 ID、同修订号但内容不同，不能安装。"
+                             "请向库作者索取修订号已更新的版本。")
+            details += [u.label("包错误：" + content_id + "（同修订号但内容不同）", size=12, color=u.MUTED)
+                        for content_id in package_errors[:LISTED]]
+        if check.merge_errors:
+            sentences.append("与已安装的内容库合并时出错，不能安装：" + "；".join(check.merge_errors) + "。")
+        if not sentences:
+            return []
+        return [self.heading("不能安装"), *(u.label(text, size=13) for text in sentences), *details]
 
     @staticmethod
     def _content_library_replaceable(check, differences):
@@ -620,10 +670,8 @@ class ContentLibraryUIMixin:
 
     def _content_library_source_rows(self, inspection, signature, differences):
         rows = [self.heading("来源"),
-                u.label(f"文件名：{inspection.source_name or '（无文件名）'}", size=13),
                 u.label(f"导入时间：{_time_text(differences.get('checked_at'))}（检查时间；安装时另行记录）", size=13),
-                u.label(f"文件 sha256：{_short_sha(inspection.source_sha256)}（前 12 位）", size=13),
-                u.label("签名状态：" + signature.status_text(), size=13)]
+                u.label(f"文件 sha256：{_short_sha(inspection.source_sha256)}（前 12 位）", size=13)]
         for line in signature.lines():
             rows.append(u.label(line, size=12, color=u.MUTED) if signature.status == "valid" else u.label(line, size=12))
         trust = getattr(self.content_library_service(), "trust_signing_key", None)

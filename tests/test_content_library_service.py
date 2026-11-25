@@ -600,7 +600,8 @@ def test_a_start_replaces_an_older_or_equal_core_pack_by_the_stamped_bundled_con
     service.startup_sync()
     registry = service.registry()
     core = rules.registry_entry(registry, rules.CORE_LIBRARY_ID)
-    assert core == rules.core_entry()  # the removal's steps, ready at once
+    # The removal's steps, ready at once; the bundled entry stores the stamp's version (section 16.10).
+    assert core == rules.core_entry(content_pack.bundled_stamp()) and core["library_version"] == bundled
     assert rules.registry_entry(registry, "author.n3")["source"]["kind"] == "file"  # extensions untouched
     assert not (root / entry["path"]).exists() and "pending_delete" not in registry  # nothing read it: deleted
     assert service.bundled_notice() == {"replaced_version": pack, "bundled_version": bundled}

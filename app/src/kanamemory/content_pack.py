@@ -449,6 +449,11 @@ def active_registry():
         replaced = bundled_core_replacement(registry, root)
         if replaced is not None:
             registry = replaced[0]
+        # The bundled core entry stores the stamp's version (an older mirror: "bundled"); the service's
+        # startup_sync saves the same, so the two agree without a restart.
+        current = library_rules.with_bundled_version(registry, bundled_stamp())
+        if current is not None:
+            registry = current
     _frozen.append(registry)
     return registry
 

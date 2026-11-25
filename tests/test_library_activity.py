@@ -54,17 +54,17 @@ def _watch_work(app):
     service = app.content_library_service()
     data = pack_bytes("author.n3", extension_namespaces())
 
-    async def read(*args):
+    async def read(*args, **kwargs):
         _look(app, "copy")
         return data
     app.platform.read_library_file = read
     app.platform.import_library_pack = read
-    stage = service.stage_bytes
+    stage = service.stage_file
 
     def staged(*args, **kwargs):
         _look(app, "stage")
         return stage(*args, **kwargs)
-    service.stage_bytes = staged
+    service.stage_file = staged
     snapshot = service.snapshot
 
     def watched(manifest):
@@ -130,10 +130,10 @@ def test_an_error_takes_the_status_block_s_place(library_app, path):
     app.show_content_libraries()
     if path == "open":
         asyncio.run(app.open_content_library_file(_request("notes.bin")))
-        assert app.alert.call_args[0][0] == "notes.bin：这不是 KanaMemory 的内容库文件。"
+        assert app.alert.call_args[0][0] == "notes.bin：这不是内容库文件。"
     else:
-        asyncio.run(app.add_content_library())
-        assert app.alert.call_args[0][0] == "无法读取内容库：这不是 KanaMemory 的内容库文件。"
+        asyncio.run(app.add_content_library())  # a platform that hands over bytes gives no name
+        assert app.alert.call_args[0][0] == "无法读取内容库：这不是内容库文件。"
     assert app.page == "content_libraries" and "正在" not in text_of(app.body) and "添加内容库" in _buttons(app)
 
 
@@ -181,9 +181,9 @@ def test_a_failed_install_drops_the_status_and_says_why_in_chinese(library_app):
     app.show_content_libraries()
     asyncio.run(app.add_content_library())
     inspection = app._content_library_inspection
-    inspection.archive.write_bytes(b"damaged meanwhile")
+    (inspection.unpacked / "teaching/lesson.json").write_bytes(b"damaged meanwhile")  # a staged member
     click(app, "安装")
-    assert app.alert.call_args[0][0] == "未能安装内容库：这不是 KanaMemory 的内容库文件。"
+    assert app.alert.call_args[0][0] == "未能安装内容库：内容库文件已损坏，请重新获取。"
     assert app.page == "content_libraries" and "正在" not in text_of(app.body)
     assert [e["library_id"] for e in app.store.get_setting(rules.REGISTRY_SETTING)["libraries"]] == [rules.CORE_LIBRARY_ID]
 
@@ -213,7 +213,8 @@ def test_a_snapshot_reads_the_store_first_and_never_writes(library_app):
 
 
 @pytest.mark.parametrize("error,sentence", [
-    (rules.ContentLibraryError("Not a library pack ZIP file"), "这不是 KanaMemory 的内容库文件。"),
+    (rules.ContentLibraryError("Not a library pack ZIP file"), "这不是内容库文件。"),
+    (rules.ContentLibraryError("Damaged library pack ZIP file"), "内容库文件已损坏，请重新获取。"),
     (rules.ContentLibraryError("Library pack has no manifest.json"), rules.NOT_A_PACK),
     (rules.ContentLibraryError("Library manifest is not valid JSON"), rules.NOT_A_PACK),
     (rules.ContentLibraryError("Library file checksum mismatch: teaching/lesson.json"), rules.DAMAGED_PACK),
@@ -221,8 +222,10 @@ def test_a_snapshot_reads_the_store_first_and_never_writes(library_app):
     (zipfile.BadZipFile("Bad CRC-32 for file 'x'"), rules.DAMAGED_PACK),
     (EOFError(), rules.DAMAGED_PACK),
     (ValueError(rules.PACK_TOO_LARGE), rules.PACK_TOO_LARGE),
-    (rules.ContentLibraryError("Library pack exceeds its size limit"), rules.PACK_TOO_LARGE),
-    (rules.ContentLibraryError("Library file exceeds its size limit: media/a.mp3"), rules.PART_TOO_LARGE),
+    (rules.ContentLibraryError("Library members exceed their total size limit"), rules.UNPACKED_TOO_LARGE),
+    (rules.ContentLibraryError("Library file exceeds its size limit: media/a.mp3"), rules.MEMBER_TOO_LARGE),
+    (rules.ContentLibraryError("Library pack has too many files"), rules.TOO_MANY_MEMBERS),
+    (rules.ContentLibraryError("Teaching namespace exceeds its size limit: lesson"), rules.PART_TOO_LARGE),
     (rules.ContentLibraryError("Unsupported library pack format"), rules.NEWER_PACK),
     (rules.ContentLibraryError("Unsupported library requirements"), rules.NEWER_PACK),
     (rules.ContentLibraryError(rules.APP_TOO_OLD.format(needed="9.0", current="0.36.7")),

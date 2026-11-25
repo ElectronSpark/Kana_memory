@@ -28,6 +28,7 @@ class LibraryActivity:
         self.phase = None
         self.file_name = None
         self.label = None
+        self.name_label = None
         self.note = None
         self.slot = None
 
@@ -36,7 +37,7 @@ class LibraryActivity:
         return self.phase is not None
 
     def begin(self, phase, file_name=None):
-        self.phase, self.file_name, self.label = phase, file_name or None, None
+        self.phase, self.file_name, self.label, self.name_label = phase, file_name or None, None, None
 
     def advance(self, phase):
         """The next phase of the same work: the shown sentence changes in place."""
@@ -44,10 +45,16 @@ class LibraryActivity:
         if self.label is not None:
             self.label.text = phase
 
+    def named(self, file_name):
+        """The file's name once it is known (a picked file: after the choice); the shown line changes in place."""
+        self.file_name = file_name or None
+        if self.name_label is not None:
+            self.name_label.text = file_name or ""
+
     def end(self):
         """The work is over; True when a status was shown (the page then draws without it)."""
         shown = self.phase is not None
-        self.phase = self.file_name = self.label = None
+        self.phase = self.file_name = self.label = self.name_label = None
         return shown
 
 

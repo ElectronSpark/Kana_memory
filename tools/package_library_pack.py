@@ -39,6 +39,12 @@ standard error, or refused with ``--refuse-typed-without-kana``. A pack that car
 needs an app that reads them: its requires.app_min_version is raised to ANSWER_OVERLAY_MIN_APP (an older
 app opens the pack and ignores the namespace, judging those templates without their corrections).
 
+The bundled content's stamp (design 08 section 5.7): ``--stamp-resources <resources folder>`` (core packs
+only) writes bundled_library.json into that folder after the pack is written, with the pack's library id,
+version and scheme and the teaching database's content hash, through tools/stamp_bundled_library.py's own
+stamp(); it is refused before anything is written when the folder's teaching database is not the one packed.
+The stamp itself never enters a pack.
+
 Phase 5: ``--sign-key <local key file>`` signs the manifest with Ed25519 through
 the same implementation as tools/sign_library_pack.py
 (kanamemory.content_library_signing); ``--key-id`` names the public key.
@@ -273,9 +279,12 @@ def size_problem(files):
     """
     problems = []
     total = sum(info["bytes"] for info in files.values())
-    if total > rules.MAX_PACK_BYTES:
-        problems.append(f"the members add up to {total:,} bytes ({_mib(total)}), over MAX_PACK_BYTES "
-                        f"{rules.MAX_PACK_BYTES:,} ({_mib(rules.MAX_PACK_BYTES)}) by {total - rules.MAX_PACK_BYTES:,}")
+    if total > rules.MAX_UNPACKED_BYTES:
+        problems.append(f"the members add up to {total:,} bytes ({_mib(total)}), over MAX_UNPACKED_BYTES "
+                        f"{rules.MAX_UNPACKED_BYTES:,} ({_mib(rules.MAX_UNPACKED_BYTES)}) by "
+                        f"{total - rules.MAX_UNPACKED_BYTES:,}")
+    if len(files) > rules.MAX_PACK_MEMBERS:
+        problems.append(f"{len(files):,} members, over MAX_PACK_MEMBERS {rules.MAX_PACK_MEMBERS:,}")
     for path, info in sorted(files.items()):
         if info["bytes"] > rules.MAX_FILE_BYTES:
             problems.append(f"{path} is {info['bytes']:,} bytes, over MAX_FILE_BYTES {rules.MAX_FILE_BYTES:,}")
@@ -297,9 +306,12 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             extension=False, namespaces=None, include_media=True, description="", rewrite_ids=False,
             depend_on_source=False, optional_references=(), retires=(), aliases=None, overrides=(),
             sign_seed=None, key_id=None, routes=(), with_sample_route=False, app_min_version=None, edition=None,
-            short=None, refuse_typed_without_kana=False, typed_check=None, report=None):
+            short=None, refuse_typed_without_kana=False, typed_check=None, report=None, stamp_resources=None):
     """Write the pack (see the module text). typed_check(teaching_db, content_ids) -> rows replaces the
-    typed-answer check (tests); report(text) receives the warning (default: standard error)."""
+    typed-answer check (tests); report(text) receives the warning (default: standard error).
+    stamp_resources: a runtime resources folder that gets bundled_library.json for this (core) pack after it
+    is written, exactly as tools/stamp_bundled_library.py writes it; refused before anything is written when
+    that folder's teaching database is not the one packed."""
     resources, output = Path(resources).resolve(), Path(output).resolve()
     if app_min_version is not None and rules.app_version_key(app_min_version) is None:
         raise ValueError("app_min_version must be a dotted number such as 0.36.0")
@@ -312,6 +324,14 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
         raise ValueError("The core library id is reserved for core packs and required for them")
     teaching_db = resources / "teaching_content.sqlite3"
     metadata = validate_pack(teaching_db)
+    if stamp_resources is not None:
+        # Checked before anything is written: the stamp folder must hold the teaching database being packed.
+        import stamp_bundled_library as bundled_stamp_tool
+        if extension:
+            raise ValueError("--stamp-resources stamps the bundled core content: only a core pack")
+        if bundled_stamp_tool.resources_teaching_sha256(stamp_resources) != metadata["content_sha256"]:
+            raise ValueError("The stamp folder's teaching database is not the one in this pack "
+                             "(content_sha256 differs); nothing was written")
     selected = set(namespaces or ())
     entries, files, layers = {}, {}, {layer: [] for layer in rules.LAYERS}
     provides_items, fingerprints, provided_namespaces = [], {}, []
@@ -442,8 +462,22 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
         for name in sorted(entries):
             archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), entries[name],
                              compress_type=zipfile.ZIP_DEFLATED)
+    if output.stat().st_size > rules.MAX_PACK_BYTES:
+        size = output.stat().st_size
+        output.unlink()
+        raise ValueError(f"The pack file is {size:,} bytes ({_mib(size)}), over MAX_PACK_BYTES "
+                         f"{rules.MAX_PACK_BYTES:,} ({_mib(rules.MAX_PACK_BYTES)}); nothing was written")
     checked = rules.validate_library_pack(output)
-    return {"path": str(output), "library_id": library_id, "library_version": version,
+    stamped = None
+    if stamp_resources is not None:
+        # The same implementation as tools/stamp_bundled_library.py, on the pack just written; refused, the
+        # pack is removed again so that a pack and its stamp are written together or not at all.
+        try:
+            stamped = bundled_stamp_tool.stamp(stamp_resources, output)
+        except BaseException:
+            output.unlink(missing_ok=True)
+            raise
+    return {"path": str(output), "library_id": library_id, "library_version": version, "stamp": stamped,
             "content_sha256": manifest["content_sha256"], "files": len(files), "items": len(provides_items),
             "namespaces": len(provided_namespaces), "bytes": checked.total_bytes,
             "references": len(manifest["references"]), "provides": list(provides_items),
@@ -486,6 +520,10 @@ def main():
                         "number such as 0.36.0); an older app then refuses the import with a message")
     parser.add_argument("--sample-route", action="store_true",
                         help="With --rewrite-ids: add route:<library_id>:sample over the rewritten ids")
+    parser.add_argument("--stamp-resources", type=Path,
+                        help="Core only: after writing the pack, write bundled_library.json for it into this runtime "
+                        "resources folder (as tools/stamp_bundled_library.py does); refused when that folder's "
+                        "teaching database is not the one packed")
     parser.add_argument("--refuse-typed-without-kana", action="store_true",
                         help="Refuse the pack when a typed template has no kana answer (default: a warning list)")
     args = parser.parse_args()
@@ -502,7 +540,8 @@ def main():
                      routes=[spec for path in args.route for spec in load_route_specs(path)],
                      with_sample_route=args.sample_route, app_min_version=args.app_min_version,
                      edition=args.edition, short=args.short_id,
-                     refuse_typed_without_kana=args.refuse_typed_without_kana)
+                     refuse_typed_without_kana=args.refuse_typed_without_kana,
+                     stamp_resources=args.stamp_resources)
     result.pop("provides")
     print(json.dumps(result, ensure_ascii=False))
 

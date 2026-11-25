@@ -1044,6 +1044,9 @@ app/src/kanamemory/library_file_open.py
 app/src/kanamemory/library_activity.py
 tests/test_library_file_open.py
 tests/test_library_activity.py
+tests/test_content_library_precheck_page.py
+tests/test_content_library_streaming.py
+tests/test_content_library_bundled_version.py
 app/icons/README.txt
 app/icons/kanamemory-adaptive-108.png
 app/icons/kanamemory-adaptive-162.png

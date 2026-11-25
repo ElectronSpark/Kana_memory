@@ -2,8 +2,11 @@
 
 The registry ``content_libraries_v1`` is one app_setting JSON written through
 StudyStore.set_setting; a mirror file in the library root lets content_pack
-read the same registry while modules import. Installing copies a validated
-pack into ``<root>/<library_id>/<version>.<sha 8>/`` and records state
+read the same registry while modules import. A chosen file is received into
+a staging folder in blocks (open_staging; copied and hashed in one pass) and
+stage_file unpacks each member once while validating it (design 08 section
+16.10); installing moves the unpacked members into
+``<root>/<library_id>/<version>.<sha 8>/`` and records state
 pending_restart: content takes effect after the App restarts. Removing or
 replacing a library only changes the registry (pending_delete); its folder is
 deleted by the next startup_sync, never while this process may read it. Progress tables
@@ -38,7 +41,6 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
-import zipfile
 
 from . import content_library_rules as rules
 from . import content_pack
@@ -50,18 +52,78 @@ LEARNER_TABLES = frozenset({"study_card", "review_event", "session_checkpoint", 
                             "learning_content", "learning_question", "learning_event"})
 
 
+UNPACKED_FOLDER = "pack"  # in a staging folder: the members of the staged pack, unpacked once
+
+
+class PackStaging:
+    """A pack file being received (ContentLibraryService.open_staging), design 08 section 16.10.
+
+    The platform writes the file's bytes here block by block as they arrive; the same pass counts them
+    against MAX_PACK_BYTES and hashes them, so the file is never held in memory or read again to hash it.
+    File system only, so any one thread may write it. stage_file() then validates and unpacks it; discard()
+    removes everything.
+    """
+
+    def __init__(self, root, source_name):
+        root = Path(root)
+        root.mkdir(parents=True, exist_ok=True)
+        self.folder = Path(tempfile.mkdtemp(prefix=".incoming-", dir=root))
+        self.archive = self.folder / "pack.zip"
+        self.source_name = str(source_name)[:200]
+        self.size = 0
+        self._digest = hashlib.sha256()
+        self._stream = open(self.archive, "wb")
+
+    def write(self, block):
+        """One block of the file; ValueError(PACK_TOO_LARGE) once the file passes MAX_PACK_BYTES."""
+        if self._stream is None:
+            raise ValueError("The pack file is already complete")
+        size = len(block)
+        if self.size + size > rules.MAX_PACK_BYTES:
+            raise ValueError(rules.PACK_TOO_LARGE)
+        self._digest.update(block)
+        self._stream.write(block)
+        self.size += size
+        return size
+
+    def write_all(self, data, block=1024 * 1024):
+        """Bytes already in memory (an older caller), written block by block."""
+        view = memoryview(data)
+        for start in range(0, len(view), block):
+            self.write(view[start:start + block])
+
+    def named(self, name):
+        """The file's display name once the platform knows it (the picker reports it after the choice)."""
+        if name:
+            self.source_name = str(name)[:200]
+
+    def finish(self):
+        """Close the file; its sha256."""
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+        return self._digest.hexdigest()
+
+    def discard(self):
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+
 @dataclass(frozen=True)
 class StagedPack:
-    """A staged, file-level validated pack; no learner database was touched.
+    """A staged, file-level validated pack, its members unpacked; no learner database was touched.
 
-    stage_bytes may run on a worker thread; precheck_staged then reads the
+    stage_file may run on a worker thread; precheck_staged then reads the
     registry and progress on the thread that owns the store connection.
     """
     staging: Path
-    archive: Path
+    unpacked: Path
     report: rules.PackReport
     source_name: str
     source_sha256: str
+    members: tuple = ()  # (path, size, modification time ns) of each unpacked member when it was checked
 
     @property
     def manifest(self):
@@ -72,11 +134,12 @@ class StagedPack:
 class PackInspection:
     """A staged, validated pack with its offline precheck (section 5.2 step 2/3)."""
     staging: Path
-    archive: Path
+    unpacked: Path
     report: rules.PackReport
     precheck: rules.PackPrecheck
     source_name: str
     source_sha256: str
+    members: tuple = ()  # as StagedPack.members
 
     @property
     def manifest(self):
@@ -216,7 +279,7 @@ class ContentLibraryService:
         """The validated registry; the first start writes the core-only default."""
         raw = self.store.get_setting(rules.REGISTRY_SETTING, None)
         if raw is None:
-            registry = rules.default_registry()
+            registry = rules.default_registry(content_pack.bundled_stamp())
             self._write(registry)
             return registry
         return rules.validate_registry(raw)
@@ -301,6 +364,12 @@ class ContentLibraryService:
         loaded = content_pack.active_registry()
         status = content_pack.library_status()
         changed = False
+        # The bundled core entry stores the stamp's version (section 5.7; "bundled" without a valid stamp). A
+        # registry written before, or by an app with other bundled content, is brought up here; content_pack
+        # did the same to the registry it loaded, so this is no change that waits for a restart.
+        current = rules.with_bundled_version(registry, content_pack.bundled_stamp())
+        if current is not None:
+            registry, changed = current, True
         serves_bundled = loaded is None or (rules.registry_entry(loaded, rules.CORE_LIBRARY_ID) or {}).get(
             "source", {}).get("kind") != "file"
         # Section 5.7: newer bundled content replaces an older imported core pack. content_pack made the same
@@ -575,30 +644,50 @@ class ContentLibraryService:
 
     # ------------------------------------------------------------ install
 
-    def stage_bytes(self, data, source_name="library.zip", *, registry=None):
-        """Stage pack bytes privately and validate the files; safe on a worker thread.
+    def open_staging(self, source_name="library.zip"):
+        """A PackStaging in the library root that the platform writes the chosen file into (any thread)."""
+        return PackStaging(self.root, source_name)
+
+    def stage_file(self, staging, *, registry=None):
+        """Validate a received pack file (a PackStaging) and unpack its members; safe on a worker thread.
 
         Only the file system and the archive are read here, never the store:
         pass ``registry`` (a registry() read made on the store thread) to judge
         the signature against its trusted keys; precheck_staged re-decides the
         trust against the latest registry either way. The staging folder lives
-        in the library root; discard() removes it.
+        in the library root; discard() removes it, and so does any failure here.
+
+        Streaming (design 08 section 16.10): each member is read from the archive once, block by block, and
+        written to its place in the staging folder while it is hashed; the databases are checked there; the
+        archive itself is deleted once its members are out. Nothing holds the pack or a database in memory.
         """
+        try:
+            sha256 = staging.finish()
+            if not staging.size:
+                raise ValueError("请选择一个内容库文件。")
+            unpacked = staging.folder / UNPACKED_FOLDER
+            report = self._validate_archive(staging.archive, unpacked, registry=registry)
+            staging.archive.unlink()
+            return StagedPack(staging=staging.folder, unpacked=unpacked, report=report,
+                              source_name=staging.source_name, source_sha256=sha256,
+                              members=self._member_stamps(unpacked, report.manifest))
+        except BaseException:
+            staging.discard()
+            raise
+
+    def stage_bytes(self, data, source_name="library.zip", *, registry=None):
+        """stage_file for pack bytes already in memory (an older caller, tests): written block by block."""
         if not isinstance(data, (bytes, bytearray)) or not data:
             raise ValueError("请选择一个内容库文件。")
         if len(data) > rules.MAX_PACK_BYTES:
             raise ValueError(rules.PACK_TOO_LARGE)
-        self.root.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".incoming-", dir=self.root))
+        staging = self.open_staging(source_name)
         try:
-            archive = staging / "pack.zip"
-            archive.write_bytes(bytes(data))
-            report = self._validate_archive(archive, staging, registry=registry)
-            return StagedPack(staging=staging, archive=archive, report=report, source_name=str(source_name)[:200],
-                              source_sha256=hashlib.sha256(bytes(data)).hexdigest())
+            staging.write_all(data)
         except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
+            staging.discard()
             raise
+        return self.stage_file(staging, registry=registry)
 
     def precheck_staged(self, staged):
         """Offline merge precheck against the registry and progress (store thread).
@@ -610,20 +699,21 @@ class ContentLibraryService:
         try:
             registry = self.registry()
             report = replace(staged.report, signature=rules.pack_signature(staged.report, registry))
-            precheck = self._precheck(report, registry, staged.archive)
+            precheck = self._precheck(report, registry, staged.unpacked)
         except BaseException:
             self.discard(staged)
             raise
-        return PackInspection(staging=staged.staging, archive=staged.archive, report=report, precheck=precheck,
-                              source_name=staged.source_name, source_sha256=staged.source_sha256)
+        return PackInspection(staging=staged.staging, unpacked=staged.unpacked, report=report, precheck=precheck,
+                              source_name=staged.source_name, source_sha256=staged.source_sha256,
+                              members=staged.members)
 
     def inspect_bytes(self, data, source_name="library.zip"):
         """stage_bytes followed by precheck_staged on the calling thread."""
         return self.precheck_staged(self.stage_bytes(data, source_name, registry=self.registry()))
 
-    def _validate_archive(self, archive, staging, *, registry=None):
-        report = rules.validate_library_pack(archive, registry=registry)
-        manifest = report.manifest
+    @staticmethod
+    def _refuse_early(manifest):
+        """The refusals a manifest alone decides, before any member is unpacked."""
         if manifest["profile"] == "core" and manifest["library_id"] != rules.CORE_LIBRARY_ID:
             raise rules.ContentLibraryError("核心库的 library_id 必须是 " + rules.CORE_LIBRARY_ID)
         if manifest["profile"] != "core" and manifest["library_id"] == rules.CORE_LIBRARY_ID:
@@ -632,28 +722,61 @@ class ContentLibraryService:
         # all: say so before anything is installed (design 08 section 4.2).
         needed = rules.app_too_old(manifest, APP_VERSION)
         if needed:
-            raise rules.ContentLibraryError(rules.APP_TOO_OLD.format(needed=needed, current=APP_VERSION))
-        with zipfile.ZipFile(archive) as zipped:
-            for name, path in report.teaching_documents:
-                document = json.loads(zipped.read(path).decode("utf-8"))
-                content_pack.decode_value(document["payload"])  # typed values must decode
-            databases = [p for p in manifest["files"] if p.endswith(".sqlite3")]
-            if databases:
-                extracted = staging / "check"
-                extracted.mkdir()
-                for path in databases:
-                    target = extracted / path.replace("/", "__")
-                    with zipped.open(path) as source, open(target, "wb") as sink:
-                        shutil.copyfileobj(source, sink)
-                    _learner_tables(target)
-                    if path == rules.TEACHING_PACK_FILE:
-                        content_pack.validate_pack(target)
-                shutil.rmtree(extracted, ignore_errors=True)
+            raise rules.AppTooOldError(rules.APP_TOO_OLD.format(needed=needed, current=APP_VERSION))
+
+    def _validate_archive(self, archive, unpacked, *, registry=None):
+        """validate_library_pack, every member unpacked under ``unpacked`` in the same pass (typed values of the
+        teaching documents decoded while each is in hand), then the database checks on the unpacked files."""
+        unpacked.mkdir()
+
+        def unpack(name):
+            target = unpacked / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            return open(target, "xb")
+        report = rules.validate_library_pack(archive, registry=registry, unpack=unpack,
+                                             check_manifest=self._refuse_early, decode=content_pack.decode_value)
+        for path in report.manifest["files"]:
+            if path.endswith(".sqlite3"):
+                _learner_tables(unpacked / path)
+                if path == rules.TEACHING_PACK_FILE:
+                    content_pack.validate_pack(unpacked / path)
         return report
 
-    def _precheck(self, report, registry=None, archive=None):
+    def _member_stamps(self, unpacked, manifest):
+        """(path, size, modification time ns) of every unpacked member, manifest.json included, right after
+        the check: what install compares (a stat each, no file opened again)."""
+        rows = []
+        for name in (rules.MANIFEST_FILE, *sorted(manifest["files"])):
+            stat = _no_links(Path(unpacked) / name, self.root).stat()
+            rows.append((name, stat.st_size, stat.st_mtime_ns))
+        return tuple(rows)
+
+    def _recheck_unpacked(self, inspection, registry):
+        """The staged members are still what was checked (install): each member's size and modification time
+        as recorded right after the check (sha256 and sizes were verified then, while unpacking), and the
+        manifest. Returns the report with the signature's trust re-decided against ``registry``."""
+        unpacked = Path(inspection.unpacked)
+        if not inspection.members:
+            raise rules.ContentLibraryError("Library file checksum mismatch: " + rules.MANIFEST_FILE)
+        for name, size, modified in inspection.members:
+            try:
+                stat = _no_links(unpacked / name, self.root).stat()
+            except (OSError, ValueError) as error:
+                raise rules.ContentLibraryError("Library file checksum mismatch: " + name[:200]) from error
+            if (stat.st_size, stat.st_mtime_ns) != (size, modified):
+                raise rules.ContentLibraryError("Library file checksum mismatch: " + name[:200])
+        try:
+            manifest = rules.validate_manifest(json.loads((unpacked / rules.MANIFEST_FILE).read_text("utf-8")))
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            raise rules.ContentLibraryError("Library file checksum mismatch: " + rules.MANIFEST_FILE) from error
+        if manifest != inspection.manifest or {row[0] for row in inspection.members} != {
+                rules.MANIFEST_FILE, *manifest["files"]}:
+            raise ValueError("内容库文件在检查后发生了变化，请重新选择。")
+        return replace(inspection.report, signature=rules.pack_signature(inspection.report, registry))
+
+    def _precheck(self, report, registry=None, unpacked=None):
         """precheck_pack with the pack's signature, conflict rule c (installed revisions)
-        and, given the staged archive, a trial merge with the installed libraries (review B-01)."""
+        and, given the staged pack's unpacked members, a trial merge with the installed libraries (review B-01)."""
         manifest = report.manifest
         registry = self.registry() if registry is None else registry
         existing = rules.registry_entry(registry, manifest["library_id"])
@@ -681,8 +804,8 @@ class ContentLibraryService:
             for content_id, revision in self.catalogue_revisions(core_candidates).items():
                 revisions.setdefault(content_id, revision)
         catalogue = set(installed) | (set() if manifest["profile"] == "core" else set(self.catalogue_ids()) - own)
-        merge_errors = (self._trial_merge(report, registry, archive, catalogue)
-                        if archive is not None and manifest["profile"] != "core" else ())
+        merge_errors = (self._trial_merge(report, registry, unpacked, catalogue)
+                        if unpacked is not None and manifest["profile"] != "core" else ())
         check = rules.precheck_pack(manifest, installed_fingerprints=installed, learned_ids=self.learned_ids(),
                                     installed_library_ids=[e["library_id"] for e in registry["libraries"]],
                                     catalogue_ids=catalogue,
@@ -694,6 +817,9 @@ class ContentLibraryService:
         bundled_error = rules.bundled_precheck_error(manifest, content_pack.bundled_stamp())
         if bundled_error:
             check = replace(check, bundled_error=bundled_error)
+        same_version = rules.same_version_error(manifest, existing)
+        if same_version:
+            check = replace(check, same_version_error=same_version)
         if previous:
             # Rule c against the version being replaced, loaded or not: an item whose content changed keeps its
             # revision only by a package error (saved lessons and their questions are matched by revision).
@@ -741,20 +867,22 @@ class ContentLibraryService:
         view._fixed_own = (manifest["library_id"], previous, own)
         return view
 
-    def _trial_merge(self, report, registry, archive, catalogue):
+    def _trial_merge(self, report, registry, unpacked, catalogue):
         """content_library_merge.offline_merge_problems: the pack over the enabled installed libraries.
 
         Installed extension layers are read as content_pack reads them at
         startup (an unreadable one is left out: it would not load either);
         core items stand in by id (their prerequisites never point into an
         extension). The pack takes its own library_id's place in priority.
+        The pack's documents are read from its unpacked members (nothing is decompressed again).
         """
         from . import content_library_merge as merge
         manifest = report.manifest
         payloads = {}
-        with zipfile.ZipFile(archive) as zipped:
-            for name, path in report.teaching_documents:
-                payloads[name] = content_pack.decode_value(json.loads(zipped.read(path).decode("utf-8"))["payload"])
+        for name, path in report.teaching_documents:
+            raw = _no_links(Path(unpacked) / path, self.root).read_text("utf-8")
+            payloads[name] = content_pack.decode_value(json.loads(raw)["payload"])
+            del raw
         candidate = merge.ExtensionLibrary(manifest["library_id"], manifest, payloads)
         libraries, placed = [], False
         for entry in rules.effective_entries(registry):
@@ -821,21 +949,19 @@ class ContentLibraryService:
         self.discard(prepared.inspection)
 
     def prepare_install(self, inspection, *, accept_missing_references=False, accept_overrides=False, now=None):
-        """install() without its registry write: the re-check and the copy into a fresh folder; reads only
-        files on a snapshot(). Returns a PreparedInstall for commit_install; the staging goes on failure."""
+        """install() without its registry write: the re-check and the move of the unpacked members into a fresh
+        folder; reads only files on a snapshot(). Returns a PreparedInstall for commit_install; the staging goes
+        on failure, and the installed libraries are untouched until commit_install writes the registry."""
         try:
             registry = self.registry()
             base = json.loads(json.dumps(registry))
-            report = rules.validate_library_pack(inspection.archive, registry=registry)  # the staged bytes, re-checked
-            if report.manifest != inspection.manifest:
-                raise ValueError("内容库文件在检查后发生了变化，请重新选择。")
+            report = self._recheck_unpacked(inspection, registry)  # the staged members, re-checked
             refusal = rules.install_refusal(report)
             if refusal:
                 raise ValueError(refusal)
-            precheck = self._precheck(report, registry, inspection.archive)
+            precheck = self._precheck(report, registry, inspection.unpacked)
             blocking = precheck.blocking_reasons()
-            if blocking and (precheck.signature_error or precheck.revision_errors or precheck.merge_errors
-                             or precheck.bundled_error or not accept_missing_references):
+            if blocking and (precheck.refusals() or not accept_missing_references):
                 raise ValueError("；".join(blocking))
             manifest = report.manifest
             accepted = self._accepted_override_ids(manifest, registry, accept_overrides)
@@ -851,13 +977,9 @@ class ContentLibraryService:
             target.parent.mkdir(parents=True, exist_ok=True)
             fresh = Path(tempfile.mkdtemp(prefix=".new-", dir=target.parent))
             try:
-                with zipfile.ZipFile(inspection.archive) as zipped:
-                    for name in manifest["files"]:
-                        destination = fresh / name
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        with zipped.open(name) as source, open(destination, "wb") as sink:
-                            shutil.copyfileobj(source, sink)
-                    (fresh / rules.MANIFEST_FILE).write_bytes(zipped.read(rules.MANIFEST_FILE))
+                # The staging folder is in the same library root: its unpacked members move, nothing is copied.
+                fresh.rmdir()
+                Path(inspection.unpacked).replace(fresh)
                 self._write_indexes(fresh, manifest)
                 fresh.replace(target)
             except BaseException:
@@ -984,7 +1106,7 @@ class ContentLibraryService:
         if entry["source"]["kind"] == "bundled":
             raise ValueError("内置核心库不能移除。")
         if library_id == rules.CORE_LIBRARY_ID:
-            replacement = rules.core_entry()
+            replacement = rules.core_entry(content_pack.bundled_stamp())
             replacement["state"] = "pending_restart"
             registry["libraries"][registry["libraries"].index(entry)] = replacement
         else:

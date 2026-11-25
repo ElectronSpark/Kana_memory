@@ -158,17 +158,17 @@ def test_an_extension_pack_still_carries_one_json_document_per_namespace(tmp_pat
 def test_a_pack_over_the_size_limits_stops_before_writing_with_a_breakdown_by_kind(tmp_path, monkeypatch):
     _, manifest = _package(tmp_path / "fits")
     total = sum(info["bytes"] for info in manifest["files"].values())
-    monkeypatch.setattr(rules, "MAX_PACK_BYTES", total - 1)
+    monkeypatch.setattr(rules, "MAX_UNPACKED_BYTES", total - 1)  # the members together (section 16.10)
     with pytest.raises(ValueError) as caught:
         _package(tmp_path / "over")
     message = str(caught.value)
     assert not (tmp_path / "over" / "pack.zip").exists()
-    assert f"over MAX_PACK_BYTES {total - 1:,}" in message and "by 1" in message and "Bytes by kind:" in message
+    assert f"over MAX_UNPACKED_BYTES {total - 1:,}" in message and "by 1" in message and "Bytes by kind:" in message
     sqlite_bytes = manifest["files"][rules.TEACHING_PACK_FILE]["bytes"]
     assert re.search(rf"teaching sqlite +1 files +{sqlite_bytes:,} ", message)
     assert "lexicon" in message and "other" in message and "teaching json" not in message
     assert "Largest members: " + rules.TEACHING_PACK_FILE in message
-    monkeypatch.setattr(rules, "MAX_PACK_BYTES", total + 10 ** 6)
+    monkeypatch.setattr(rules, "MAX_UNPACKED_BYTES", total + 10 ** 6)
     monkeypatch.setattr(rules, "MAX_TEACHING_BYTES", 10)  # one namespace document of an extension pack
     with pytest.raises(ValueError, match=r"teaching/lesson\.json is [\d,]+ bytes, over MAX_TEACHING_BYTES 10") as caught:
         _package(tmp_path / "document", library_id="author.big", extension=True, namespaces=["lesson"])

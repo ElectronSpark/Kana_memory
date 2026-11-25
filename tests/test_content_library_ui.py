@@ -230,7 +230,8 @@ def test_same_revision_different_content_is_a_package_error(library_app):
     app.show_content_libraries()
     asyncio.run(app.add_content_library())
     text = text_of(app.body)
-    assert "同 ID 冲突" in text and "冲突：grammar:demo:desu（本库声明替代" in text
+    # Refused (design 08 section 16.10): the package error and its ids, no conflict lines of an installation.
+    assert "不能安装" in text and "同 ID 冲突" not in text and "新增内容" not in text
     assert "包错误：1 项" in text and "包错误：grammar:demo:desu" in text
     assert "安装" not in _buttons(app) and "仍然安装（相关项标为依赖缺失、不可加入）" not in _buttons(app)
     asyncio.run(app.install_content_library())
@@ -383,6 +384,10 @@ def test_without_a_platform_restart_the_page_says_it_did_not_restart_by_itself(l
 def test_an_install_that_stays_disabled_does_not_restart(restart_app):
     app = restart_app
     _install(app)
+    # The fake restart returned; the page kept its status until the process ended (section 16.10). The next
+    # process starts without it.
+    assert library_activity.of(app).working and "添加内容库" not in _buttons(app)
+    app._library_activity = None
     app.platform.restart_app.reset_mock()
     app.content_library_service().set_enabled("author.n3", False)
     namespaces = extension_namespaces()

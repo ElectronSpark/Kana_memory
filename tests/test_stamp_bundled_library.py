@@ -94,3 +94,61 @@ def test_a_pack_never_carries_the_stamp(tmp_path):
     pack = _core_pack(resources, tmp_path / "core.kmlib")
     with zipfile.ZipFile(pack) as archive:
         assert not any(Path(name).name == rules.BUNDLED_STAMP_FILE for name in archive.namelist())
+
+
+# --- design 08 section 16.10: the stamp written at pack time (package_library_pack.py --stamp-resources) -------
+
+def test_the_pack_tool_stamps_the_resources_exactly_as_the_stamp_tool_does(tmp_path):
+    resources = build_core_resources(tmp_path / "resources")
+    package = _tool("package_library_pack").package
+    result = package(resources, tmp_path / "core.kmlib", library_version="20261124.2", stamp_resources=resources)
+    written = json.loads((resources / rules.BUNDLED_STAMP_FILE).read_text("utf-8"))
+    assert result["stamp"] == written == rules.make_bundled_stamp("20261124.2", "date", _sha(resources))
+    (resources / rules.BUNDLED_STAMP_FILE).unlink()
+    assert _tool("stamp_bundled_library").stamp(resources, tmp_path / "core.kmlib") == written  # the same stamp
+    assert content_pack.bundled_stamp(resources) == written
+    with zipfile.ZipFile(tmp_path / "core.kmlib") as archive:
+        assert rules.BUNDLED_STAMP_FILE not in {Path(name).name for name in archive.namelist()}
+    # Another folder holding the same teaching database (the build's copy of the resources) is stamped too.
+    copy = build_core_resources(tmp_path / "copy")
+    package(resources, tmp_path / "again.kmlib", library_version="20261124.3", stamp_resources=copy)
+    assert content_pack.bundled_stamp(copy)["library_version"] == "20261124.3"
+
+
+def test_the_pack_tool_refuses_a_stamp_folder_of_other_content_and_writes_nothing(tmp_path):
+    resources = build_core_resources(tmp_path / "resources")
+    other = build_core_resources(tmp_path / "other", {"lesson": {"CONTENT_REVISION": 2, "_ITEMS": {},
+                                                                 "SOURCES": [{"id": "other"}]}})
+    package = _tool("package_library_pack").package
+    with pytest.raises(ValueError, match="not the one in this pack"):
+        package(resources, tmp_path / "core.kmlib", library_version="20261124", stamp_resources=other)
+    assert not (tmp_path / "core.kmlib").exists() and not (other / rules.BUNDLED_STAMP_FILE).exists()
+    with pytest.raises(ValueError, match="no teaching_content.sqlite3"):
+        package(resources, tmp_path / "core.kmlib", library_version="20261124", stamp_resources=tmp_path)
+    assert not (tmp_path / "core.kmlib").exists()
+    with pytest.raises(ValueError, match="only a core pack"):
+        package(resources, tmp_path / "ext.kmlib", library_id="author.ext", extension=True, namespaces=["lesson"],
+                stamp_resources=resources)
+    assert not (tmp_path / "ext.kmlib").exists() and not (resources / rules.BUNDLED_STAMP_FILE).exists()
+
+
+def test_a_stamp_refused_after_the_pack_was_written_removes_the_pack(tmp_path, monkeypatch):
+    resources = build_core_resources(tmp_path / "resources")
+    tool = _tool("package_library_pack")
+    import stamp_bundled_library
+    monkeypatch.setattr(stamp_bundled_library, "stamp", lambda folder, pack: (_ for _ in ()).throw(ValueError("no")))
+    with pytest.raises(ValueError, match="no"):
+        tool.package(resources, tmp_path / "core.kmlib", library_version="20261124", stamp_resources=resources)
+    assert not (tmp_path / "core.kmlib").exists() and not (resources / rules.BUNDLED_STAMP_FILE).exists()
+
+
+def test_the_pack_tool_has_the_option(tmp_path, monkeypatch, capsys):
+    import sys
+    resources = build_core_resources(tmp_path / "resources")
+    tool = _tool("package_library_pack")
+    monkeypatch.setattr(sys, "argv", ["package_library_pack.py", str(resources), str(tmp_path / "core.kmlib"),
+                                      "--library-version", "20261124", "--stamp-resources", str(resources)])
+    tool.main()
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["stamp"]["library_version"] == "20261124"
+    assert content_pack.bundled_stamp(resources) == printed["stamp"]

@@ -38,6 +38,8 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
     private OutputStream exportOutput;
     private long streamBytes;
     private boolean streamReading, streamWriting, importEnded;
+    // The provider's display name of the document being read (OpenableColumns.DISPLAY_NAME), "" when none.
+    private volatile String displayName = "";
 
     public KanaBackupDocuments(AppCompatActivity activity, Events events) {
         this.activity = activity;
@@ -138,8 +140,25 @@ public final class KanaBackupDocuments implements LifecycleEventObserver {
             closeQuietly(input);
             error = failure + exception.getMessage();
         }
+        if (error == null) displayName = queryDisplayName(resolver, uri);
         finishFromWorker(error == null ? IMPORT_READY : null, error);
     }
+
+    /** The provider's display name of a document, "" when it gives none; never fails the read. */
+    private static String queryDisplayName(ContentResolver resolver, android.net.Uri uri) {
+        if (!"content".equals(uri.getScheme())) return "";
+        try (android.database.Cursor cursor = resolver.query(uri,
+                new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                return name == null ? "" : name;
+            }
+        } catch (Exception ignored) { }
+        return "";
+    }
+
+    /** The name of the document being read (the picker's choice or an opened file), "" when unknown. */
+    public String displayName() { return displayName; }
 
     /** Pull exactly one bounded block. No external file path crosses the bridge. */
     public String readImportBlock() throws IOException {

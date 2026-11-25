@@ -261,6 +261,44 @@ def test_the_picker_offers_kmlib_and_zip_types_and_an_opened_file_reads_through_
     assert calls == [("importJson",)]  # backups keep their own picker
 
 
+def test_with_a_sink_the_blocks_go_into_it_and_the_file_s_name_comes_back(android, tmp_path):
+    """Design 08 section 16.10: no cache file and no copy of the whole file; the picker reports the name."""
+    platform, _, host = android
+
+    class Sink:
+        def __init__(self):
+            self.data = b""
+
+        def write(self, block):
+            self.data += block
+
+    async def run(call, name):
+        task = asyncio.create_task(call)
+        await asyncio.sleep(0)
+        document = host.documents[-1]
+        document.blocks = iter([base64.b64encode(b"PK-pa").decode(), base64.b64encode(b"ck").decode()])
+        if name is not None:
+            document.displayName = lambda: name
+        document.events.onComplete(bridge._BACKUP_IMPORT_READY, False, None)
+        return await task
+
+    sink = Sink()
+    assert asyncio.run(run(platform.import_library_pack(sink=sink), "picked.kmlib")) == "picked.kmlib"
+    assert sink.data == b"PK-pack" and not list(tmp_path.glob("tmp*"))
+    sink = Sink()
+    assert asyncio.run(run(platform.import_library_pack(sink=sink), None)) == ""  # an older bridge: no name
+    request = files.named(files.classify(_fields(uri="content://com.provider/document/9")), "opened.kmlib")
+    sink = Sink()
+    assert asyncio.run(run(platform.read_library_file(request, sink=sink), None)) == "opened.kmlib"
+    assert sink.data == b"PK-pack"
+
+
+def test_the_java_bridge_reports_the_document_s_display_name():
+    source = (ROOT / "app/native/java/org/example/kanamemory/KanaBackupDocuments.java").read_text("utf-8")
+    assert "public String displayName()" in source and "OpenableColumns.DISPLAY_NAME" in source
+    assert "displayName = queryDisplayName(resolver, uri);" in source
+
+
 def test_a_file_uri_the_app_may_not_read_says_so(android):
     platform, _, host = android
     request = files.classify(_fields(scheme="file", uri="file:///sdcard/Download/a.kmlib", path="/sdcard/Download/a.kmlib"))
@@ -318,7 +356,8 @@ def test_an_opened_file_shows_the_precheck_of_add_and_never_installs(library_app
     assert app.page == "content_library_precheck"
     text = text_of(app.body)
     assert "测试扩展库" in text and "新增内容 1 项" in text and f"文件名：{PACK_NAME}" in text and "安装" in _buttons(app)
-    app.platform.read_library_file.assert_awaited_once_with(_request())
+    app.platform.read_library_file.assert_awaited_once()
+    assert app.platform.read_library_file.await_args.args == (_request(),)  # and the sink it writes into
     assert app.store.get_setting(rules.REGISTRY_SETTING) in (None, rules.default_registry())  # nothing installed
     picked = text.replace(f"文件名：{PACK_NAME}", "")
     asyncio.run(app.add_content_library())  # the same file picked with 添加内容库: the same page
@@ -332,7 +371,7 @@ def test_a_file_that_is_not_a_pack_is_reported_with_its_name(library_app):
     app.platform.read_library_file = AsyncMock(return_value=b"not a zip")
     asyncio.run(app.open_content_library_file(_request("notes.bin")))
     assert app.page == "content_libraries"
-    assert app.alert.call_args[0][0] == "notes.bin：这不是 KanaMemory 的内容库文件。"
+    assert app.alert.call_args[0][0] == "notes.bin：这不是内容库文件。"
     assert "正在" not in text_of(app.body)  # the status block went before the message
     app.platform.read_library_file = AsyncMock(side_effect=bridge.PlatformError(files.FILE_URI_UNREADABLE))
     asyncio.run(app.open_content_library_file(_request("a.kmlib")))

@@ -309,7 +309,10 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   设置了 KANAMEMORY_TEACHING_PACK（隔离构建与测试）时，标记只在该数据库旁查找（content_pack.bundled_teaching）。
   标记由 tools/stamp_bundled_library.py <资源目录> --pack <核心库包> 写入：包必须是核心库包，且其教学数据库的
   content_sha256 与资源目录的相同，否则拒绝、不写文件；写入包的 library_version 与 version_scheme。
+  打包时也可一并写：tools/package_library_pack.py --stamp-resources <资源目录>（见 16.10，同一实现）。
   tools/package_library_pack.py 从不把标记放进库包。没有标记的版本（如公开演示版）行为不变。
+- 注册表里内置核心库条目的 library_version（16.10）：有有效标记时为标记版本，没有时为 "bundled"（rules.BUNDLED_VERSION）；
+  首次启动、移除导入的核心库与下面的启动替换都按此写；此前写下的注册表在启动时改过来，不算待生效的变更。
 - 版本顺序（content_library_rules.library_version_key / compare_library_versions）：version_scheme 为 date 时按
   点分数字组的整数比较，20261119.3 < 20261121 < 20261121.1；其他方案或形状一律“不可比较”。
 - 启动规则（core_reverted_to_bundled）：核心库条目是导入的包、有有效标记、两者可比较（包的方案取自其清单）且标记版本
@@ -319,7 +322,7 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   内容库页显示提示“应用更新后自带的内容（版本 X）不比导入的核心库（版本 Y）旧，已改用内置内容……”，
   提示存于库根目录 bundled_core_notice.json（本机状态，不进备份），直到下一次内容库变更（安装、启用/停用、移除）。
 - 预检：有有效标记时，比内置内容旧的核心库包不可安装（提示写出两个版本），版本相同不可安装（“与应用内置的内容相同”），
-  更新的照常；这一条与签名错误一样，“仍然安装”也不绕过。没有有效标记时照常。
+  更新的照常；这一条与签名错误一样，“仍然安装”也不绕过。没有有效标记时照常。不可安装的包的预检页只写它是什么与原因（16.10）。
 - 内容库页：有有效标记时内置核心库一行的版本显示标记版本，来源行写“内置内容版本 X”。
 - 发行检查：environment/verify_distribution_apk.py 报告中给出 bundled_library_stamp（无标记时为 null），标记存在却不属于
   随包的教学数据库时拒绝；tools/check_public_content.py 允许可选的标记文件并做同样的核对。
@@ -720,8 +723,10 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
   sqlite 与词典路径（pack_path/lexicon_path），source 变为 file；移除即恢复内置条目。这用于 demo/空资源 App 导入
   完整核心库的验证，也是 10.2 “KANAMEMORY_TEACHING_PACK 继续覆盖”之外的第二条覆盖路径（环境变量优先级更高）。
 - 扩展库教学分层按 JSON 文档读取并在读取时校验 sha256，不做分片懒加载；annotations/media/review 分层随包安装但
-  本阶段不装载。validate_library_pack 只做形状校验，typed 值解码与捆绑 sqlite 的学习者表检查在服务 stage_bytes 中进行。
-- 尺寸：完整核心库包约 306 MiB（未压缩），故 MAX_PACK_BYTES=512 MiB、单文件 256 MiB，高于 5.2 建议的 256 MiB。
+  本阶段不装载。validate_library_pack 只做形状校验，typed 值解码与捆绑 sqlite 的学习者表检查在服务 stage_bytes 中进行
+  （2026-11-24 起导入按流进行，解码在解包的同一遍里，见 16.10）。
+- 尺寸：完整核心库包约 306 MiB（未压缩），故 MAX_PACK_BYTES=512 MiB、单文件 256 MiB，高于 5.2 建议的 256 MiB
+  （2026-11-24 起的上限见 16.10：文件 512 MiB、单个成员 400 MiB、成员合计 1024 MiB、成员 20000 个）。
   Android 上库包经文件选择的原生桥分块读入（64 KiB 一块，原生一侧不持有整个文件）；原生桥的导入总量上限同为
   512 MiB（0.36.0 起）。0.35.0 及更早的原生桥对导入按 64 MiB 截断，所以超过 64 MiB 的库包 zip 在那些版本的
   Android 上无法导入，提示“文件超过 64 MiB 限制”；桌面不受影响。
@@ -1104,7 +1109,8 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
   不按路径另读，读不了时提示说明。预检页“文件名”为提供方给的显示名。不是内容库的文件：内容库页以文件名开头给出导入时的原有说明。
   应用正忙（未保存的作答或草稿、备份或恢复、练习轮次、专注页面、离开确认、内容库文件正在选择、检查或安装）时只提示
   “请先完成当前操作，再重新打开这个内容库文件。”并放弃这次请求。不是内容库的文件与其他导入错误给一句中文（“<文件名>：这不是
-  KanaMemory 的内容库文件。”、已损坏、超过大小、需要更新的应用、格式不对等，content_library_rules.learner_error），技术细节只进诊断记录。
+  内容库文件。”、“<文件名>：内容库文件已损坏，请重新获取。”、超过大小、需要更新的应用、格式不对等，content_library_rules.learner_error；
+  2026-11-24 起的文字见 16.10），技术细节只进诊断记录。
 - 处理中可见（2026-11-20）：从接受打开或选中文件起，到显示预检或错误为止，内容库页顶部显示状态块（转动的进度指示、
   “正在读取内容库文件…”再“正在检查内容库文件（校验并与已安装的内容比对）…”、已知时的文件名、“文件较大时需要几十秒，请稍候。”），
   其间页面不给出添加、启用、移除、设为重点、立即重启；从点“安装”到重启显示“正在安装内容库，完成后自动重启…”。读取经平台的读取线程，
@@ -1145,3 +1151,67 @@ tools/public_source_files.txt（wiring 与 candidates 两个文件只用合成�
 - 最低应用版本：0.36.16接受带这个命名空间的包（核心教学数据库深校验、加载与扩展包安装都照常），只是不读它，带行的包在旧应用里
   按没有修正的策略判题。所以包里有行时打包工具把requires.app_min_version提高到ANSWER_OVERLAY_MIN_APP（首个读取它的应用版本，
   须与发布这项改动的版本号一致），给出的更高版本保留；没有行时不设。旧应用对这样的包在导入时给出“需要更新的应用”的说明。
+
+
+16.10 预检页、打开文件、按流导入与打包时写标记（2026-11-24） [I，桌面测试与源码核对；原生未验]
+
+- 不可安装的包的预检页（content_library_ui._content_library_refusal_rows）：PackPrecheck.refusals()（新，blocking_reasons 去掉
+  缺少必需引用这一可由学习者放行的项）——核心库不比内置内容新（bundled_error）、已安装同一版本（same_version_error）、签名无效、
+  试合并出错（merge_errors）、包错误（规则 c）——任一成立时，页面只有库名、“<library_id> · 版本 <版本>”、“文件名：<文件名>”、
+  小标题“不能安装”、每条拒绝一句（带原因；签名无效另写“签名状态：签名无效”，包错误列出前 10 个 ID）和“返回”；
+  不写“替换已安装的…”、新增/相同/冲突计数、来源时间、“安装后重启应用生效”，也没有“安装”。试合并出错原先显示“默认不安装”和
+  “仍然安装”（服务随后拒绝），现在同样按拒绝显示：“与已安装的内容库合并时出错，不能安装：<原因>。”。
+  需要更新的应用、已损坏或不是内容库的文件在解包时就被拒绝（没有清单可比对的预检），仍是内容库页上的一句提示，不出预检页。
+- 可安装的预检页：摘要在前——库名、“<library_id> · 版本 <版本>（替换已安装的 <旧版本>）”、“文件名：<文件名>”、
+  “内容：语法 N … · 新增内容 N 项”、“签名状态：…”——紧接着是按钮（“安装”，或缺少必需引用时“默认不安装：…”与“仍然安装（…）”；
+  可接受替代时“安装并接受本库声明的替代（…）”；“取消”），然后是“安装后重启应用生效…”等说明，再往下是“预检结果”的各项计数、
+  提示、“来源”（检查时间、文件 sha256）与差异。手机上不必滚动就能点到“安装”。
+- 同一版本（rules.same_version_error）：已从文件安装的库，包的 library_version 与之相同（内容是否相同都算）时，预检写
+  “这个内容库的版本 <版本> 已经安装，不需要再安装。”，不提供安装；已损坏（damaged）的库可以用同一版本重装；内置核心库由
+  bundled_error 判断。服务的 prepare_install 对同一内容的原有拒绝保留。
+- 需要更新的应用：rules.AppTooOldError（ContentLibraryError 的子类）。这类拒绝（以及“需要更新版本的应用”的格式拒绝，
+  rules.is_version_refusal）在所有入口只显示它自己的一句，前面最多加文件名，从不加“无法读取内容库：”；其他读不了的文件在
+  不知道文件名时照旧带这个前缀。版本检查在清单读出后、任何成员解包之前（validate_library_pack(check_manifest=)）。
+- 不是内容库与已损坏：“这不是内容库文件。”（rules.NOT_A_PACK：根本不是 ZIP，或 ZIP 里没有清单）；“内容库文件已损坏，请重新获取。”
+  （rules.DAMAGED_PACK：以 ZIP 签名开头却打不开——被截断——、成员 CRC 或 sha256 或大小不符、数据库损坏）。区分的依据是文件头四个字节
+  （rules._starts_like_zip），英文的技术原因只进诊断记录（diagnostic_events.record_error）。
+- 文件名：两个入口都显示在状态块与预检页上。平台的读取接口改为 read(sink)：把文件写入服务的 PackStaging，并返回文件的显示名
+  （选择器：Android 由 KanaBackupDocuments.displayName() 给出提供方的 OpenableColumns.DISPLAY_NAME，桌面为文件名；打开的文件：
+  请求里的显示名）。选择器的名字在选中后才知道，状态块里的名字行原地更新（library_activity.named）。仍按旧方式交出字节的平台照常
+  工作，只是没有名字（“导入文件”）。桌面选择器的文件类型加上 kmlib。
+- 安装成功到应用自己重启之间：平台的重启返回（“restarted”，假的平台或进程稍后才结束）或应用结束时，状态块保留
+  “变更已保存，正在重启应用…”，此间重画页面也不给“添加内容库”或任何操作；没有重启（设备不能自行重启、关闭被拒绝、正在备份或练习）
+  时照旧回到带说明与“立即重启”的页面。
+- 按流导入（content_library_service.PackStaging / open_staging / stage_file）：平台把文件按块写入库根目录下的暂存文件，同一遍计数
+  （超过 MAX_PACK_BYTES 即停）并算 sha256；Android 的块直接写入，不再经缓存文件和整份字节（platform_android._read_library_stream(sink=)），
+  桌面按 64 KiB 一块复制（platform_desktop.copy_library_file）。validate_library_pack(unpack=, check_manifest=, decode=) 逐个成员按
+  1 MiB 一块读出，一边算 sha256 一边写到暂存目录里的位置（每个成员只解压一次），教学 JSON 文档（单个不超过 64 MiB）在读出时解析并
+  解码 typed 值；数据库在解包后的位置上检查（学习者表、教学数据库校验），暂存的 zip 随即删除。预检的试合并读解包后的文档。安装时先核对
+  每个成员的大小与修改时间仍是检查时记下的（StagedPack.members），再把解包目录整个移到 <library_id>/<version>.<sha 8>（同一库根目录，
+  不复制），写索引后改名就位；失败或中断时新目录与暂存目录都删除，注册表与已安装的库不变（之前的版本照常可用，下次启动照常结清）。
+  stage_bytes 保留给仍交出字节的调用方，内部同样按块写入。
+- 上限（content_library_rules，各有一句）：MAX_PACK_BYTES 文件 512 MiB（PACK_TOO_LARGE）、MAX_FILE_BYTES 单个成员解压后 400 MiB
+  （MEMBER_TOO_LARGE，原 256 MiB）、MAX_UNPACKED_BYTES 成员合计 1024 MiB（UNPACKED_TOO_LARGE，原与文件同为 512 MiB）、
+  MAX_PACK_MEMBERS 20000 个（TOO_MANY_MEMBERS，数值不变）。大小上限先按 ZIP 目录与清单的文件表核对，任何解压之前；打包工具按同样的
+  合计与个数上限检查文件表，写出的文件超过 MAX_PACK_BYTES 时删除并报告。原生桥的导入总量上限仍为 512 MiB。
+- 内置核心库条目的版本：rules.core_entry(stamp)、default_registry(stamp)、with_bundled_version(registry, stamp)；
+  content_pack.active_registry 与 ContentLibraryService.startup_sync 都在启动时把注册表改成当前标记的版本（标记失效时改回 "bundled"），
+  状态不变、不提示重启；预检的“替换已安装的 …”、升级差异的“相对已安装版本 …”与内容库页的版本因此一致。扩展库不受影响。
+- 打包时写标记：tools/package_library_pack.py --stamp-resources <资源目录>（只用于核心库）：写包之前先核对该目录的
+  teaching_content.sqlite3 与要打包的教学数据库 content_sha256 相同，不同即拒绝、什么也不写；写包之后调用
+  tools/stamp_bundled_library.py 的 stamp()（同一实现，库 ID、版本、方案与教学数据库的内容哈希），失败时把刚写的包删掉。
+  stamp() 解出教学数据库时按块复制。
+- 测量（桌面，模拟 Android 一侧的块流：64 KiB 一块的 base64，再经暂存、校验、预检与安装；一个 76.5 MB 的核心库包，306 MiB 解压后，
+  357 个成员；同一台机器、负载不定，两三次的范围）：打开到预检 3.6–4.2 秒 → 3.2–3.4 秒，安装 3.7–4.2 秒 → 0.25–0.5 秒，导入合计
+  7.3–8.4 秒 → 3.4–4.4 秒；成员解压与 sha256 从 714 次降为 357 次，validate_library_pack 从 2 次降为 1 次；去掉的重复：整份字节在内存里
+  的两份拷贝与 Android 的缓存文件、对整个文件另算一遍 sha256、为检查数据库再解压一次、安装时再校验一遍包（再解压）与再解压复制一次。
+  tracemalloc 的峰值：87.7 MiB → 14.5 MiB（剩下的主要是清单本身）。桌面上打开新写的文件很慢（文件扫描），所以安装时的核对用大小与
+  修改时间而不是重新读一遍。
+- 测试（合成数据）：新文件 tests/test_content_library_precheck_page.py（拒绝页、按钮位置、文件名、版本拒绝、不是内容库与已损坏、
+  同一版本、安装后到重启）、tests/test_content_library_streaming.py（上限与文字、每个成员只读一次、成员事后被改、峰值内存、
+  成员读到一半与建目录时中断、两个平台写入暂存）、tests/test_content_library_bundled_version.py（注册表的内置版本：首次启动、旧注册表、
+  标记消失、预检、移除导入的核心库、跨启动）；tests/test_stamp_bundled_library.py 增 --stamp-resources 四项；tests/test_library_file_open.py
+  增 sink 与 displayName 两项。按新规则改写：test_library_activity（暂存的钩子、文字、安装时改坏的是解包后的成员）、
+  test_library_file_open（打开时多传 sink、文字）、test_content_library_ui（包错误页、停用库的重装）、test_content_library_signing
+  （签名无效页）、test_content_library_service（移除后的内置条目带标记版本）、test_package_library_pack（合计上限的名字）。
+- 未验：原生（选择器与打开文件的块流写入暂存、displayName、手机屏幕上“安装”的位置、重启前页面不给操作）；Android 上的真实耗时与内存。

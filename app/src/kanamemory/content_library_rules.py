@@ -83,14 +83,20 @@ MERGE_POLICIES = frozenset({"items_by_id", "map_by_key", "contribution", "single
 # Same rejection rule as tools/package_content_bundle.py, plus native code.
 FORBIDDEN_SUFFIXES = frozenset({".py", ".pyc", ".pyd", ".dll", ".exe", ".ps1", ".js", ".jks", ".keystore",
                                 ".so", ".sh", ".bat", ".cmd", ".jar", ".dex", ".apk"})
-# The full core pack (lexicon 99 MiB, annotations, teaching, media) is about
-# 306 MiB uncompressed, hence 512 MiB for a pack and 256 MiB for one file,
-# above the 256 MiB that 08 §5.2 first suggested (08 section 16). The
-# import channel of both platforms and the service refuse at this one limit.
-MAX_PACK_BYTES = 512 * 1024 * 1024
-PACK_TOO_LARGE = f"内容库文件超过 {MAX_PACK_BYTES // (1024 * 1024)} MiB 限制。"
-MAX_FILE_BYTES = 256 * 1024 * 1024
-MAX_TEACHING_BYTES = 64 * 1024 * 1024  # one namespace document; same bound as content_pack._MAX_PAYLOAD_BYTES
+# Import limits (design 08 section 16.10). The import streams: the pack file is copied and hashed in blocks
+# and its members are unpacked one at a time, so no limit is bounded by memory. The full core pack is about
+# 76 MiB as a file and 306 MiB unpacked (lexicon 99 MiB). The import channel of both platforms and the
+# service refuse a file over MAX_PACK_BYTES; each limit has its own sentence.
+_MIB = 1024 * 1024
+MAX_PACK_BYTES = 512 * _MIB          # the pack file itself
+PACK_TOO_LARGE = f"内容库文件超过 {MAX_PACK_BYTES // _MIB} MiB 限制。"
+MAX_FILE_BYTES = 400 * _MIB          # one member, unpacked
+MEMBER_TOO_LARGE = f"内容库文件里有一个文件解压后超过 {MAX_FILE_BYTES // _MIB} MiB 限制，不能导入。"
+MAX_UNPACKED_BYTES = 1024 * _MIB     # all members together, unpacked
+UNPACKED_TOO_LARGE = f"内容库文件解压后合计超过 {MAX_UNPACKED_BYTES // _MIB} MiB 限制，不能导入。"
+MAX_PACK_MEMBERS = 20000             # files in the file table (as before)
+TOO_MANY_MEMBERS = f"内容库文件里的文件超过 {MAX_PACK_MEMBERS} 个，不能导入。"
+MAX_TEACHING_BYTES = 64 * _MIB  # one namespace document; same bound as content_pack._MAX_PAYLOAD_BYTES
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_LIBRARIES = 64
 CONTENT_ID_LIMIT = 10000
@@ -108,26 +114,35 @@ class ContentLibraryError(ValueError):
     """The registry, manifest or pack does not have a supported shape."""
 
 
+class AppTooOldError(ContentLibraryError):
+    """The pack needs a newer app (requires.app_min_version): a version refusal, not an unreadable file."""
+
+
 # What a learner reads when a file they chose cannot be imported (design 08 section 16.8): one short sentence
 # per kind of problem; the importer's own (English) detail goes only to the diagnostic record.
-NOT_A_PACK = "这不是 KanaMemory 的内容库文件。"
-DAMAGED_PACK = "这个内容库文件已损坏或不完整，请重新获取。"
+NOT_A_PACK = "这不是内容库文件。"  # not a ZIP at all, or a ZIP without a manifest
+DAMAGED_PACK = "内容库文件已损坏，请重新获取。"  # a truncated or corrupted pack
 PART_TOO_LARGE = "这个内容库文件里有超过大小限制的部分，不能导入。"
 NEWER_PACK = "这个内容库文件需要更新版本的应用才能导入，请先更新应用。"
 WRONG_SHAPE = "这个内容库文件的格式不对，不能导入。"
 HOLDS_LEARNER_STATE = "这个内容库文件里含有学习记录，不能导入。"
 FORBIDDEN_FILE = "这个内容库文件里含有不允许的文件（程序、密钥或链接），不能导入。"
+# A ZIP file starts with a local file header (or, empty, with the end record); a file that does not is no
+# pack at all, one that does but cannot be opened was cut short or damaged.
+_ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06")
 _LEARNER_SENTENCES = (
     (NOT_A_PACK, ("Not a library pack ZIP file", "Library pack has no manifest.json",
                   "Library manifest is not valid JSON", "Invalid library manifest")),
-    (DAMAGED_PACK, ("Library file checksum mismatch", "Library file size does not match",
+    (DAMAGED_PACK, ("Damaged library pack ZIP file", "Library file checksum mismatch",
+                    "Library file size does not match",
                     "Library file is larger than its manifest", "Library content checksum does not match",
                     "Pack files and manifest file table disagree", "Duplicate pack entry",
                     "Teaching document is not valid JSON", "Library database is not an SQLite file",
                     "Bad CRC-32", "File is not a zip file", "Truncated file header", "Bad magic number")),
-    (PACK_TOO_LARGE, ("Library pack exceeds its size limit",)),
-    (PART_TOO_LARGE, ("Library file exceeds its size limit", "Teaching namespace exceeds its size limit",
-                      "Library manifest is too large")),
+    (MEMBER_TOO_LARGE, ("Library file exceeds its size limit",)),
+    (UNPACKED_TOO_LARGE, ("Library members exceed their total size limit",)),
+    (TOO_MANY_MEMBERS, ("Library pack has too many files",)),
+    (PART_TOO_LARGE, ("Teaching namespace exceeds its size limit", "Library manifest is too large")),
     (NEWER_PACK, ("Unsupported library pack format", "Unsupported library requirements")),
     (HOLDS_LEARNER_STATE, ("Learner state must never enter",)),
     (FORBIDDEN_FILE, ("Library packs cannot contain links", "Executable code or credential material")),
@@ -148,6 +163,12 @@ def learner_error(error):
         if text.startswith(starts):
             return sentence
     return WRONG_SHAPE
+
+
+def is_version_refusal(error):
+    """Whether ``error`` refuses a pack for its version requirements (the pack needs a newer app): the file
+    was read, so its sentence is shown alone, never after "could not read" (design 08 section 16.10)."""
+    return isinstance(error, AppTooOldError) or learner_error(error) == NEWER_PACK
 
 
 def _text(value, name, *, allow_empty=False, limit=4096):
@@ -210,17 +231,40 @@ def count_families(content_ids):
 
 # ---------------------------------------------------------------- registry
 
-def core_entry():
-    return {"library_id": CORE_LIBRARY_ID, "library_version": "bundled", "profile": "core",
+BUNDLED_VERSION = "bundled"  # library_version of the bundled core entry when its content carries no valid stamp
+
+
+def bundled_core_version(stamp=None):
+    """The library_version the bundled core entry stores: the valid stamp's version (section 5.7), else
+    BUNDLED_VERSION."""
+    return stamp["library_version"] if stamp else BUNDLED_VERSION
+
+
+def core_entry(stamp=None):
+    """The bundled core entry; ``stamp``: the bundled content's valid stamp (content_pack.bundled_stamp) or None."""
+    return {"library_id": CORE_LIBRARY_ID, "library_version": bundled_core_version(stamp), "profile": "core",
             "content_sha256": None, "enabled": True, "installed_at_utc": None,
             "source": {"kind": "bundled", "name": "resources", "sha256": None, "signature_status": "unsigned"},
             "path": "", "state": "ready", "summary": {"title": "内置核心库"}}
 
 
-def default_registry():
+def default_registry(stamp=None):
     """First start: only the bundled core library, enabled and not removable."""
-    return {"version": REGISTRY_VERSION, "libraries": [core_entry()], "priority": [CORE_LIBRARY_ID],
+    return {"version": REGISTRY_VERSION, "libraries": [core_entry(stamp)], "priority": [CORE_LIBRARY_ID],
             "trusted_keys": []}
+
+
+def with_bundled_version(registry, stamp):
+    """A copy of ``registry`` whose bundled core entry stores bundled_core_version(stamp), or None when it
+    already does (or the core is an imported pack). Registries written before the stamp counted store
+    "bundled"; a start brings them up (no restart: the bundled content itself is the same)."""
+    entry = registry_entry(registry, CORE_LIBRARY_ID)
+    version = bundled_core_version(stamp)
+    if entry is None or entry["source"]["kind"] != "bundled" or entry["library_version"] == version:
+        return None
+    registry = json.loads(json.dumps(registry))
+    registry_entry(registry, CORE_LIBRARY_ID)["library_version"] = version
+    return validate_registry(registry)
 
 
 def _summary(value):
@@ -518,7 +562,7 @@ def core_reverted_to_bundled(registry, stamp, core_scheme):
     if order is None or order < 0:
         return None
     registry = json.loads(json.dumps(registry))
-    registry["libraries"][registry["libraries"].index(entry)] = core_entry()
+    registry["libraries"][registry["libraries"].index(entry)] = core_entry(stamp)
     registry = with_pending_delete(registry, add=(CORE_LIBRARY_ID,))
     return registry, {"replaced_version": entry["library_version"], "bundled_version": stamp["library_version"]}
 
@@ -535,6 +579,16 @@ def bundled_precheck_error(manifest, stamp):
         return f"这个核心库文件的版本 {manifest['library_version']} 与应用内置的内容相同，不需要安装"
     return (f"这个核心库文件的版本 {manifest['library_version']} 比应用内置的内容（{stamp['library_version']}）旧，"
             "不能安装")
+
+
+def same_version_error(manifest, installed):
+    """A pack whose version is the one already installed from a file (``installed``: its registry entry, or
+    None) is not installed again: the sentence why, else None. A damaged installed library may be installed
+    again; the bundled core is bundled_precheck_error's."""
+    if (installed is None or installed["source"]["kind"] != "file" or installed["state"] == "damaged"
+            or installed["library_version"] != manifest["library_version"]):
+        return None
+    return f"这个内容库的版本 {manifest['library_version']} 已经安装，不需要再安装"
 
 
 def change_blocked_reason(*, backup_busy=False, round_running=False, focused=False):
@@ -559,19 +613,23 @@ def _string_list(value, name, *, limit=100000, item_limit=CONTENT_ID_LIMIT):
 
 
 def _file_table(files):
-    if not isinstance(files, dict) or not files or len(files) > 20000:
+    if not isinstance(files, dict) or not files:
         raise ContentLibraryError("Invalid file table")
+    if len(files) > MAX_PACK_MEMBERS:
+        raise ContentLibraryError("Library pack has too many files")
     total, result = 0, {}
     for path, info in files.items():
         name = relative_path(path, "file path")
         if (name == MANIFEST_FILE or not isinstance(info, dict) or set(info) != {"bytes", "sha256"}
-                or type(info["bytes"]) is not int or not 0 <= info["bytes"] <= MAX_FILE_BYTES
+                or type(info["bytes"]) is not int or info["bytes"] < 0
                 or not isinstance(info["sha256"], str) or not SHA256.fullmatch(info["sha256"])):
             raise ContentLibraryError("Invalid file entry: " + str(path)[:200])
+        if info["bytes"] > MAX_FILE_BYTES:
+            raise ContentLibraryError("Library file exceeds its size limit: " + name[:200])
         total += info["bytes"]
         result[name] = {"bytes": info["bytes"], "sha256": info["sha256"]}
-    if total > MAX_PACK_BYTES:
-        raise ContentLibraryError("Library pack exceeds its size limit")
+    if total > MAX_UNPACKED_BYTES:
+        raise ContentLibraryError("Library members exceed their total size limit")
     return result
 
 
@@ -781,39 +839,79 @@ def _check_entry(info):
     return name
 
 
-def _hash_member(archive, info, expected_size):
-    digest, total = hashlib.sha256(), 0
+_BLOCK_BYTES = 1024 * 1024  # one block of a member read from the archive
+
+
+def _starts_like_zip(path):
+    """Whether the file begins with a ZIP signature (then a ZIP that cannot be opened was damaged)."""
+    try:
+        with open(path, "rb") as stream:
+            return stream.read(4) in _ZIP_SIGNATURES
+    except (OSError, TypeError):
+        return False
+
+
+def _hash_member(archive, info, expected_size, *, sink=None, keep=False):
+    """sha256 of one member read block by block, checked against its manifest size. ``sink``: a binary file
+    each block is also written to (the member is unpacked in the same pass). ``keep``: also return the
+    member's bytes (a teaching document, bounded by MAX_TEACHING_BYTES, is parsed whole)."""
+    digest, total, kept = hashlib.sha256(), 0, []
     with archive.open(info) as stream:
         while True:
-            block = stream.read(1024 * 1024)
+            block = stream.read(_BLOCK_BYTES)
             if not block:
                 break
             total += len(block)
             if total > expected_size:
                 raise ContentLibraryError("Library file is larger than its manifest says: " + info.filename[:200])
             digest.update(block)
+            if sink is not None:
+                sink.write(block)
+            if keep:
+                kept.append(block)
     if total != expected_size:
         raise ContentLibraryError("Library file size does not match its manifest: " + info.filename[:200])
-    return digest.hexdigest()
+    return (digest.hexdigest(), b"".join(kept)) if keep else digest.hexdigest()
 
 
-def validate_library_pack(zip_path, *, registry=None):
+def _write_member(unpack, name, raw=None, archive=None, info=None, expected_size=None, keep=False):
+    """One member through _hash_member into ``unpack(name)`` (None: not unpacked); ``raw``: bytes already read."""
+    sink = unpack(name) if unpack is not None else None
+    try:
+        if raw is not None:
+            if sink is not None:
+                sink.write(raw)
+            return None
+        return _hash_member(archive, info, expected_size, sink=sink, keep=keep)
+    finally:
+        if sink is not None:
+            sink.close()
+
+
+def validate_library_pack(zip_path, *, registry=None, unpack=None, check_manifest=None, decode=None):
     """File-level validation of a library pack: shape, suffixes, sizes, sha256.
 
     Returns a PackReport whose signature (a SignatureCheck) has status
     unsigned, valid, invalid or untrusted_key; trust is decided against the
     registry's trusted_keys (none given: every valid key is untrusted_key).
     An invalid signature is reported, not raised: install_refusal(report)
-    and PackPrecheck.blocking_reasons refuse it. Teaching JSON documents are parsed for shape only;
-    typed-value decoding and the learner-table check on bundled databases are
-    the service's job after extraction.
+    and PackPrecheck.blocking_reasons refuse it. Teaching JSON documents are parsed for shape;
+    the learner-table check on bundled databases is the service's job.
+
+    Streaming (design 08 section 16.10): members are read one at a time in blocks and each is decompressed
+    once. ``unpack(name)`` returns a binary file opened for writing (or None): every member, manifest.json
+    included, is written there while it is hashed. ``check_manifest(manifest)`` runs on the validated
+    manifest before any other member is read (an early refusal reads nothing more). ``decode(payload)`` checks
+    a teaching document's typed values while the document is in hand. The size limits are checked against
+    the archive's own entries before anything is decompressed.
     """
     try:
         archive = zipfile.ZipFile(zip_path)
     except (OSError, zipfile.BadZipFile) as error:
-        raise ContentLibraryError("Not a library pack ZIP file") from error
+        raise ContentLibraryError("Damaged library pack ZIP file" if _starts_like_zip(zip_path)
+                                  else "Not a library pack ZIP file") from error
     with archive:
-        members = {}
+        members, declared = {}, 0
         for info in archive.infolist():
             name = _check_entry(info)
             if name is None:
@@ -821,33 +919,36 @@ def validate_library_pack(zip_path, *, registry=None):
             if name in members:
                 raise ContentLibraryError("Duplicate pack entry: " + name[:200])
             members[name] = info
+            if len(members) > MAX_PACK_MEMBERS + 1:
+                raise ContentLibraryError("Library pack has too many files")
+            if name != MANIFEST_FILE:
+                declared += info.file_size
         if MANIFEST_FILE not in members:
             raise ContentLibraryError("Library pack has no manifest.json")
+        if declared > MAX_UNPACKED_BYTES:
+            raise ContentLibraryError("Library members exceed their total size limit")
         if members[MANIFEST_FILE].file_size > MAX_MANIFEST_BYTES:
             raise ContentLibraryError("Library manifest is too large")
         try:
-            raw_manifest = json.loads(archive.read(members[MANIFEST_FILE]).decode("utf-8"))
+            manifest_bytes = archive.read(members[MANIFEST_FILE])
+            raw_manifest = json.loads(manifest_bytes.decode("utf-8"))
             manifest = validate_manifest(raw_manifest)
         except (UnicodeDecodeError, ValueError) as error:
             if isinstance(error, ContentLibraryError):
                 raise
             raise ContentLibraryError("Library manifest is not valid JSON") from error
+        if check_manifest is not None:
+            check_manifest(manifest)
         listed = set(members) - {MANIFEST_FILE}
         if listed != set(manifest["files"]):
             raise ContentLibraryError("Pack files and manifest file table disagree")
         allowed_roots = {prefix.rstrip("/") for prefix in LAYER_PREFIX.values() if prefix}
-        total = 0
-        for name, info in members.items():
-            if name == MANIFEST_FILE:
-                continue
+        for name in members:
             root = name.split("/", 1)[0] if "/" in name else None
-            if root is not None and root not in allowed_roots or root is None and name not in {NOTICE_FILE, SIGNATURE_FILE}:
+            if name != MANIFEST_FILE and (root is not None and root not in allowed_roots
+                                          or root is None and name not in {NOTICE_FILE, SIGNATURE_FILE}):
                 raise ContentLibraryError("Unexpected file in library pack: " + name[:200])
-            expected = manifest["files"][name]
-            if _hash_member(archive, info, expected["bytes"]) != expected["sha256"]:
-                raise ContentLibraryError("Library file checksum mismatch: " + name[:200])
-            total += expected["bytes"]
-        documents, route_payload = [], None
+        teaching = {}  # path -> namespace name of the JSON teaching documents
         for path in manifest["layers"]["teaching"]:
             if path == TEACHING_PACK_FILE:
                 continue
@@ -858,15 +959,7 @@ def validate_library_pack(zip_path, *, registry=None):
                 raise ContentLibraryError("Teaching document is not a declared namespace: " + path[:200])
             if manifest["files"][path]["bytes"] > MAX_TEACHING_BYTES:
                 raise ContentLibraryError("Teaching namespace exceeds its size limit: " + name)
-            try:
-                document = validate_namespace_document(json.loads(archive.read(members[path]).decode("utf-8")), name)
-                if name == ROUTE_NAMESPACE:
-                    route_payload = document["payload"]
-            except (UnicodeDecodeError, ValueError, RecursionError) as error:
-                if isinstance(error, ContentLibraryError):
-                    raise
-                raise ContentLibraryError("Teaching document is not valid JSON: " + name) from error
-            documents.append((name, path))
+            teaching[path] = name
         for layer in ("lexicon", "annotations", "review"):
             for path in manifest["layers"][layer]:
                 if not path.endswith((".sqlite3", ".json", ".txt")):
@@ -875,7 +968,35 @@ def validate_library_pack(zip_path, *, registry=None):
             raise ContentLibraryError("Teaching database must be listed in the teaching layer")
         if LEXICON_FILE in manifest["files"] and LEXICON_FILE not in manifest["layers"]["lexicon"]:
             raise ContentLibraryError("Lexicon must be listed in the lexicon layer")
-        return PackReport(manifest=manifest, files=dict(manifest["files"]), teaching_documents=tuple(documents),
+        _write_member(unpack, MANIFEST_FILE, raw=manifest_bytes)
+        total, route_payload = 0, None
+        for name, info in members.items():
+            if name == MANIFEST_FILE:
+                continue
+            expected = manifest["files"][name]
+            result = _write_member(unpack, name, archive=archive, info=info, expected_size=expected["bytes"],
+                                   keep=name in teaching)
+            digest, raw = result if name in teaching else (result, None)
+            if digest != expected["sha256"]:
+                raise ContentLibraryError("Library file checksum mismatch: " + name[:200])
+            total += expected["bytes"]
+            if raw is None:
+                continue
+            namespace = teaching[name]
+            try:
+                document = validate_namespace_document(json.loads(raw.decode("utf-8")), namespace)
+            except (UnicodeDecodeError, ValueError, RecursionError) as error:
+                if isinstance(error, ContentLibraryError):
+                    raise
+                raise ContentLibraryError("Teaching document is not valid JSON: " + namespace) from error
+            del raw
+            if decode is not None:
+                decode(document["payload"])
+            if namespace == ROUTE_NAMESPACE:
+                route_payload = document["payload"]
+            del document
+        documents = tuple((name, path) for path, name in teaching.items())
+        return PackReport(manifest=manifest, files=dict(manifest["files"]), teaching_documents=documents,
                           has_teaching_pack=TEACHING_PACK_FILE in manifest["files"],
                           has_lexicon=LEXICON_FILE in manifest["files"], total_bytes=total,
                           signed=SIGNATURE_FILE in manifest["files"] or "signature" in manifest,
@@ -918,16 +1039,26 @@ class PackPrecheck:
     merge_errors: tuple = ()
     # Section 5.7: a core pack not newer than the bundled content (bundled_precheck_error). Never installable.
     bundled_error: str | None = None
+    # Section 16.10: the version already installed from a file (same_version_error). Never installable.
+    same_version_error: str | None = None
 
-    def blocking_reasons(self):
+    def refusals(self):
+        """The reasons this pack is never installed, whatever the learner chooses (no 安装 button)."""
         reasons = []
         if self.bundled_error:
             reasons.append(self.bundled_error)
+        if self.same_version_error:
+            reasons.append(self.same_version_error)
         if self.signature_error:
             reasons.append(self.signature_error)
         reasons.extend(self.merge_errors)
         if self.revision_errors:
             reasons.append(f"有 {len(self.revision_errors)} 项与已安装内容同 ID、同修订号但内容不同（包错误）")
+        return tuple(reasons)
+
+    def blocking_reasons(self):
+        """refusals() and the block the learner may lift (missing required references)."""
+        reasons = list(self.refusals())
         if self.missing_required_references:
             reasons.append(f"有 {len(self.missing_required_references)} 个必需引用的内容不在已安装的库中")
         return tuple(reasons)

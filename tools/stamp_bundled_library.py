@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -24,13 +25,20 @@ def _teaching_sha256(path):
     return validate_pack(path)["content_sha256"]
 
 
-def stamp(resources, pack):
-    """Write <resources>/bundled_library.json for ``pack``; returns the stamp. ValueError when refused."""
-    resources, pack = Path(resources), Path(pack)
-    teaching = resources / "teaching_content.sqlite3"
+def resources_teaching_sha256(resources):
+    """metadata.content_sha256 of <resources>/teaching_content.sqlite3; ValueError when there is none. Shared
+    with tools/package_library_pack.py --stamp-resources."""
+    teaching = Path(resources) / "teaching_content.sqlite3"
     if not teaching.is_file():
         raise ValueError("The resources folder has no teaching_content.sqlite3")
-    bundled = _teaching_sha256(teaching)
+    return _teaching_sha256(teaching)
+
+
+def stamp(resources, pack):
+    """Write <resources>/bundled_library.json for ``pack``; returns the stamp. ValueError when refused.
+    The one implementation of the stamp: tools/package_library_pack.py --stamp-resources calls it too."""
+    resources, pack = Path(resources), Path(pack)
+    bundled = resources_teaching_sha256(resources)
     report = rules.validate_library_pack(pack)
     manifest = report.manifest
     if manifest["profile"] != "core" or manifest["library_id"] != rules.CORE_LIBRARY_ID:
@@ -39,8 +47,9 @@ def stamp(resources, pack):
         raise ValueError("The core pack carries no teaching database")
     with tempfile.TemporaryDirectory(prefix="kanamemory-stamp-") as folder:
         extracted = Path(folder) / "teaching_content.sqlite3"
-        with zipfile.ZipFile(pack) as archive, archive.open(rules.TEACHING_PACK_FILE) as source:
-            extracted.write_bytes(source.read())
+        with zipfile.ZipFile(pack) as archive, archive.open(rules.TEACHING_PACK_FILE) as source, \
+                open(extracted, "wb") as sink:
+            shutil.copyfileobj(source, sink, 1024 * 1024)  # in blocks: the database is never held whole
         packed = _teaching_sha256(extracted)
     if packed != bundled:
         raise ValueError("The pack's teaching database is not the bundled one (content_sha256 differs)")

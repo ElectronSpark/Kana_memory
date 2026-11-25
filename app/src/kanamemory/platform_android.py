@@ -98,9 +98,37 @@ def _write_backup_stream(native, data):
     return True
 
 
-def _read_library_stream(native, cache_dir, max_bytes):
-    """Binary variant for content library packs; same bounded SAF channel."""
-    return _read_backup_stream(native, cache_dir, max_bytes, binary=True)
+def _read_library_stream(native, cache_dir, max_bytes, sink=None):
+    """Binary variant for content library packs; same bounded SAF channel.
+
+    With ``sink`` (the service's PackStaging, design 08 section 16.10) each block goes straight into it as it
+    arrives: no cache file and no copy of the whole file in memory; the number of bytes is returned. Without
+    it, the file's bytes (the backup channel's way)."""
+    if sink is None:
+        return _read_backup_stream(native, cache_dir, max_bytes, binary=True)
+    total = 0
+    while True:
+        encoded = str(native.readImportBlock())
+        if not encoded:
+            return total
+        if len(encoded) > ((_BACKUP_BLOCK_BYTES + 2) // 3) * 4:
+            raise PlatformError('文件传输块超过限制。')
+        block = base64.b64decode(encoded, validate=True)
+        if not block or len(block) > _BACKUP_BLOCK_BYTES:
+            raise PlatformError('文件传输块无效。')
+        total += len(block)
+        if total > max_bytes:
+            raise PlatformError(f'文件超过 {max_bytes // (1024 * 1024)} MiB 限制。')
+        sink.write(block)
+
+
+def _document_name(native):
+    """The display name the provider gave the picked document (KanaBackupDocuments.displayName), or ""."""
+    try:
+        name = native.displayName()
+    except Exception:  # noqa: BLE001 - a bridge without the name: the file stays unnamed
+        return ""
+    return str(name) if name is not None else ""
 
 
 def library_file_request(intent, resolver):
@@ -372,10 +400,11 @@ class AndroidPlatform:
         return True
 
     async def _backup_document(self, data=None, filename=None, *, archive=False, max_bytes=_BACKUP_MAX_BYTES,
-                               binary=False, mime_types=None, uri=None):
+                               binary=False, mime_types=None, uri=None, sink=None):
         """Await one native SAF picker (or, with ``uri``, one document the app was asked to open).
         Cancellation never changes learning data. ``mime_types``: the picker's types (default: the
-        backup import's)."""
+        backup import's). ``sink`` (a library pack's PackStaging): the blocks go into it and the
+        document's display name is returned ("" when the provider gives none)."""
         self._check_open()
         if self._backup_native is not None:
             raise PlatformError("请先完成当前的文件选择。")
@@ -421,6 +450,9 @@ class AndroidPlatform:
                 if result != _BACKUP_IMPORT_READY:
                     raise PlatformError("文件读取接口版本不匹配。")
                 cache = str(self._context.getCacheDir().getCanonicalPath())
+                if sink is not None:
+                    await _backup_stream_io(native, _read_library_stream, cache, max_bytes, sink)
+                    return None if native.isCancelled() else _document_name(native)
                 reader = _read_library_stream if binary else _read_backup_stream
                 value = await _backup_stream_io(native, reader, cache, max_bytes)
                 return None if native.isCancelled() else value
@@ -552,20 +584,26 @@ class AndroidPlatform:
         from .material_input import MAX_BYTES
         return await self._backup_document(max_bytes=MAX_BYTES)
 
-    async def import_library_pack(self):
-        """Content library file (.kmlib, or an older .zip) through the same bounded SAF import channel (binary)."""
+    async def import_library_pack(self, sink=None):
+        """Content library file (.kmlib, or an older .zip) through the same bounded SAF import channel (binary).
+        With ``sink`` (the service's PackStaging) the blocks go into it and the picked file's display name
+        is returned; without it, the file's bytes. None when nothing was chosen."""
         from .content_library_rules import MAX_PACK_BYTES
         from .library_file_open import PICKER_TYPES
-        return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, mime_types=PICKER_TYPES)
+        return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, mime_types=PICKER_TYPES,
+                                           sink=sink)
 
-    async def read_library_file(self, request):
-        """The bytes of a library file the app was asked to open (library_file_open.OpenRequest): read
-        through the content resolver, bounded like a picked pack. A file URI the app may not read
-        raises PlatformError with library_file_open.FILE_URI_UNREADABLE."""
+    async def read_library_file(self, request, sink=None):
+        """A library file the app was asked to open (library_file_open.OpenRequest): read through the content
+        resolver, bounded like a picked pack. With ``sink`` the blocks go into it and the request's name is
+        returned; without it, the file's bytes. A file URI the app may not read raises PlatformError with
+        library_file_open.FILE_URI_UNREADABLE."""
         from .content_library_rules import MAX_PACK_BYTES
         from .library_file_open import FILE_URI_UNREADABLE
         try:
-            return await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, uri=request.uri)
+            received = await self._backup_document(max_bytes=MAX_PACK_BYTES, binary=True, uri=request.uri,
+                                                   sink=sink)
+            return request.name if sink is not None and received is not None else received
         except PlatformError as error:
             if request.scheme == "file" and str(error).startswith("无法读取文件："):
                 raise PlatformError(FILE_URI_UNREADABLE) from error
