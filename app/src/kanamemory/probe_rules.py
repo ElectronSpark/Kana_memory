@@ -127,6 +127,9 @@ def qualifies(question: Mapping, track_name: str | None, ability: str, *, kana_a
     return definite(question, kana_answer=kana_answer)
 
 
+PROBE_VIEW = "probe_view"
+
+
 def bare_view(question: Mapping) -> dict:
     """A display copy of a probe question without reading, accent or audio aid (never stored or graded).
 
@@ -137,7 +140,10 @@ def bare_view(question: Mapping) -> dict:
     view = dict(question)
     support = dict(question.get("support") or {})
     support.update(reading_safe=False, accent_safe=False, audio_safe=False, segments=[])
-    view.update(support=support, spans=[], optional_audio_text="", readings={})
+    # PROBE_VIEW (brief J6 R6): the page's cue drops the item's own meaning (読み alone), and the page draws
+    # no gloss line, no gloss of the target itself and no option kana (question_presentation, learning_ui).
+    view.update(support=support, spans=[], optional_audio_text="", readings={}, gloss="")
+    view[PROBE_VIEW] = True
     return view
 
 

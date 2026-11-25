@@ -30,6 +30,13 @@ class ModelNotReady(PlatformError):
     pass
 
 
+class PlaybackStopped(PlatformError):
+    """A playback that ended because the app itself stopped it (stop(): a page change, a submit, leaving; or a
+    new playback that took its place). Not a failure of the voice: ``app_stopped`` lets callers that must not
+    count it (answer_autoplay) tell it apart by its cause. Real failures stay PlatformError."""
+    app_stopped = True
+
+
 _BACKUP_MAX_BYTES = 64 * 1024 * 1024
 _BACKUP_BLOCK_BYTES = 64 * 1024
 _BACKUP_IMPORT_READY = 'kana-backup-import-stream-v1'
@@ -1216,7 +1223,12 @@ class AndroidPlatform:
         def stop_current():
             owner = owner_ref()
             if owner is not None and owner._current_utterance == utterance_id:
-                owner.stop()
+                # Another sound took the focus: not the app's own stop, so it stays a recorded failure (J6 R8).
+                owner._focus_lost = True
+                try:
+                    owner.stop()
+                finally:
+                    owner._focus_lost = False
 
         class FocusListener(self._dynamic_proxy(c("android.media.AudioManager$OnAudioFocusChangeListener"))):
             def onAudioFocusChange(self, change):
@@ -1264,8 +1276,13 @@ class AndroidPlatform:
                 self._selected_voice = None
             if code == -9:
                 self._set_voice_state(language, "not_installed", f"{VOICE_LABELS[language]}语音数据尚未完成下载，请安装后重新检查声音。")
-            message = "朗读已停止，请重播。" if event == "stop" else f"系统语音播放失败（代码 {code}），请检查{VOICE_LABELS[language]}语音设置。"
-            future.set_exception(PlatformError(message))
+            if event == "stop" and not getattr(self, "_focus_lost", False):
+                future.set_exception(PlaybackStopped("朗读已停止，请重播。"))
+            elif event == "stop":
+                future.set_exception(PlatformError("朗读已停止，请重播。"))
+            else:
+                future.set_exception(PlatformError(
+                    f"系统语音播放失败（代码 {code}），请检查{VOICE_LABELS[language]}语音设置。"))
 
     def _begin_speech(self, text, language="ja"):
         self._check_open()

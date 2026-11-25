@@ -489,6 +489,17 @@ def _capture_practice(c, app, page):
                 result["saved_state"] = c.copy({key: saved.get(key) for key in ("question_id", "status", "draft", "result", "not_before_utc")}, "practice/saved_state")
     if page == "learning_guide":
         result.update(_question_capture(c, c.attr(app, "_learning_guide", "practice/guide"), "practice"))
+        # The checkpoint of the scope this guide belongs to (a separated ability scope when there is one):
+        # it holds the learner's pick (guide_answer), which the original row's checkpoint does not (J6 R7).
+        item = c.attr(app, "_learning_item", "practice/guide_scope")
+        if isinstance(item, Mapping) and item.get("id"):
+            scope = item.get("instruction_scope")
+            saved = c.read(c.attr(app, "learning_store", "practice/guide_scope"), "instruction_item",
+                           "practice/guide_scope", item["id"], scope)
+            if isinstance(saved, Mapping):
+                result["guide_scope"] = c.copy({"content_id": item["id"], "instruction_scope": scope,
+                                                "stage": saved.get("stage"), "checkpoint": saved.get("checkpoint")},
+                                               "practice/guide_scope")
     if page in {"free_ink", "ink_question"}:
         result["ink"] = {name: c.copy(c.attr(app, name, "practice/ink/" + name), "practice/ink/" + name)
             for name in ("strokes", "_active_stroke", "ink_width", "ink_height", "_ink_view_width", "_ink_view_height", "_ink_revision")}

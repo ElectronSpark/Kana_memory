@@ -65,6 +65,8 @@ tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
 tests/test_probe_first.py
 tests/test_arrangement_recent.py
+tests/test_probe_form_and_guide_pick.py
+tests/test_read_only_lessons.py
 tests/test_reading_form_answers.py
 tests/test_reading_form_stored_results.py
 tests/test_word_block_structure.py
@@ -79,6 +81,7 @@ app/src/kanamemory/ability_teaching.py
 app/src/kanamemory/answer_input_ui.py
 app/src/kanamemory/kana_keyboard_ui.py
 app/src/kanamemory/probe_rules.py
+app/src/kanamemory/read_only_lessons.py
 app/src/kanamemory/romaji_input.py
 app/src/kanamemory/romaji_input_ui.py
 app/src/kanamemory/assessment_policy.py
@@ -1060,3 +1063,4 @@ app/icons/source/kanamemory_icon.svg
 app/icons/source/kanamemory_icon_mono.svg
 tools/render_app_icon.py
 tests/test_app_icon.py
+tests/test_word_task_cues.py

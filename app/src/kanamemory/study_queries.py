@@ -22,6 +22,12 @@ def _without(rows, exclude):
     return rows if not exclude else [row for row in rows if row["content_id"] not in exclude]
 
 
+def _listed(rows):
+    """Unit rows of abilities their lesson still lists (J6 R4: a retired ability is never due, counted or served)."""
+    from .read_only_lessons import retired_ability
+    return [row for row in rows if not retired_ability(row["content_id"], row["ability"])]
+
+
 class StudyQueries:
     def __init__(self, connection: sqlite3.Connection):
         self._connection = connection
@@ -65,9 +71,10 @@ class StudyQueries:
         return tuple(dict.fromkeys(row['content_id'] for row in rows if row['stage'] != 'done'))
 
     def active_review_units(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
-        """Scored, unsuspended abilities, regardless of pending/reservation state."""
-        return _without(self._connection.execute(
-            "SELECT * FROM learning_unit WHERE suspended=0 AND review_count>0").fetchall(), exclude)
+        """Scored, unsuspended abilities, regardless of pending/reservation state; none of an ability the lesson no
+        longer lists (J6 R4)."""
+        return _without(_listed(self._connection.execute(
+            "SELECT * FROM learning_unit WHERE suspended=0 AND review_count>0").fetchall()), exclude)
 
     def review_unit_queue_rows(self, *, exclude: Iterable[str] = ()) -> list[sqlite3.Row]:
         """active_review_units (unit_id, content_id, ability, due_at_utc, scheduler_state_json) with ``queued``.
@@ -76,9 +83,9 @@ class StudyQueries:
         queue place (also a paused, reserved or disabled one, as
         unqueued_course_ids decides "unqueued").
         """
-        return _without(self._connection.execute("""SELECT u.unit_id,u.content_id,u.ability,u.due_at_utc,
+        return _without(_listed(self._connection.execute("""SELECT u.unit_id,u.content_id,u.ability,u.due_at_utc,
             u.scheduler_state_json,EXISTS (SELECT 1 FROM learning_question q WHERE q.unit_id=u.unit_id AND q.status='pending') AS queued
-            FROM learning_unit u WHERE u.suspended=0 AND u.review_count>0""").fetchall(), exclude)
+            FROM learning_unit u WHERE u.suspended=0 AND u.review_count>0""").fetchall()), exclude)
 
     def pending_course_headers(self, enabled: Iterable[str]) -> list[sqlite3.Row]:
         """Visible course queue headers; includes retained diagnostic reservations."""
@@ -113,9 +120,16 @@ class StudyQueries:
             FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
             WHERE u.content_id=? AND q.status='pending'""", (content_id,))}
 
+    def read_only_lessons(self) -> dict:
+        """read_only_lessons.read_only_lessons on this connection (J6 R1-R4): {content_id: {position, stage, read}}."""
+        from .read_only_lessons import read_only_lessons
+        return read_only_lessons(self._connection)
+
     def instruction_ready_ids(self) -> set[str]:
+        """Lessons with an instruction-ready unit, and lessons that are only read and were read (J6 R2)."""
+        from .read_only_lessons import read_lesson_ids
         return {row[0] for row in self._connection.execute(
-            "SELECT DISTINCT content_id FROM learning_unit WHERE instruction_ready=1")}
+            "SELECT DISTINCT content_id FROM learning_unit WHERE instruction_ready=1")} | read_lesson_ids(self._connection)
 
     def introduced_kana_ids(self) -> set[str]:
         """Kana the learner has met, as "kana:<kana id>:<script>" (design 11 section 5, D5).
@@ -264,10 +278,15 @@ class StudyQueries:
            AND skill NOT IN ('word_kana','word_meaning_kana','word_romaji')""", (content_id,)).fetchone()
 
     def independent_prerequisite_rows(self) -> Iterator[sqlite3.Row]:
-        return (row for row in self._connection.execute("""SELECT DISTINCT u.content_id
+        """Lessons with a correct unassisted primary answer, then (as 1-tuples) lessons that are only read
+        and were read: reading them is all they ask (J6 R2)."""
+        from itertools import chain
+        from .read_only_lessons import read_lesson_ids
+        return chain(self._connection.execute("""SELECT DISTINCT u.content_id
         FROM learning_event e JOIN learning_unit u ON u.unit_id=e.unit_id
         WHERE e.role='primary' AND e.outcome='correct' AND e.assisted=0
-        AND e.rating>1 AND u.ability IN ('understanding','application','reading','use')"""))
+        AND e.rating>1 AND u.ability IN ('understanding','application','reading','use')"""),
+                     ((cid,) for cid in sorted(read_lesson_ids(self._connection))))
 
     def course_has_primary_event(self, cid: str) -> sqlite3.Row | None:
         return self._connection.execute("""SELECT 1

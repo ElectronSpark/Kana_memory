@@ -44,6 +44,8 @@ LEARNING_PREFS = "learning_preferences_v1"
 PROMPT_PREFS = "prompt_display_v1"
 # The orientation screen (design 12 UI1) and the settings button that opens it.
 STUDY_ORIENTATION_TITLE = "学习方式"   # one learner-facing name with the home card (2026-11-18)
+# A lesson that is only read (brief J6 R1): the line above its one button, and the button.
+READ_ONLY_LINE, READ_ONLY_DONE = "这一项只需了解，不出题。", "知道了"
 # One queue pass spends at most this long exchanging withdrawn tasks (always at least one): a learner may
 # have dozens queued, each exchange plans a task for its lesson, and the pass runs on the main thread when a
 # round starts. The rest follow at later passes, the soonest answerable first, and one that is reached before
@@ -97,10 +99,12 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
     def _learning_prompt_block(self, question, preferences=None, *, size=20, known_ids=None):
         return build_prompt_block(self, question, preferences, size=size, known_ids=known_ids)
 
-    def _learning_context_support(self, question, known=None):
+    def _learning_context_support(self, question, known=None, *, probe=False):
         """Show only locally reviewed background help, never raw hint fields.
 
         known: the page's one course_planning.known_ids read; read here when the caller has none.
+        probe: a probe page (J6 R6) shows no gloss of the question's own target (a word gloss or an unmet
+        requirement naming the target would carry its meaning).
         """
         from .question_support import learning_question_display
         from .learning_dependencies import independent_ready_ids
@@ -128,6 +132,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             unmet = [hint for hint in unmet if hint["target_id"] not in ready
                      and not any(start < hint["end"] and hint["start"] < end for start, end in spans)]
             hints = sorted([*hints, *unmet], key=lambda hint: hint.get("start", 0))
+        if probe:
+            hints = [hint for hint in hints if hint.get("target_id") != question.get("target_id")]
         if hints:
             parts, ranges, offset = [], [], 0
             for surface, meaning in dict.fromkeys((hint["surface"], hint["meaning"]) for hint in hints):
@@ -1163,10 +1169,17 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             item = current["content"]
             children = [u.label(item["title"], size=21, bold=True),
                 u.label("先接着巩固前置内容，完成后自动回到本项。", size=16)]
+            # J6 R2: a prerequisite that is only read is consolidated by reading it (no dead end).
+            from .read_only_lessons import for_app as read_only_service
+            readable = read_only_service(self).unread_prerequisites(current.get("dependency_status"))
+            for entry in readable:
+                children.append(u.button("先阅读「" + entry["title"] + "」",
+                                         lambda w, cid=entry["id"]: self.show_read_only_lesson(cid),
+                                         primary=True, multiline=True))
             if current.get("due_at_utc"):
                 children.append(u.label(self._learning_due_label(current["due_at_utc"]), size=14))
                 children.append(u.label("到期后自动继续，也可以先离开。", color=u.MUTED))
-            else:
+            elif not readable:
                 children.append(u.label("前置内容的练习暂不可用，请检查题型或暂停设置。", color=u.MUTED))
                 children.append(u.button("学习设置", self.show_learning_settings))
             # Design 12 Q3 (breadth first): a prerequisite already taught is met, not waiting.
@@ -1638,7 +1651,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                     *([] if is_pitch_question(q) else [guide_prompt]),
                     *reference, *choices, self._learning_guide_result, *self._learning_guide_archive(checkpoint))
             if checkpoint.get("guide_answer") is not None:
-                self.render_learning_guide_result(bool(checkpoint.get("guide_correct")))
+                self.render_learning_guide_result(bool(checkpoint.get("guide_correct")),
+                                                  picked=checkpoint.get("guide_answer"))
             return
         if enrolled:
             self.learning_store.mark_instruction_exposed(item["id"], expected_introduction_id=item["introduction_id"], instruction_scope=self._learning_item.get("instruction_scope"))
@@ -1659,9 +1673,17 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         focused = focused_reading or focused_application
         if not focused:
             children.append(teaching_block(u, item, compact=compact, speak=self.speak_text))
-        from .learning_questions import practice_templates
-        has_practice = any(raw.get("practice") for variants in (practice_templates(item) or {}).values() for raw in variants)
-        children.append(u.button("跟着练习" if has_practice else "跟着做一题", self.start_learning_guide, primary=True))
+        if item.get("introduction_id") and item.get("read_only"):
+            # J6 R1: a lesson that is only read: no guide, no question; 「知道了」 completes it.
+            children.append(u.label(READ_ONLY_LINE, size=14, color=u.MUTED))
+            children.append(u.button(READ_ONLY_DONE, lambda w, value=item: self.finish_read_only_lesson(value),
+                                     primary=True))
+        else:
+            from .learning_questions import practice_templates
+            has_practice = any(raw.get("practice") for variants in (practice_templates(item) or {}).values()
+                               for raw in variants)
+            children.append(u.button("跟着练习" if has_practice else "跟着做一题", self.start_learning_guide,
+                                     primary=True))
         if not compact or focused:
             children.append(self.example_cards(item, known_ids=self._intro_batch_known_ids()))
         if focused:
@@ -1685,6 +1707,30 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         children.append(u.button("稍后再学", self.leave_learning))
         children.append(original_notes(u, item))
         self.screen("learning_intro", "快速回顾" if compact else "初次学习", *children)
+
+    def finish_read_only_lesson(self, item):
+        """「知道了」 on a lesson that is only read (J6 R1): complete it once, then go on; reading it again
+        changes nothing and returns where the learner came from."""
+        if self.page != "learning_intro" or (getattr(self, "_learning_item", None) or {}).get("id") != item["id"]:
+            return
+        from .new_dispatch import enabled as fair_enabled
+        from .read_only_lessons import for_app as read_only_service
+        try:
+            changed = read_only_service(self).complete(item, fair_new=fair_enabled(self))
+        except (ValueError, KeyError) as exc:
+            self.alert("暂时不能完成这一项，原有进度已保存：" + str(exc))
+            return
+        if not changed and self.back_stack.pages:
+            self.go_back()
+            return
+        self.continue_added_learning()
+
+    def show_read_only_lesson(self, content_id):
+        """Open a lesson that is only read at its explanation page (the dependant's way to its prerequisite)."""
+        from .read_only_lessons import for_app as read_only_service
+        item = read_only_service(self).lesson(content_id)
+        if item is not None:
+            self.show_learning_instruction(item)
 
     def _shared_learning_guide_reference(self, item, question):
         """Optional explanation stays beside this ability's live guided work."""
@@ -1769,9 +1815,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         context = getattr(self, "_learning_guide_context", {})
         if context.get("question") is self._learning_guide and "guide_draft" in state:
             context["draft"] = deepcopy(state["guide_draft"])
-        self.render_learning_guide_result(result["status"] == "correct")
+        self.render_learning_guide_result(result["status"] == "correct", picked=answer)
 
-    def render_learning_guide_result(self, correct):
+    def render_learning_guide_result(self, correct, *, picked=None):
+        """``picked``: the learner's own answer (the scope's guide_answer), shown for a wrong choice (J6 R7)."""
         from .answer_feedback import build_answer_feedback
         self._learning_guide_result.clear()
         self._learning_guide_result.add(build_answer_feedback({"correct": correct}))
@@ -1814,7 +1861,14 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         else:
             answer = answer_furigana_block(self, self._learning_guide, size=14, bold=True, flex=1 if speaker else 0,
                 text_role=learning_text_role(self._learning_guide, "answer"))
-            self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
+            # J6 R7: a choice guide shows the learner's own pick as the formal result page does (我的回答：).
+            mine = []
+            if (self._learning_guide.get("input_mode", "choice") == "choice" and isinstance(picked, str) and picked
+                    and picked != self._learning_guide.get("answer")):
+                from .answer_result_ui import entered_answer_row
+                mine.append(entered_answer_row(u, shown_answer(self._learning_guide, picked),
+                    text_role=learning_text_role(self._learning_guide, "answer")))
+            self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer, *mine,
                 u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", ""))),
                 *self._learning_guide_pass_controls())
         # The result is already attached to the visible guide. Its introduction
@@ -1925,8 +1979,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         # One read per question: unmet-word glosses and the kana of unlearned words share it.
         from .course_planning import known_ids
         known = known_ids(self.store.queries)
+        # A probe's cue and its inline kana come from the bare view (no meaning of the item itself, J6 R6).
         task = ([u.label(q["task"].replace("并分开助词", ""), size=13, color=u.MUTED)] if is_pitch_question(q)
-                else instruction_widgets(u, q, known))
+                else instruction_widgets(u, shown, known))
         children = []
         prompt = None
         if q.get("audio_text"):
@@ -1945,12 +2000,14 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         # Keep indispensable context and one short response cue above the
         # answer controls; the help row is appended after them (see below).
         children.append(u.col(*batch_hints, *task, *([u.row(*prompt_speaker)] if prompt_speaker else [])))
-        if q.get("gloss"):
-            children.append(u.label(q["gloss"], size=12, color=u.MUTED))
-        children.extend(self._learning_context_support(q, known))
+        if shown.get("gloss"):
+            children.append(u.label(shown["gloss"], size=12, color=u.MUTED))
+        children.extend(self._learning_context_support(q, known, probe=probe))
         mode = q.get("input_mode", "choice")
         # Display only: buttons may carry kana (all options or none), callbacks and drafts keep the raw option.
-        labels = option_labels(q, known) if mode in {"choice", "reorder"} and not is_pitch_question(q) else {}
+        # A probe's options carry none: rule 4 of question_readings would give the target's own reading too.
+        labels = (option_labels(q, known) if mode in {"choice", "reorder"} and not is_pitch_question(q)
+                  and not probe else {})
         if is_pitch_question(q):
             children.append(self.learning_pitch_controls(q, self._learning_question_state))
         elif mode == 'multi_cloze':

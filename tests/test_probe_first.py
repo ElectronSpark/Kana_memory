@@ -247,17 +247,20 @@ def test_three_other_answers_release_the_next_probe(learning_app):
     assert store.current(KINDS)["question"]["kind"] == "vocab_meaning" or store.current(KINDS)["type"] == "instruction"
 
 
-def test_an_ability_without_a_qualifying_probe_waits_and_later_ones_go_on(learning_app):
+def test_an_ability_that_cannot_be_probed_by_form_opens_a_first_check_and_later_ones_go_on(learning_app):
     app = learning_app
     start(app, word(reading_strict=False))
     answer(app, "词一")
     click(app, "很轻松")
     later(app)
     app.continue_learning()
-    # Reading has no strict typed probe: it is passed over; use is probed instead.
+    # Reading has no strict typed template, so no template can ever be its probe (brief J6 R5): it opens as an
+    # ordinary first check (after the usual delay) instead of waiting for ever; use is probed meanwhile.
     assert app.page == "learning_question" and app._learning_question["kind"] == "vocab_usage"
-    assert profile(app, ability="reading")[0] is None
-    assert (CID, "reading") in app._guide_skipped_ids
+    saved, stage = profile(app, ability="reading")
+    assert (saved["route"], saved["levels"], saved["diagnostic_state"], stage) == (
+        "full", {"reading": "new"}, "not_requested", "bridge")
+    assert (CID, "reading") not in (getattr(app, "_guide_skipped_ids", None) or set())
 
 
 def test_an_item_with_one_probe_only(learning_app):

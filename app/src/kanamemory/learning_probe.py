@@ -254,6 +254,38 @@ def plan_probe(learning, source, ability: str, *, enabled_kinds, known, system_j
     return None
 
 
+def probe_by_form(learning, source, ability: str, *, enabled_kinds, system_japanese: bool) -> bool:
+    """Whether some template of ``ability`` qualifies as a probe BY ITS FORM (brief J6 R5; reads only).
+
+    The rules of plan_probe without the dependency gate: a probe kind that is enabled and present, a
+    template that is not retired, unguided and definite under its effective answer policy (probe_qualifies:
+    a non-strict typed template an overlay row makes strict qualifies; typed only for a word's use), eligible for formal scoring and answerable with the current input settings. False: this
+    ability can never be probed, whatever the learner learns first.
+    """
+    from .learning_questions import build_learning_question, practice_templates, question_kinds
+    from .learning_questions import retired_practice_variants
+    track = probe_rules.track(source.get("family"), source.get("domain"))
+    enabled, available = set(enabled_kinds), set(question_kinds(source, ability=ability))
+    kinds = [kind for kind in probe_rules.probe_kinds(track, ability) if kind in enabled and kind in available]
+    if not kinds:
+        return False
+    templates = practice_templates(source)
+    retired = retired_practice_variants(source, templates)
+    for kind in kinds:
+        variants = templates.get(kind) if isinstance(templates, dict) else None
+        for variant in range(len(variants) if isinstance(variants, list) else 4):
+            if (kind, variant) in retired:
+                continue
+            try:
+                question = build_learning_question(source, kind, variant=variant)
+            except (ValueError, KeyError, TypeError):
+                continue
+            # The effective answer policy (probe_qualifies: the overlay row of the template), as plan_probe reads it.
+            if probe_qualifies(question, track, ability) and _eligible(learning, source, question, system_japanese):
+                return True
+    return False
+
+
 def open_probe_plan(learning, content_id, ability, unit, *, enabled_kinds, known, system_japanese: bool):
     """A qualifying probe of ``ability`` when its scope is an open probe, else None (reads only).
 
@@ -398,9 +430,13 @@ def open_scope_in_transaction(learning, content_id, *, instruction_scope, expect
         return {"route": "teach"}
     if view.probing and untouched and len(abilities) == 1 and probe_rules.probed(track, abilities[0]):
         kept, planned = probe_question(abilities[0])
-        if kept is None and planned is None:
-            return {"route": "wait"}
-        return start_probe(row, abilities[0], kept, planned)
+        if kept is not None or planned is not None:
+            return start_probe(row, abilities[0], kept, planned)
+        if probe_by_form(learning, source, abilities[0], enabled_kinds=enabled_kinds,
+                         system_japanese=system_japanese):
+            return {"route": "wait"}   # a probe exists by its form; only its requirements are not met yet
+        # J6 R5: no template of this ability can ever be its probe: an ordinary first check (below), as an
+        # ability outside the probe order opens, instead of waiting for ever.
     if probe_rules.teaching_pending(view.checkpoints) and not view.shown:
         return {"route": "wait"}
     # An ordinary first check: the lesson was taught, or the ability is never probed (listening).

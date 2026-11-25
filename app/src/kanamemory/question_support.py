@@ -92,6 +92,48 @@ def _hint_sound(value):
     return value.translate(str.maketrans({"ぢ": "じ", "づ": "ず", "を": "お", "ゐ": "い", "ゑ": "え"}))
 
 
+# Where a text divides into words for the gloss leak test (gloss_words): punctuation and spaces.
+_WORD_BREAK = re.compile(r"[\s、。，．,.;；:：/／・･（）()［］\[\]「」『』【】〈〉《》…～〜!！?？\-—–]+")
+_KANA_RUN = re.compile(r"[ぁ-ゖァ-ヺー]+|[^ぁ-ゖァ-ヺー]+")
+
+
+def gloss_words(value, *, by_script=False):
+    """The whole words of a text for the gloss leak test, normalised as _hint_normal does.
+
+    The pieces between punctuation and spaces; by_script (a Chinese meaning): also the kana and non-kana runs of
+    each piece, so a Japanese word written inside Chinese prose (在で) is a word of its own.
+    """
+    pieces = [piece for piece in _WORD_BREAK.split(unicodedata.normalize("NFKC", value or "")) if piece]
+    if by_script:
+        pieces = [run for piece in pieces for run in _KANA_RUN.findall(piece)]
+    return {word for word in (_hint_normal(piece) for piece in pieces) if word}
+
+
+def gloss_reveals(surface, meaning, reading, value, japanese=True):
+    """Whether a background gloss gives a protected value (an answer, a target quote) away, by WHOLE words.
+
+    Pure; the one rule of the App's display tests (_practice_background_context, _background_context) and of the
+    authoring tools. The gloss's written form, its reading (as sound: ぢ/じ, を/お folded) and each word of its
+    meaning are compared with each word of the value, written and as sound; a kanji they share still counts when
+    the value is Japanese (the written answer would show). A Chinese value (japanese False: the answer of a
+    meaning kind) is compared by its words, plus the gloss's meaning written inside it (Chinese has no spaces).
+    So 日曜日 (にちようび) beside the answer に is shown, while a gloss read like the answer, a meaning holding
+    the answer as a word (在で for で) or a shared kanji with a Japanese answer is refused.
+    """
+    normal, sound = _hint_normal(surface), _hint_sound(reading or surface)
+    other = _hint_normal(value)
+    if not other:
+        return False
+    theirs = gloss_words(value, by_script=not japanese) | {other}
+    mine = {normal} | gloss_words(meaning, by_script=True)
+    if mine & theirs or (japanese and set(_KANJI.findall(normal)) & set(_KANJI.findall(other))):
+        return True
+    if not japanese and any(word in other for word in gloss_words(meaning, by_script=True) if len(word) >= 2):
+        return True
+    sounds = {_hint_sound(word) for word in theirs} - {""}
+    return bool(sound and sound in sounds)
+
+
 def _background_span_safe(span, protected):
     """Exclude target roots/readings, including normalized and homophone forms."""
     surface, reading = span.get("surface", ""), span.get("reading", "")
@@ -285,6 +327,7 @@ def _background_context(question):
     context = reviewed_question_context(identity, question["prompt"])
     plan = sentence_annotation_plan(question["prompt"])
     protected = [*_protected_answer_forms(question), item['title']]
+    answer_count = len(protected) - 1
     senses, results, seen = _background_word_senses(), [], set()
     spans = (_aligned_segments(question, {"segments": plan.get("segments")})
              if plan.get("status") == "precomputed" and plan.get("text") == question["prompt"] else ())
@@ -314,16 +357,14 @@ def _background_context(question):
         normal, meaning = _hint_normal(part["surface"]), _hint_normal(part["meaning"])
         reading = next((s.get("reading") for s in spans if s["start"] == part["start"]
                         and s["end"] == part["end"]), "")
-        sound = _hint_sound(reading or part["surface"])
         if (not normal or not meaning or normal == meaning or _GAP.search(part["surface"])
                 or any(old["start"] < part["end"] and part["start"] < old["end"] for old in results)):
             continue
-        if any(normal in _hint_normal(value) or _hint_normal(value) in normal
-               or meaning in _hint_normal(value) or _hint_normal(value) in meaning
-               or set(_KANJI.findall(normal)).intersection(_KANJI.findall(_hint_normal(value)))
-               or (sound and _hint_sound(value) and
-                   (sound in _hint_sound(value) or _hint_sound(value) in sound))
-               for value in protected if _hint_normal(value)):
+        # Whole words (gloss_reveals, J6 R11): the answers of a meaning kind are Chinese, the title Japanese.
+        chinese_answers = question.get("kind") in _MEANING_KINDS
+        if any(gloss_reveals(part["surface"], part["meaning"], reading, value,
+                             japanese=not (chinese_answers and index < answer_count))
+               for index, value in enumerate(protected)):
             continue
         results.append({**part, "reading": reading})
     return {"background_glosses": sorted(results, key=lambda part: part["start"]),
@@ -358,8 +399,10 @@ def _practice_background_context(question):
             or type(span.get("start")) is not int or type(span.get("end")) is not int
             or not isinstance(span.get("quote"), str) for span in targets)):
         return {}
-    protected = _protected_answer_forms(question)
-    protected.extend(span.get("quote", "") for span in targets
+    # (value, Japanese): the answers of a meaning kind are Chinese text; target quotes are Japanese.
+    chinese_answers = question.get("kind") in _MEANING_KINDS
+    protected = [(value, not chinese_answers) for value in _protected_answer_forms(question)]
+    protected.extend((span.get("quote", ""), True) for span in targets
                      if isinstance(span, Mapping) and not _GAP.search(span.get("quote", "")))
     results = []
     for part in context.get("background_glosses", ()):
@@ -379,18 +422,9 @@ def _practice_background_context(question):
         normal, gloss = _hint_normal(surface), _hint_normal(meaning)
         if not normal or gloss == normal:
             continue
-        sound = _hint_sound(part.get("reading") or surface)
-        unsafe = False
-        for value in protected:
-            other, other_sound = _hint_normal(value), _hint_sound(value)
-            if not other:
-                continue
-            if (normal in other or other in normal or gloss in other or other in gloss
-                    or set(_KANJI.findall(normal)).intersection(_KANJI.findall(other))
-                    or (sound and other_sound and (sound in other_sound or other_sound in sound))):
-                unsafe = True
-                break
-        if not unsafe:
+        # Whole words (gloss_reveals, J6 R11): 日曜日 beside the answer に is shown.
+        if not any(gloss_reveals(surface, meaning, part.get("reading"), value, japanese)
+                   for value, japanese in protected if isinstance(value, str)):
             results.append(dict(part))
     return {"background_glosses": sorted(results, key=lambda part: part["start"])} if results else {}
 
@@ -870,6 +904,9 @@ def learning_text_role(question, field="prompt"):
         role = roles.get(key) if isinstance(roles, Mapping) else None
         return role if role in {"ui", "study"} else "ui"
     if field == "prompt":
+        from .question_presentation import gap_sentence_task
+        if gap_sentence_task(question) is not None:
+            return "study"   # a production question shown as a cloze (brief J6 R10): its prompt is Japanese
         practice = question.get("practice") if isinstance(question, Mapping) else None
         if isinstance(practice, Mapping) and practice.get('task_family') == 'translation_wordbank':
             return 'ui'

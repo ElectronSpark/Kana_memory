@@ -19,13 +19,14 @@ from .learning_dispatch_types import LearningCurrent
 from .domain import ALGORITHM_VERSION, _utc
 from . import ability_teaching as _teaching
 from .probe_rules import EVIDENCE as PROBE_EVIDENCE, DECLINED_KEY, MAX_WAIT as _PROBE_MAX_WAIT, OTHER_ANSWERS as _PROBE_OTHER_ANSWERS
+from .read_only_lessons import ABILITY_ALIASES, read_only_lessons, retired_ability
 
 SCHEMA_VERSION = 1
 TABLES = ("learning_meta", "learning_content", "learning_unit", "learning_question", "learning_event")
 ABILITIES = {"word": {"understanding", "reading", "use", "listening"},
              "grammar": {"understanding", "application"}}
 STAGES = {"intro", "guide", "bridge", "check", "done"}
-ALIASES = {"meaning": "understanding", "usage": "use"}
+ALIASES = ABILITY_ALIASES
 WORD_LISTENING_ADMISSION = "word_listening_admission_v1"
 WORD_LISTENING_DAILY_LIMIT = 8
 # After teaching, a lesson's first formal question waits (_retrieval_delay / retrieval_ready):
@@ -217,6 +218,31 @@ def _ability(value):
 
 def _unit_id(content_id, ability):
     return hashlib.sha256((content_id + "\0" + ability).encode()).hexdigest()
+
+
+READ_ONLY_QUESTION = "read_only:"
+
+
+def _read_only_row(row):
+    return isinstance(row, dict) and row.get("read_only") is True
+
+
+def _read_only_stand_in(content_id, position):
+    """A dispatch row for an unread read-only lesson: it names the lesson, nothing else (no unit, no question)."""
+    return {"question_id": READ_ONLY_QUESTION + content_id, "content_id": content_id, "read_only": True,
+            "position": position, "unit_id": None, "ability": None, "kind": None, "status": "pending",
+            "result_json": None, "draft_json": None, "instruction_ready": 0, "review_count": 0,
+            "suspended": 0, "snapshot_json": None}
+
+
+def read_only_head_question(content_id):
+    """The stand-in question of a read-only lesson's dispatch head (J6 R1): no row, never answered.
+
+    Dispatch heads carry a question; this one only names the lesson, so frozen priorities, promotions and
+    block checks key on it like on a question id. It has no kind, ability or answer.
+    """
+    return {"id": READ_ONLY_QUESTION + content_id, "target_id": content_id, "content_id": content_id,
+            "ability": None, "kind": None, "read_only": True}
 
 
 def _latest_due(*values):
@@ -488,7 +514,8 @@ class LearningStore:
             cid = _identifier(item.get("id", item.get("content_id")))
             family = "word" if item.get("family") == "vocab" else item.get("family")
             abilities = list(dict.fromkeys(_ability(a) for a in item.get("abilities", item.get("dimensions", ("understanding",)))))
-            if family not in ABILITIES or not abilities or not set(abilities) <= ABILITIES[family]:
+            # abilities: [] is a lesson that is only read (J6 R1): no unit, no question.
+            if family not in ABILITIES or not set(abilities) <= ABILITIES[family]:
                 raise ValueError("Invalid learning family or abilities")
             if (not isinstance(item.get("instruction"), dict) or not item["instruction"]
                     or item.get("instruction_missing") or item.get("status") == "instruction_missing"
@@ -1441,7 +1468,14 @@ class LearningStore:
         result.update(content_id=row["content_id"], stage=row["stage"], introduction_id=row["introduction_id"],
                       checkpoint=_load(row["checkpoint_json"]), exposure_group=row["exposure_group"],
                       introduced_at_utc=row["introduced_at_utc"], retrieval_at_utc=row["retrieval_at_utc"])
+        # J6 R4: units of an ability the lesson no longer lists stay stored (history) but leave this view,
+        # so nothing plans, teaches or counts them; with none left the lesson is only read (R1).
+        retired = [unit["ability"] for unit in units if unit and retired_ability(row["content_id"], unit["ability"])]
+        units = [unit for unit in units if not unit or unit["ability"] not in retired]
         result["units"] = units
+        if retired:
+            result["retired_abilities"] = retired
+        result["read_only"] = not units
         # Keep the authored ability list intact for template and dependency
         # validation. Only actual units are admitted to teaching/assessment.
         result["enrolled_abilities"] = [unit["ability"] for unit in units]
@@ -1514,7 +1548,9 @@ class LearningStore:
             ORDER BY c.rowid""").fetchall()
         # No new question snapshot for unavailable content (08 section 7.3).
         unavailable = self.availability().unavailable_ids
-        return [self.get_item(row[0]) for row in rows if row[0] not in unavailable]
+        items = [self.get_item(row[0]) for row in rows if row[0] not in unavailable]
+        # J6 R4: a lesson whose only unqueued units are of abilities it no longer lists needs nothing.
+        return [item for item in items if item["enrolled_abilities"]]
 
     def set_suspended(self, content_id, ability, suspended):
         """Pause an ability without replacing a question or rescheduling it."""
@@ -2108,6 +2144,8 @@ class LearningStore:
                     WHERE a.key='retention_reservation_v1:' || q.unit_id) ORDER BY q.rowid"""):
             if row["suspended"] or kinds is not None and row["kind"] not in kinds or row["content_id"] in unavailable:
                 continue
+            if retired_ability(row["content_id"], row["ability"]):
+                continue   # J6 R4: an ability the lesson no longer lists is never served
             yield row
 
     def dispatch_pending(self, enabled_kinds=None, *, projection=None):
@@ -2139,6 +2177,8 @@ class LearningStore:
                     WHERE a.key='retention_reservation_v1:' || q.unit_id) ORDER BY q.rowid"""):
             if row['suspended'] or kinds is not None and row['kind'] not in kinds or row['content_id'] in unavailable:
                 continue
+            if retired_ability(row['content_id'], row['ability']):
+                continue   # J6 R4
             yield row
 
     def current(self, enabled_kinds=None, now=None, *, fair_new=False, teaching_only=False,
@@ -2239,6 +2279,69 @@ class LearningStore:
             """SELECT content_id,stage,checkpoint_json,retrieval_at_utc,guided_at_utc
                FROM learning_content""")}
 
+    def read_only_state(self):
+        """read_only_lessons of this learner (J6 R1-R4): {content_id: {position, stage, read}}; read only."""
+        return read_only_lessons(self._db)
+
+    def read_only_unread(self, *, projection=None):
+        """[(content_id, position)] of enrolled lessons that are only read and not read yet (J6 R1), in order.
+
+        Content of an unavailable library is left out (08 section 7.2), as its questions are.
+        """
+        unavailable = self.availability(projection=projection).unavailable_ids
+        return sorted(((cid, value["position"]) for cid, value in read_only_lessons(self._db).items()
+                       if not value["read"] and cid not in unavailable), key=lambda pair: pair[1])
+
+    def _with_read_only_heads(self, rows, projection=None):
+        """The pending rows with a stand-in row for each unread read-only lesson at its place in the route.
+
+        A stand-in goes right before the first row of a lesson enrolled after it, so the stable priority
+        sort keeps it in route order among the first teachings; without unread read-only lessons the rows
+        pass through unchanged.
+        """
+        unread = self.read_only_unread(projection=projection)
+        if not unread:
+            return rows
+        positions = {row[0]: row[1] for row in self._db.execute("SELECT content_id,rowid FROM learning_content")}
+        merged, waiting = [], list(unread)
+        for row in rows:
+            position = positions.get(row["content_id"], 0)
+            while waiting and waiting[0][1] < position:
+                merged.append(_read_only_stand_in(*waiting.pop(0)))
+            merged.append(row)
+        merged.extend(_read_only_stand_in(*pair) for pair in waiting)
+        return merged
+
+    def complete_read_only(self, content_id, *, expected_introduction_id, now=None, fair_new=False):
+        """「知道了」 on a lesson that is only read (J6 R1): its stage is done, its route section complete.
+
+        Idempotent: a lesson already read changes nothing (False). No unit, question, event or due date is
+        written; the exposure stamp is kept if one was saved.
+        """
+        now = _utc(now)
+        with self._db:
+            self._transaction()
+            row = self._db.execute("SELECT * FROM learning_content WHERE content_id=?", (content_id,)).fetchone()
+            if row is None:
+                raise KeyError(content_id)
+            if row["introduction_id"] != expected_introduction_id:
+                raise ValueError("The introduction is no longer current")
+            if content_id not in read_only_lessons(self._db):
+                raise ValueError("This lesson has abilities to practise")
+            if row["stage"] == "done":
+                return False
+            self.require_available(content_id)
+            checkpoint = _load(row["checkpoint_json"]) or {}
+            checkpoint.setdefault("instruction_exposed_at_utc", now.isoformat())
+            from .explicit_learning_start import claim
+            claim(self._db, content_id, introduction_id=row["introduction_id"], now=now)
+            self._db.execute("UPDATE learning_content SET stage='done',checkpoint_json=? WHERE content_id=?",
+                             (_dump(checkpoint), content_id))
+            if fair_new:
+                from .new_dispatch import completed
+                completed(self._db, "course")
+        return True
+
     def _current(self, enabled_kinds, now, *, fair_new, teaching_only, teaching_content_ids,
                  include_unassessed, prefer_unassessed, projection=None, skip_teaching_ids=frozenset(),
                  focus_scope=None, only_recent=False):
@@ -2274,6 +2377,10 @@ class LearningStore:
                     and row["instruction_ready"] and row["unit_id"] not in prior_primary)
 
         def dispatch_priority(row):
+            if _read_only_row(row):
+                # J6 R1: new content, ordered with every other first teaching.
+                started = bool(_load(content_rows[row["content_id"]]["checkpoint_json"]).get("instruction_exposed_at_utc"))
+                return (4, -1 if started else 0) if fair_new else (5, 0)
             if row["result_json"] is not None:
                 return (0, 0)
             draft = _load(row["draft_json"])
@@ -2337,10 +2444,38 @@ class LearningStore:
         probe_gate = GateReader(self, now)
         pending_rows = list(self.dispatch_pending(enabled_kinds, projection=projection))
         firsts.prime(row["unit_id"] for row in pending_rows if row["review_count"])
-        for row in freeze_course_rows(self.store, pending_rows, service_priority):
-            if only_recent and (row["result_json"] is not None or not recent_review(row, dispatch_priority(row))):
+        # J6 R1: unread read-only lessons join as stand-in rows at their route place (never recent work).
+        rows = self._with_read_only_heads(pending_rows, projection)
+        for row in freeze_course_rows(self.store, rows, service_priority):
+            if only_recent and (_read_only_row(row) or row["result_json"] is not None
+                                or not recent_review(row, dispatch_priority(row))):
                 continue
             content_row = content_row_for(row)
+            if _read_only_row(row):
+                # J6 R1: a lesson that is only read, not read yet: its explanation page with 「知道了」.
+                cid = row["content_id"]
+                if (cid in skip_teaching_ids or (cid, None) in skip_teaching_ids
+                        or teaching_content_ids is not None and cid not in teaching_content_ids
+                        or include_unassessed and "introduction" in service_heads):
+                    continue
+                content = self.instruction_item(cid)
+                result = {"content": content, "question": read_only_head_question(cid), "draft": None,
+                          "result": None, "dispatch_priority": dispatch_priority(row), "read_only": True}
+                if (cid, None) not in dependencies:
+                    dependencies[(cid, None)] = self.prerequisite_status(cid, None, ready_ids=ready_ids)
+                if dependencies[(cid, None)]["blocked"]:
+                    blocked.append({**result, "dependency_status": dependencies[(cid, None)],
+                                    "prerequisites": dependencies[(cid, None)]["missing"]})
+                    continue
+                if fair_new:
+                    result["new_dispatch_continue"] = False   # one page; nothing to continue
+                head = {**result, "type": "instruction", "stage": content["stage"]}
+                if not include_unassessed:
+                    return head
+                service_heads.setdefault("introduction", head)
+                if len(service_heads) == 2:
+                    return chosen_service_head()
+                continue
             if _paused_practice_guide(content_row, enabled_kinds):
                 continue
             if gate_closed(row):
@@ -2472,23 +2607,29 @@ class LearningStore:
         # disabled nor unavailable_content; it is counted on its own.
         availability = self.availability(projection=projection)
         library_unavailable = availability.unavailable_ids
+        read_only = self.read_only_state()
+        # J6 R3: a lesson that is only read has no question by design; it is new content, not "unavailable".
         unfinished_without_pending = [row[0] for row in self._db.execute("""SELECT c.content_id FROM learning_content c
                     WHERE c.stage<>'done' AND NOT EXISTS (SELECT 1 FROM learning_question q JOIN learning_unit u
-                    ON u.unit_id=q.unit_id WHERE u.content_id=c.content_id AND q.status='pending')""")]
+                    ON u.unit_id=q.unit_id WHERE u.content_id=c.content_id AND q.status='pending')""")
+                    if row[0] not in read_only]
         counts = {"ready": 0, "waiting": 0, "instruction": 0, "pending": 0, "disabled": 0,
                   "blocked": 0, "blocked_content": 0, "blocked_material": 0, "blocked_input": 0,
                   "content": self._db.execute("SELECT COUNT(*) FROM learning_content").fetchone()[0], "next_due_at_utc": None,
                   "unavailable_content": sum(cid not in library_unavailable for cid in unfinished_without_pending)}
         visible = {row["question_id"]: row for row in self._pending(enabled_kinds, projection=projection)}
         counts["pending"] = self._db.execute("SELECT COUNT(*) FROM learning_question WHERE status='pending'").fetchone()[0]
-        reserved = hidden = 0
-        for content_id, is_reserved in self._db.execute("""SELECT u.content_id,
+        reserved = hidden = retired = 0
+        for content_id, ability, is_reserved in self._db.execute("""SELECT u.content_id,u.ability,
                 EXISTS (SELECT 1 FROM app_setting a WHERE a.key='retention_reservation_v1:' || q.unit_id)
                 FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id WHERE q.status='pending'"""):
             if is_reserved:
                 reserved += 1
             elif content_id in library_unavailable:
                 hidden += 1
+            elif retired_ability(content_id, ability):
+                retired += 1   # J6 R4: an ability the lesson no longer lists counts nowhere
+        counts["pending"] -= retired
         if reserved: counts['diagnostic'] = reserved
         counts["library_unavailable"] = len(library_unavailable)
         counts["orphaned"] = len(availability.orphaned_ids)
@@ -2560,6 +2701,12 @@ class LearningStore:
                     counts["next_due_at_utc"] = due
             else:
                 counts["ready"] += 1
+        for cid, _ in self.read_only_unread(projection=projection):
+            if self.prerequisite_status(cid, None, ready_ids=ready_ids)["blocked"]:
+                counts["blocked"] += 1
+                blocked_content.add(cid)
+            else:
+                teaching.add((cid, None))   # J6 R3: new content to start until it is read
         counts["instruction"] = len(teaching)
         counts["blocked_content"] = len(blocked_content)
         return counts

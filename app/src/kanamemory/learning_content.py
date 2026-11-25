@@ -79,6 +79,18 @@ def learning_item_view(content_id: str) -> dict | None:
     return _view(value) if value else None
 
 
+def catalogue_abilities(content_id: str) -> tuple | None:
+    """The abilities the effective catalogue lists for a lesson now (raw names), or None: not a catalogue lesson.
+
+    A content update may list fewer abilities than a saved lesson was enrolled with (brief J6 R4); an empty
+    list is a lesson that is only read. No alias is followed and nothing is copied.
+    """
+    value = _ITEMS.get(content_id) if isinstance(content_id, str) else None
+    if value is None:
+        return None
+    return tuple(value.get("abilities", value.get("dimensions", ("understanding",))))
+
+
 def catalogue_ids() -> frozenset:
     """Content ids the effective catalogue defines (no item decoding or copies)."""
     return frozenset(_ITEMS)
@@ -320,8 +332,10 @@ def _extend_catalogue():
     _ITEMS.update((identity, catalogue[identity]) for identity in ordered)
     # Every word can be heard: the task derives from the lesson's own fields.
     # Reviewed teaching and its fingerprint do not include the ability list.
+    # A lesson that is only read (abilities: [], brief J6 R1) gets none.
     for item in _ITEMS.values():
-        if item.get("family") == "word" and "listening" not in item.get("abilities", ()):
+        if (item.get("family") == "word" and item.get("abilities", ("understanding",))
+                and "listening" not in item.get("abilities", ())):
             item["abilities"] = [*item.get("abilities", ()), "listening"]
 
 

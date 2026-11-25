@@ -30,6 +30,7 @@ CACHES = {
     "question_readings.py::_course_words": REGISTERED,
     "question_readings.py::_lesson_forms": REGISTERED,
     "question_readings.py::_ENTRY_MEMO": REGISTERED,  # its key does not name the lesson it was located in
+    "read_only_lessons.py::_MEMO": REGISTERED,  # per connection; dropped with the catalogue it compared against
     "result_readings.py::_TITLES": REGISTERED,
     "learning_questions.py::_word_pool": REGISTERED,
     "learning_questions.py::_READING_FORMS": REGISTERED,

@@ -20,6 +20,12 @@ question_presentation把已知的中文译文提示移入folded_hint并给日文
 每个选项词与句中语法都在background_ids里，全部已学才出题。tools/compile_reviewed_question_batch.py
 的审阅者与批次名改为参数（默认值不变）。旧设置按KINDS_ADDED_AT逐版补新题型，设置页写入PREFERENCE_VERSION。
 PRACTICE_ONLY_KINDS（两种读音题和读句选词）不进记忆检查与材料预测试。
+只需了解的项（2026-11-24，未单独发版）：read_only_lessons只读学习表与有效目录（learning_content.catalogue_abilities），
+不写；retired_ability判断已存单位的能力是否已不在目录中，read_only_lessons/read_lesson_ids给出只需了解的项及是否已读，
+“可能只需了解”的候选项只随目录与入学变化，按连接缓存（键为learning_unit与learning_content的行数与最大rowid，登记在
+content_caches），每次只读候选项的行（作答后约0.6毫秒）。LearningStore拥有complete_read_only事务与调度占位行
+（read_only:<id>，不入库），StudyQueries.instruction_ready_ids/independent_prerequisite_rows并入已读项；页面不直接
+调用存储，只经read_only_lessons.ReadOnlyLessonService（for_app(app)：lesson、unread_prerequisites、complete）。question_support.gloss_reveals是背景注释防泄题的唯一整词规则（两个显示判定共用，受保护的答案含答案覆盖行加的答案；tools/practice_authoring_fields 的写注释检查也调用它，不再有自己的副本）。
 内容缓存与重启（2026-11-18，未单独发版）：由课程内容派生的缓存（lru_cache 函数与模块级表）都在定义处
 登记到纯模块 content_caches（content_cache 装饰器 / register），content_pack.clear_cache 与令牌不同的
 有效目录构建会 clear_all；tests/test_content_caches.py 要求每个缓存要么登记、要么写明豁免理由，导入期

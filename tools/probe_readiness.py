@@ -102,6 +102,12 @@ def main(argv=None):
         track = probe_rules.track(item.get("family"), item.get("domain"))
         known = frozenset({*before, item["id"], *kana})
         found, missing = [], []
+        if not item.get("abilities", ("understanding",)):
+            # Only read (abilities: [], brief J6 R1): no probe and none missing; its own line in the summary.
+            lessons[(track, "read_only")] += 1
+            rows.append([str(position), item["id"], track or "", item.get("title", ""), "read_only", ""])
+            before.append(item["id"])
+            continue
         for ability in probe_rules.order(track):
             if ability not in item.get("abilities", ()):
                 continue
@@ -116,10 +122,12 @@ def main(argv=None):
     text = "\n".join("\t".join(row) for row in [header, *rows]) + "\n"
     summary = [f"课程项 {len(rows)} 项（按主线顺序；已知＝主线上排在它前面的课程项和全部假名）。"]
     for track in ("word", "grammar", "pronunciation"):
-        total = lessons[(track, "complete")] + lessons[(track, "incomplete")]
+        total = lessons[(track, "complete")] + lessons[(track, "incomplete")] + lessons[(track, "read_only")]
         if not total:
             continue
         summary.append(f"{track}: {total} 项，试探题齐全 {lessons[(track, 'complete')]} 项，缺至少一道 {lessons[(track, 'incomplete')]} 项。")
+        if lessons[(track, "read_only")]:
+            summary.append(f"  只需阅读（不出题，不缺试探题）：{lessons[(track, 'read_only')]} 项")
         for label in LABELS[track].values():
             ok, gap = counts[(track, label, "ok")], counts[(track, label, "missing")]
             if ok or gap:

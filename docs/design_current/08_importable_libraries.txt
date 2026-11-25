@@ -375,6 +375,13 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
   不再获得新模板，沿用保存快照与 legacy 行为（现行合同），本设计不改。
 - learning_material_review.json 类覆盖层按库隔离：只对本库定义的项/题生效。
 - 共享例句包（example_store）target 不在有效目录时沿用现有 unavailable 处理。
+- 课程项的 abilities 可以为空（abilities: []）：只需了解的项，有讲解（instruction 必填）而没有任何题。入学时不建
+  练习单位，词也不追加听辨；合并题目的工具拒绝为它写题（learning_questions.practice_kind_allowed：题要求的能力
+  必须在课程项里）。内容更新让已入学的项少列能力时，不再列出的能力的单位不再排题、出题和计数，状态作为历史保留
+  （read_only_lessons.retired_ability；学习者一侧的表现见 02 第四节、03）。课程项自己的 question_templates 和
+  varied_practice 扩展里，凡是课程项没列出的能力的题型都当作不存在而跳过（learning_questions._reviewed_templates /
+  _listed_kinds），不再报 “Practice extension cannot create a memory ability” 让整课载入失败；内容方去掉能力时
+  可以不删扩展条目。新题的这项检查留在写题处：merge_question_batch 仍拒绝课程项没有的能力的新题。
 
 6.5 扩展库文档的按需读取 [I，0.34.2，2026-11-12；合成数据单元与集成测试、桌面实测；原生验证见 README]
 问题（一轮原生实测，一个 1,388 项、6 个文档共约 70 MB JSON 的扩展库）：启用后每次启动把所有文档整份解码并再复制一份，

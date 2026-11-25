@@ -83,10 +83,12 @@ def _start_once(app, memory, key, play, operation, *, wanted=None, forget_when_l
         try:
             await play()
         except Exception as exc:
-            record_error(operation, "play", exc)
-            # Navigation stops in-flight speech; an absent voice must likewise
-            # never interrupt grading with an unsolicited dialog on each item.
+            # A playback the app itself stopped (navigation, a submit, a new playback: the platform marks it
+            # app_stopped) is no error and counts nowhere (J6 R8). A real failure is recorded; an absent
+            # voice must never interrupt grading with an unsolicited dialog on each item either.
             # Users can retry with the visible speaker to see the usual error.
+            if getattr(exc, "app_stopped", False) is not True:
+                record_error(operation, "play", exc)
         if forget_when_left and app.page != page and entries.get(key) is entry:
             # Left while it played: not heard here, so showing it again plays.
             del entries[key]

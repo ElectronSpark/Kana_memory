@@ -707,12 +707,20 @@ class StudyPathService:
         reserved, read = set(state["reserved_entries"]), set(state["reference_read"])
         if learning_rows is None:
             learning_rows = self.store.queries.course_progress_rows()
+        from .read_only_lessons import retired_ability
         stages = {}
         for row in learning_rows:
+            scope = row.get('instruction_scope') if isinstance(row, dict) else None
+            if scope is not None and retired_ability(row['content_id'], scope):
+                continue   # J6 R4: the scope of an ability the lesson no longer lists does not hold the lesson
             stages.setdefault(row['content_id'], []).append(row['stage'])
         learning = {cid: 'done' if all(s == 'done' for s in values)
                     else 'intro' if all(s == 'intro' for s in values) else 'guide'
                     for cid, values in stages.items()}
+        # J6 R1/R4: a lesson that is only read is complete once read, else new content of its section.
+        read_only = getattr(self.store.queries, 'read_only_lessons', None)
+        for cid, value in (read_only() if callable(read_only) else {}).items():
+            learning[cid] = 'done' if value['read'] else 'intro'
         needs_teaching = {row["content_id"] for row in learning_rows
                           if json.loads(row["checkpoint_json"]).get("initial_familiarity", {}).get(
                               "diagnostic_state") == "needs_teaching"}

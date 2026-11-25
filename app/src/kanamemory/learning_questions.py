@@ -746,13 +746,26 @@ def practice_templates(item):
     return result
 
 
+def _listed_kinds(item, templates):
+    """The lesson's own templates without the kinds of abilities it does not list (J6 R12), else unchanged.
+
+    Only a lesson with an explicit ability list is filtered (an empty one keeps nothing); kinds the registry
+    does not know stay as they are. Stored questions and snapshots of a dropped kind are history.
+    """
+    abilities = item.get("abilities") if isinstance(item, dict) else None
+    if not isinstance(templates, dict) or not isinstance(abilities, (list, tuple)):
+        return templates
+    return {kind: value for kind, value in templates.items()
+            if kind not in KIND_ABILITIES or KIND_ABILITIES[kind] in abilities}
+
+
 def practice_kind_allowed(item, kind):
     """Whether reviewed practice of ``kind`` may be bound to ``item``.
 
     The kind belongs to the lesson's family (or its pronunciation domain) and
     asks for an ability the lesson has: added practice never creates a memory
-    ability. _reviewed_templates refuses a binding that breaks this; content
-    tools use the same rule to keep such a question out before it is merged.
+    ability. _reviewed_templates skips a bound kind that breaks this (J6 R12: an ability the lesson
+    no longer lists); content tools use the same rule to refuse such a question before it is merged.
     """
     allowed = (PRONUNCIATION_KINDS if item.get("domain") == "pronunciation" else
                WORD_KINDS if item["family"] == "word" else GRAMMAR_KINDS)
@@ -768,7 +781,7 @@ def _reviewed_templates(item):
     base = item.get("question_templates")
     extension = _practice_binding(item)
     if extension is None:
-        return deepcopy(base)
+        return _listed_kinds(item, deepcopy(base))
     if base is None:
         base = _CONTENT.get("GRAMMAR_QUESTIONS", {}).get(item.get("id"))
     if (base is None and item.get("family") == "word"
@@ -785,10 +798,13 @@ def _reviewed_templates(item):
                 base[kind] = [deepcopy(raw) for _ in range(4)]
     if base is None:
         return None  # No guessed template replacement for dictionary fallback.
-    result = deepcopy(base)
+    result = _listed_kinds(item, deepcopy(base))
     for kind, additions in extension.get("templates", {}).items():
         if not practice_kind_allowed(item, kind):
-            raise ValueError("Practice extension cannot create a memory ability")
+            # J6 R12: a kind of an ability the lesson does not list (one a content update took away, or none at
+            # all for a lesson that is only read) is skipped as if it did not exist. It never creates a memory
+            # ability; new questions of such a kind are refused where they are authored (merge_question_batch).
+            continue
         if not isinstance(additions, list):
             raise ValueError("Invalid practice extension templates")
         for raw in additions:
