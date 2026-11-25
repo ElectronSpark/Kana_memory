@@ -234,6 +234,11 @@ the ordinary rule/explanation; existing records need no rewrite or migration.
 
 Bundled coverage (0.13.0)
 All 524 current course senses/rules have at least ten distinct example IDs.
+Floor (2026-11-24): every lesson needs at least ten distinct example IDs,
+except an expression lesson (grammar:expression:*, family grammar with domain
+expression: a fixed short phrase such as a greeting), which needs three. One
+rule states it: tools/validate_example_coverage.py example_floor; the tests
+and tools that check the floor call it rather than repeating the numbers.
 Exact sentence text is shared; each target has its own anchored reference.
 Original examples/references are preserved. Additional authored rows are pinned
 to lesson semantics, not learner state; an unknown or semantically changed
