@@ -365,3 +365,37 @@ def test_a_retired_unit_is_never_due_recent_or_in_a_deck(learning_app, catalogue
     assert DueReviews(app.store).course(later, KINDS) == [AID]   # one entry: the listed ability only
     facts = StoreConsolidation(app.store, learning).facts(app._test_clock[0])
     assert all(fact.ref.ability != "application" for fact in facts)
+
+
+def test_the_read_only_pass_reads_one_statement_once_its_candidates_are_known(learning_app):
+    """Brief J11 F2: the enrolment key is one statement, the candidates one more when enrolment changed, and a
+    caller that has just read the enrolled lessons and found none reads nothing."""
+    from kanamemory.read_only_lessons import _clear_memo
+    app = learning_app
+    db = app.learning_store._db
+    statements = []
+    _clear_memo()
+    db.set_trace_callback(statements.append)
+    try:
+        assert read_only_lessons(db, lesson_ids=set()) == {}
+        assert statements == []
+        assert read_only_lessons(db) == {}
+        assert len(statements) == 2   # the key, then the (empty) candidates
+        del statements[:]
+        assert read_only_lessons(db) == {}
+        assert len(statements) == 1   # the key only
+    finally:
+        db.set_trace_callback(None)
+    enroll(app, read_only(), lesson(AID))
+    _clear_memo()   # enrolling already read it once
+    del statements[:]
+    db.set_trace_callback(statements.append)
+    try:
+        first = read_only_lessons(db)
+        cold = len(statements)
+        del statements[:]
+        assert read_only_lessons(db, lesson_ids={RID, AID}) == first and set(first) == {RID}
+        warm = len(statements)
+    finally:
+        db.set_trace_callback(None)
+    assert (cold, warm) == (3, 2)   # key + candidates + the read-only lesson's row; then key + row

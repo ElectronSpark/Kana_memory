@@ -117,7 +117,7 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
             ids["planned"].add((item['id'], unit['ability']))
             if gate and unit['ability'] in gate['closed']:
                 continue
-            if serve is not None and not serve.allows(item['id']):
+            if serve is not None and not serve.allows(item['id']) and not serve.started_work(item['id'], unit['ability']):
                 continue   # design 12 H10: left out by the learner's filter (still "planned" for the apart counts)
             if learning_store.content_question_blocked(item, plan):
                 result['blocked_material'] += 1

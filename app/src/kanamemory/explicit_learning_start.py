@@ -112,6 +112,67 @@ def active(store):
     return pending if pending and _request_alive(db, pending) else None
 
 
+def started_work(db):
+    """(lesson, ability) of the course work the learner started by hand and has not formally rated yet.
+
+    Design 12 section 22 (brief J11 F3): the review filter serves this as it serves tiers 0-2. The lessons are
+    those of the stored request and of its deferred one: the selected entry once a real start chose it, else
+    every entry (an unclaimed start of a section or lesson). An entry counts while its lesson keeps that
+    introduction (a reset ends it); each of its abilities until the ability's first formal rating (a primary
+    learning_event, the rule that consumes the request); a lesson without units as (lesson, None) until it is
+    read. Read-only: it survives an app start because it is derived from stored records alone.
+    """
+    db = _db(db)
+    value = read(db)
+    if not value:
+        return frozenset()
+    entries = []
+    for request in (value, value.get('pending_start')):
+        if request:
+            selected = request['selected_entry_id']
+            entries += [entry for entry in request['entries'] if entry['kind'] == 'learning'
+                        and (selected is None or entry['entry_id'] == selected)]
+    if not entries:
+        return frozenset()
+    from .ability_teaching import state_map
+    from .learning_store import _unit_id
+    ids = sorted({entry['content_id'] for entry in entries})
+    rows, units = {}, {}
+    for start in range(0, len(ids), 400):
+        chunk = ids[start:start + 400]
+        marks = ','.join('?' * len(chunk))
+        rows.update((row[0], row[1:]) for row in db.execute(
+            'SELECT content_id,introduction_id,stage FROM learning_content WHERE content_id IN (%s)' % marks, chunk))
+        for cid, ability in db.execute('SELECT content_id,ability FROM learning_unit WHERE content_id IN (%s)'
+                                       % marks, chunk):
+            units.setdefault(cid, []).append(ability)
+    states = state_map(db)
+    wanted = []
+    for entry in entries:
+        cid = entry['content_id']
+        if cid not in rows:
+            continue
+        state = states.get(cid) or {}
+        scope = next((a for a, item in state.get('additions', {}).items()
+                      if item['introduction_id'] == entry['introduction_id']), None)
+        if scope is None and rows[cid][0] != entry['introduction_id']:
+            continue
+        abilities = [scope] if scope else (state.get('original_abilities') or units.get(cid, []))
+        if not abilities:
+            if rows[cid][1] != 'done':
+                wanted.append((cid, None))
+            continue
+        wanted += [(cid, ability) for ability in abilities]
+    rated = set()
+    unit_ids = sorted({_unit_id(cid, ability) for cid, ability in wanted if ability is not None})
+    for start in range(0, len(unit_ids), 400):
+        chunk = unit_ids[start:start + 400]
+        rated.update(row[0] for row in db.execute(
+            "SELECT DISTINCT unit_id FROM learning_event WHERE role='primary' AND unit_id IN (%s)"
+            % ','.join('?' * len(chunk)), chunk))
+    return frozenset(pair for pair in wanted if pair[1] is None or _unit_id(*pair) not in rated)
+
+
 def _all_disabled(service, entries):
     """Prove closure by current course settings/controls, not by an empty probe.
 

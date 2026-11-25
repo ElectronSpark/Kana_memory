@@ -120,10 +120,11 @@ class StudyQueries:
             FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
             WHERE u.content_id=? AND q.status='pending'""", (content_id,))}
 
-    def read_only_lessons(self) -> dict:
-        """read_only_lessons.read_only_lessons on this connection (J6 R1-R4): {content_id: {position, stage, read}}."""
+    def read_only_lessons(self, *, lesson_ids=None) -> dict:
+        """read_only_lessons.read_only_lessons on this connection (J6 R1-R4): {content_id: {position, stage, read}}.
+        lesson_ids: every enrolled lesson's id, when the caller read them in the same pass."""
         from .read_only_lessons import read_only_lessons
-        return read_only_lessons(self._connection)
+        return read_only_lessons(self._connection, lesson_ids=lesson_ids)
 
     def instruction_ready_ids(self) -> set[str]:
         """Lessons with an instruction-ready unit, and lessons that are only read and were read (J6 R2)."""

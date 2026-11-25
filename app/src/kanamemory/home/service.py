@@ -143,7 +143,8 @@ class HomeOverviewService:
 
     @staticmethod
     def _extra_entry(arrangement) -> bool:
-        """加练… (design 12 E9): some learned state exists (extra practice's pool read; a failed read: no entry)."""
+        """加练… (design 12 E9): some learned state exists (ExtraSession.learned: the pool reader stops at the first
+        state, the counts are left to the page 加练; a failed read: no entry)."""
         if arrangement is None:
             return False
         from ..domain import _utc

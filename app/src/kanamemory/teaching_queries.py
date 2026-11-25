@@ -38,6 +38,11 @@ class TeachingQueries:
         from .explicit_learning_start import _request_alive
         return _request_alive(self._connection, request)
 
+    def explicit_started_work(self) -> frozenset:
+        """explicit_learning_start.started_work on this connection: (lesson, ability) started by hand, unrated."""
+        from .explicit_learning_start import started_work
+        return started_work(self._connection)
+
     def unanswered_course_question(self, question_id: str) -> str | None:
         """Content id of a course question that still exists, is pending and has no result; else None."""
         row = self._connection.execute('''SELECT u.content_id FROM learning_question q

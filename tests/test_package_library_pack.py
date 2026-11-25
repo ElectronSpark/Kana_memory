@@ -173,3 +173,65 @@ def test_a_pack_over_the_size_limits_stops_before_writing_with_a_breakdown_by_ki
     with pytest.raises(ValueError, match=r"teaching/lesson\.json is [\d,]+ bytes, over MAX_TEACHING_BYTES 10") as caught:
         _package(tmp_path / "document", library_id="author.big", extension=True, namespaces=["lesson"])
     assert "teaching json" in str(caught.value) and not (tmp_path / "document" / "pack.zip").exists()
+
+
+def _tool():
+    spec = importlib.util.spec_from_file_location("package_library_pack", ROOT / "tools" / "package_library_pack.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    return tool
+
+
+def test_content_with_ability_rules_needs_the_app_that_knows_them():
+    """Brief J11 F4: a lesson that lists no ability, or practice of an ability its lesson leaves out, breaks apps
+    older than ABILITY_RULES_MIN_APP; the tool raises the minimum by itself and says which rule did."""
+    tool = _tool()
+    lesson = {"id": "grammar:demo:desu", "abilities": ["understanding"]}
+    read = {"id": "pronunciation:demo:read", "abilities": []}
+
+    def values(*items, practice=None, overlay=False):
+        found = {"lesson": {"_ITEMS": {item["id"]: item for item in items}}}
+        if practice is not None:
+            found["varied_practice"] = {"schema_version": 1, "items": practice}
+        if overlay:
+            found["answer_overlay"] = {"schema_version": 1, "items": {
+                "grammar:demo:desu": {"grammar_meaning": {"a" * 64: {"strict": True}}}}}
+        return found
+    assert tool.minimum_app_version(values(lesson), None) == (None, None)
+    assert tool.minimum_app_version(values(lesson, read), None) == (tool.ABILITY_RULES_MIN_APP, "abilities")
+    own = {"grammar:demo:desu": {"item_fingerprint": "f" * 64, "templates": {"grammar_meaning": []}}}
+    other = {"grammar:demo:desu": {"item_fingerprint": "f" * 64, "templates": {"grammar_cloze": []}}}
+    assert tool.minimum_app_version(values(lesson, practice=own), None) == (None, None)
+    assert tool.minimum_app_version(values(lesson, practice=other), None) == (tool.ABILITY_RULES_MIN_APP, "abilities")
+    # Practice of a lesson the pack does not carry, or of a lesson without an ability list, is not judged here.
+    assert tool.minimum_app_version(values(practice=other), None) == (None, None)
+    assert tool.minimum_app_version(values({"id": "grammar:demo:desu"}, practice=other), None) == (None, None)
+    # A higher given version is kept; the highest rule wins over a lower one and over a lower given version.
+    assert tool.minimum_app_version(values(lesson, read), "0.40.0") == ("0.40.0", None)
+    assert tool.minimum_app_version(values(lesson, read), "0.36.18") == ("0.36.18", None)
+    assert tool.minimum_app_version(values(lesson, read), "0.36.0") == (tool.ABILITY_RULES_MIN_APP, "abilities")
+    assert tool.minimum_app_version(values(lesson, overlay=True), None) == (tool.ANSWER_OVERLAY_MIN_APP,
+                                                                           "answer_overlay")
+    assert tool.minimum_app_version(values(lesson, read, overlay=True), None) == (tool.ABILITY_RULES_MIN_APP,
+                                                                                 "abilities")
+    assert rules.app_version_key(tool.ABILITY_RULES_MIN_APP) > rules.app_version_key(tool.ANSWER_OVERLAY_MIN_APP)
+
+
+def test_a_pack_with_a_lesson_that_is_only_read_gets_the_minimum_and_names_the_rule(tmp_path):
+    tool = _tool()
+    namespaces = copy.deepcopy(CORE_NAMESPACES)
+    namespaces["lesson"]["_ITEMS"]["pronunciation:demo:read"] = {
+        "id": "pronunciation:demo:read", "revision": 1, "family": "pronunciation", "domain": "pronunciation",
+        "title": "读", "reading": "", "meaning": "", "instruction": "只读", "abilities": [], "question_templates": [],
+        "source_urls": []}
+    resources = build_core_resources(tmp_path / "resources", namespaces)
+    result = tool.package(resources, tmp_path / "pack.zip", library_id="author.read", extension=True,
+                          namespaces=["lesson"], typed_check=lambda db, ids: [])
+    manifest = rules.validate_library_pack(tmp_path / "pack.zip").manifest
+    assert manifest["requires"]["app_min_version"] == tool.ABILITY_RULES_MIN_APP == result["app_min_version"]
+    assert result["app_min_version_rule"] == "abilities"
+    assert rules.app_too_old(manifest, "0.36.17") == tool.ABILITY_RULES_MIN_APP
+    plain = tool.package(build_core_resources(tmp_path / "plain", copy.deepcopy(CORE_NAMESPACES)),
+                         tmp_path / "plain.zip", library_id="author.plain", extension=True, namespaces=["lesson"],
+                         typed_check=lambda db, ids: [])
+    assert plain["app_min_version"] is None and plain["app_min_version_rule"] is None

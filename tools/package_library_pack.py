@@ -37,7 +37,10 @@ Typed answers (design 03 rule T9): the typed templates of the packed lessons tha
 (the app never serves them; tools/typed_answer_check.py, the app's own rule) are listed as a warning on
 standard error, or refused with ``--refuse-typed-without-kana``. A pack that carries answer_overlay rows
 needs an app that reads them: its requires.app_min_version is raised to ANSWER_OVERLAY_MIN_APP (an older
-app opens the pack and ignores the namespace, judging those templates without their corrections).
+app opens the pack and ignores the namespace, judging those templates without their corrections). Content
+with a lesson that lists no ability (abilities: [], only read) or a practice extension (varied_practice) holding
+kinds of an ability its packed lesson does not list breaks apps older than ABILITY_RULES_MIN_APP: such a pack
+gets that minimum (minimum_app_version; a higher given version is kept, and the result names the rule).
 
 The bundled content's stamp (design 08 section 5.7): ``--stamp-resources <resources folder>`` (core packs
 only) writes bundled_library.json into that folder after the pack is written, with the pack's library id,
@@ -90,6 +93,40 @@ REVIEW_FILE = "learning_material_review.json"
 # The first app version that reads the answer_overlay namespace (design 08): set by the version bump that
 # ships it. An older app accepts a pack with the namespace and ignores it.
 ANSWER_OVERLAY_MIN_APP = "0.36.17"
+# The first app version that serves lessons without abilities and ignores practice of an ability a lesson does not
+# list (read_only_lessons, learning_questions._listed_kinds); older apps break on such content (brief J11 F4).
+ABILITY_RULES_MIN_APP = "0.36.18"
+
+
+def minimum_app_version(values, given):
+    """(requires.app_min_version, the rule that raised it or None) for the packed namespaces ``values``.
+
+    answer_overlay: rows of that namespace (ANSWER_OVERLAY_MIN_APP); abilities: a packed lesson with
+    ``abilities: []``, or a varied_practice entry of a packed lesson holding a kind whose ability
+    (question_kinds.REGISTRY) the lesson's list leaves out (ABILITY_RULES_MIN_APP). A given version at or above
+    the rule's is kept; the highest rule wins.
+    """
+    from kanamemory.question_kinds import REGISTRY
+    lessons = {cid: item for value in values.values() for cid, item in _items(value)}
+    abilities = REGISTRY.abilities()
+    practice = values.get("varied_practice")
+    practice = practice.get("items") if isinstance(practice, dict) else None
+
+    def unlisted(cid, entry):
+        listed = lessons.get(cid, {}).get("abilities")
+        templates = entry.get("templates") if isinstance(entry, dict) else None
+        return (isinstance(listed, list) and isinstance(templates, dict)
+                and any(kind in abilities and abilities[kind] not in listed for kind in templates))
+    rules_found = [(ANSWER_OVERLAY_MIN_APP, "answer_overlay")] if answer_overlay.row_count(
+        values.get(answer_overlay.NAMESPACE)) else []
+    if (any(item.get("abilities") == [] for item in lessons.values())
+            or isinstance(practice, dict) and any(unlisted(cid, entry) for cid, entry in practice.items())):
+        rules_found.append((ABILITY_RULES_MIN_APP, "abilities"))
+    version, rule = given, None
+    for minimum, name in rules_found:
+        if version is None or rules.app_version_key(version) < rules.app_version_key(minimum):
+            version, rule = minimum, name
+    return version, rule
 
 
 def short_id(library_id):
@@ -384,10 +421,7 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
         if refuse_typed_without_kana:
             raise ValueError(text)
         (report or (lambda line: print(line, file=sys.stderr)))(text)
-    if answer_overlay.row_count(values.get(answer_overlay.NAMESPACE)) and (
-            app_min_version is None
-            or rules.app_version_key(app_min_version) < rules.app_version_key(ANSWER_OVERLAY_MIN_APP)):
-        app_min_version = ANSWER_OVERLAY_MIN_APP
+    app_min_version, app_min_rule = minimum_app_version(values, app_min_version)
     route_specs = [*routes, *([sample_route(library_id, title, mapping, provides_items)] if with_sample_route else [])]
     route_table = _route_table(library_id, route_specs)
     route_references = []
@@ -483,7 +517,7 @@ def package(resources, output, *, library_id=rules.CORE_LIBRARY_ID, library_vers
             "references": len(manifest["references"]), "provides": list(provides_items),
             "signature_status": checked.signature.status, "public_key_id": checked.signature.public_key_id,
             "routes": list(route_table), "typed_without_kana": len(typed_rows),
-            "app_min_version": manifest["requires"].get("app_min_version")}
+            "app_min_version": manifest["requires"].get("app_min_version"), "app_min_version_rule": app_min_rule}
 
 
 def main():

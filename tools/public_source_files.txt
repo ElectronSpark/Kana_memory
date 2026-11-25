@@ -832,6 +832,7 @@ tests/test_example_pack_copying.py
 tests/test_example_read_operation.py
 tests/test_example_refresh_cache.py
 tests/test_explicit_learning_start.py
+tests/test_explicit_started_work.py
 tests/test_expression_lessons.py
 tests/test_feedback_clipboard_independent.py
 tests/test_feedback_clipboard_ui.py
@@ -944,6 +945,7 @@ tests/test_romanization_expressive.py
 tests/test_root_back.py
 tests/test_scheduler_audit.py
 tests/test_selection_layout.py
+tests/test_semantic_task_equivalence.py
 tests/test_sentence_annotation_corpus.py
 tests/test_sentence_annotation_sequences.py
 tests/test_session_kind_filter.py

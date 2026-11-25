@@ -95,7 +95,8 @@ class StoreArrangement:
         catalog = catalog if catalog is not None else StoreScopeCatalog(store, routes)
         focus = FocusService(preferences, catalog, restart=lambda: _restart_main_round(store))
         review_filter = ReviewFilterService(preferences, focus, study_day=lambda at: store.study_day(at).isoformat(),
-                                            restart=lambda: _restart_main_round(store))
+                                            restart=lambda: _restart_main_round(store),
+                                            started=lambda: store.teaching_queries.explicit_started_work())
         # The extra-practice part lives as long as the mode: every stop() forgets it (design 12 E9).
         extra = extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
                               course_kinds=course_kinds, japanese_input=japanese_input, serve=review_filter.current,

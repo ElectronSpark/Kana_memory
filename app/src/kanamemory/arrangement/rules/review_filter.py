@@ -16,8 +16,12 @@ scope.
 
 Work of priority tiers 0-2 (feedback, a started answer, a due short step) is
 served wherever it lies (H8, H9; the focus rule's FIRST_SCOPED_TIER): the
-filter acts from tier 3 on. Nothing here hides due work from the counts: the
-home shows what it leaves out apart (apart()).
+filter acts from tier 3 on. So is ``started`` work (section 22, brief J11 F3):
+a lesson the learner started by hand (the route page's start of a section or
+lesson), its teaching block or probes and every question of an ability up to
+and including that ability's first formal rating; after that the filter
+applies to it like to any other work. Nothing here hides due work from the
+counts: the home shows what it leaves out apart (apart()).
 """
 from __future__ import annotations
 
@@ -37,6 +41,9 @@ class ServeFilter:
     excluded: frozenset[str] = frozenset()
     only: frozenset[str] | None = None
     part: frozenset[str] | None = None
+    # (lesson, ability) of work started by hand and not yet formally rated; (lesson, None): the whole lesson
+    # (one without units, until it is read).
+    started: frozenset[tuple[str, str | None]] = frozenset()
 
     def allows(self, member: str | None) -> bool:
         """Whether work of ``member`` may be served from tier 3 on (None: work that belongs to no member)."""
@@ -48,9 +55,14 @@ class ServeFilter:
             return False
         return self.part is None or member in self.part
 
-    def serves(self, member: str | None, tier: int | None) -> bool:
-        """allows(), except that tiers 0-2 are always served (``tier`` None: not known, filtered)."""
-        return (tier is not None and tier < FIRST_SCOPED_TIER) or self.allows(member)
+    def started_work(self, member: str | None, ability: str | None = None) -> bool:
+        """Whether this is work the learner started by hand that is not formally rated yet (served as tiers 0-2)."""
+        return member is not None and ((member, ability) in self.started or (member, None) in self.started)
+
+    def serves(self, member: str | None, tier: int | None, ability: str | None = None) -> bool:
+        """allows(), except that tiers 0-2 and started work are always served (``tier`` None: not known)."""
+        return ((tier is not None and tier < FIRST_SCOPED_TIER) or self.started_work(member, ability)
+                or self.allows(member))
 
     @property
     def limits_to_scope(self) -> bool:
@@ -59,20 +71,22 @@ class ServeFilter:
 
 
 def serve_filter(*, excluded: Iterable[str] = (), only: Collection[str] | None = None, lifted: bool = False,
-                 part: Collection[str] | None = None) -> ServeFilter | None:
+                 part: Collection[str] | None = None,
+                 started: Iterable[tuple[str, str | None]] = ()) -> ServeFilter | None:
     """The filter of the moment; None when nothing restricts (then every reader behaves as before H8-H10).
 
     ``only``: the focus scope's members when 只做范围内 is on and the scope
     resolves, else None; ``lifted``: 做范围外的 holds (only then has no
     effect); ``part``: the extra-practice part's members, None for 全部 or
-    outside extra practice.
+    outside extra practice; ``started``: (lesson, ability) pairs of work
+    started by hand and not yet formally rated (ServeFilter.started).
     """
     excluded = frozenset(excluded)
     only = None if lifted or only is None else frozenset(only)
     part = None if part is None else frozenset(part)
     if not excluded and only is None and part is None:
         return None
-    return ServeFilter(excluded, only, part)
+    return ServeFilter(excluded, only, part, frozenset(started))
 
 
 def allows(serve: ServeFilter | None, member: str | None) -> bool:
@@ -80,9 +94,9 @@ def allows(serve: ServeFilter | None, member: str | None) -> bool:
     return serve is None or serve.allows(member)
 
 
-def serves(serve: ServeFilter | None, member: str | None, tier: int | None) -> bool:
+def serves(serve: ServeFilter | None, member: str | None, tier: int | None, ability: str | None = None) -> bool:
     """ServeFilter.serves for an optional filter (None: everything)."""
-    return serve is None or serve.serves(member, tier)
+    return serve is None or serve.serves(member, tier, ability)
 
 
 @dataclass(frozen=True)

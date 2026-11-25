@@ -7,16 +7,18 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 import math
+import threading
 
 from .content_caches import register as register_content_cache
 from .material_review import fingerprint
 
 _SHARED = {}
 register_content_cache(lambda: _SHARED.clear(), "semantic_errors._SHARED")  # layered namespace
+_LOCAL = threading.local()  # set while entries are resolved: the questions built then look up by stored key only
 
 
-def _assessments():
-    """Read-only shared copy of the installed annotations; never mutate it.
+def _shared():
+    """(stamp, read-only shared copy of the installed annotations, {(target, kind): equivalence index}).
 
     load_namespace deep-copies the whole namespace per call, and for_question
     runs per question/keystroke. Reuse one copy until the pack file changes.
@@ -32,14 +34,116 @@ def _assessments():
     key = (loader, str(path), stamp)
     entry = _SHARED.get('entry')
     if entry is None or entry[0] != key:
-        entry = _SHARED['entry'] = (key, loader('semantic_assessments', {}))
-    return entry[1]
+        entry = _SHARED['entry'] = (key, loader('semantic_assessments', {}), {})
+    return entry
+
+
+def _assessments():
+    """Read-only shared copy of the installed annotations; never mutate it."""
+    return _shared()[1]
+
+
+def entries():
+    """{stored key: entry} of the installed pack (read-only; for reports such as tools/check_landing.py)."""
+    return _assessments().get('questions', {})
 
 
 def question_key(q):
+    """The key of a pack entry as stored: the whole question, its task wording included."""
     fields = ('target_id', 'revision', 'ability', 'kind', 'prompt', 'task', 'answer', 'input_mode')
     return fingerprint({**{k: q.get(k) for k in fields},
         'choices': sorted(q.get('choices', [])), 'accepted_answers': sorted(q.get('accepted_answers', []))})
+
+
+def sentence_key(q):
+    """The one task-free equivalence of semantic errors: an entry belongs to a question by its sentence (prompt),
+    answer and kind, within its lesson and revision. The task wording plays no part, so a reworded or shortened
+    task keeps the entry; for_question still refuses an entry whose wrong answers the question accepts or (as a
+    choice question) does not offer.
+
+    Learner rows are already keyed without the task (source_key: lesson, sentence, answer; pattern buckets by
+    the entry's conditions), so this key is needed only to reach the pack entry; nothing stored changes.
+    """
+    return fingerprint({k: q.get(k) for k in ('target_id', 'revision', 'ability', 'kind', 'prompt', 'answer')})
+
+
+def source_key(target_id, prompt, answer):
+    """The key of a recorded sentence in a learner's rows (as stored since 0.28.3)."""
+    return fingerprint([target_id, prompt, answer])
+
+
+def entry_source(entry):
+    """(target_id, kind, variant) the entry's source_id names ("course:<target>:<kind>:<variant>"), or None."""
+    source = entry.get('source_id') if isinstance(entry, dict) else None
+    if not isinstance(source, str) or not source.startswith('course:'):
+        return None
+    parts = source[len('course:'):].rsplit(':', 2)
+    if len(parts) != 3 or not parts[2].isdigit():
+        return None
+    return parts[0], parts[1], int(parts[2])
+
+
+def resolve_entry(key, entry):
+    """The sentence_key of the question an entry was written for, or None when no template of its lesson gives
+    the stored key any more. The template the source_id names is tried first, then the lesson's others of that
+    kind (a retired template stays reconstructible, so a reworded task still finds its original)."""
+    parts = entry_source(entry)
+    if parts is None:
+        return None
+    target_id, kind, hint = parts
+    from .learning_content import get_learning_item
+    from .learning_questions import build_learning_question, practice_templates
+    item = get_learning_item(target_id)
+    if not item:
+        return None
+    before = getattr(_LOCAL, 'resolving', False)
+    _LOCAL.resolving = True
+    try:
+        try:
+            count = len((practice_templates(item) or {}).get(kind, []))
+        except (ValueError, KeyError, TypeError):
+            return None
+        for variant in dict.fromkeys([hint, *range(count)]):
+            try:
+                q = build_learning_question(item['id'], kind, variant=variant, item=item)
+            except (ValueError, KeyError, TypeError, IndexError):
+                continue
+            if question_key(q) == key:
+                return sentence_key(q)
+        return None
+    finally:
+        _LOCAL.resolving = before
+
+
+def _equivalents(shared, target_id, kind):
+    """{sentence_key: entry key} for one lesson and kind, built once per pack; a sentence that two entries
+    claim is left out (each keeps its stored key)."""
+    index = shared[2]
+    found = index.get((target_id, kind))
+    if found is None:
+        claims = {}
+        for key, entry in shared[1].get('questions', {}).items():
+            parts = entry_source(entry)
+            if parts and parts[:2] == (target_id, kind):
+                resolved = resolve_entry(key, entry)
+                if resolved is not None:
+                    claims.setdefault(resolved, []).append(key)
+        found = index[(target_id, kind)] = {k: keys[0] for k, keys in claims.items() if len(keys) == 1}
+    return found
+
+
+def entry_for(q):
+    """(stored key, pack entry) of a question: its stored key, else the entry of the same sentence, answer
+    and kind (sentence_key). None without one."""
+    shared = _shared()
+    questions = shared[1].get('questions', {})
+    key = question_key(q)
+    if key in questions:
+        return key, questions[key]
+    if getattr(_LOCAL, 'resolving', False) or not isinstance(q.get('target_id'), str):
+        return None
+    key = _equivalents(shared, q['target_id'], q.get('kind')).get(sentence_key(q))
+    return (key, questions[key]) if key else None
 
 
 def for_question(q):
@@ -49,11 +153,12 @@ def for_question(q):
     if any(len(str(q.get(k, ''))) > 1000 for k in ('prompt', 'answer')):
         return None  # The raw evidence snapshot must preserve the full source anchor.
     pack = _assessments()
-    entry = pack.get('questions', {}).get(question_key(q))
-    if not entry or pack.get('version') != 1:
+    found = entry_for(q) if pack.get('version') == 1 else None
+    if not found:
         return None
+    entry = found[1]
     # The shared pack copy is read-only; the descriptor gets its own slice.
-    value = {**deepcopy(entry), 'version': 1, 'source_key': fingerprint([q['target_id'], q['prompt'], q['answer']]),
+    value = {**deepcopy(entry), 'version': 1, 'source_key': source_key(q['target_id'], q['prompt'], q['answer']),
              'target_id': q['target_id'], 'ability': q['ability'], 'content_revision': str(q['revision'])}
     validate(value)
     if any(set(o['wrong_answers']) & set(q.get('accepted_answers', [q['answer']]))
@@ -158,7 +263,7 @@ def validate_snapshot(value, row, raw):
     d = value['descriptor']; validate(d)
     if d['target_id'] != row['target_id'] or d['ability'] != row['ability'] or d['content_revision'] != row['content_revision']:
         raise ValueError('Semantic observation target mismatch')
-    if d['source_key'] != fingerprint([row['target_id'], raw['prompt'], raw['answer']]) or any(
+    if d['source_key'] != source_key(row['target_id'], raw['prompt'], raw['answer']) or any(
             raw['answer'] in op['wrong_answers'] for op in d['opportunities']):
         raise ValueError('Semantic source or accepted answer mismatch')
     result = {'correct': row['outcome'] == 'correct' if row['outcome'] in {'correct', 'incorrect'} else None,

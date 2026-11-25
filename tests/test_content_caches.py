@@ -44,6 +44,7 @@ CACHES = {
     "loanword_origins.py::_installed_items": REGISTERED,
     "kana_reading_rules.py::_SHARED": REGISTERED,   # keyed by the pack file only, not by the library layers
     "semantic_errors.py::_SHARED": REGISTERED,      # keyed by the pack file only, not by the library layers
+    "semantic_errors.py::_LOCAL": "a per-thread flag while an entry is resolved; holds no content",
     "content_library_service.py::_DEPENDENCIES": REGISTERED,  # keyed by the catalogue ids only
     "study_routes.py::_BUILT": REGISTERED,
     "answer_policy/source.py::_LOCATED": REGISTERED,  # its key does not name the lesson it was located in

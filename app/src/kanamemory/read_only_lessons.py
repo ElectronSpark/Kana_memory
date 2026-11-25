@@ -48,10 +48,10 @@ register(_clear_memo, "read_only_lessons._MEMO")
 
 
 def _enrolment_key(db):
-    """What changes when lessons or units are enrolled or removed (never with an ordinary answer)."""
-    units = db.execute("SELECT COUNT(*),MAX(rowid) FROM learning_unit").fetchone()
-    contents = db.execute("SELECT COUNT(*),MAX(rowid) FROM learning_content").fetchone()
-    return (tuple(units), tuple(contents))
+    """What changes when lessons or units are enrolled or removed (never with an ordinary answer): the unit and
+    content row counts and largest rowids, read in one statement."""
+    return tuple(db.execute("SELECT (SELECT COUNT(*) FROM learning_unit),(SELECT MAX(rowid) FROM learning_unit),"
+                            "(SELECT COUNT(*) FROM learning_content),(SELECT MAX(rowid) FROM learning_content)").fetchone())
 
 
 def _candidates(db):
@@ -65,12 +65,15 @@ def _candidates(db):
     memo = _MEMO.get(id(db))
     if memo is not None and memo[0] == key and memo[2] is db:
         return memo[1]
-    abilities = {}
-    for content_id, ability in db.execute("SELECT content_id,ability FROM learning_unit"):
-        abilities.setdefault(content_id, []).append(ability)
+    abilities, empty = {}, set()
+    # One statement: every enrolled lesson with the abilities of its units (none: a lesson without a unit).
+    for content_id, ability in db.execute("""SELECT c.content_id,u.ability FROM learning_content c
+            LEFT JOIN learning_unit u ON u.content_id=c.content_id"""):
+        if ability is None:
+            empty.add(content_id)
+        else:
+            abilities.setdefault(content_id, []).append(ability)
     retired_all = {cid for cid, values in abilities.items() if all(retired_ability(cid, value) for value in values)}
-    empty = {row[0] for row in db.execute("""SELECT c.content_id FROM learning_content c
-        WHERE NOT EXISTS (SELECT 1 FROM learning_unit u WHERE u.content_id=c.content_id)""")}
     result = (frozenset(empty | retired_all), frozenset(retired_all))
     if len(_MEMO) >= 8:
         _MEMO.clear()   # a few connections at a time; old ones are not kept alive
@@ -78,7 +81,7 @@ def _candidates(db):
     return result
 
 
-def read_only_lessons(db) -> dict:
+def read_only_lessons(db, *, lesson_ids=None) -> dict:
     """{content_id: {"position", "stage", "read"}} of the enrolled lessons that are only read.
 
     Only read: no unit (enrolled with ``abilities: []``), or every unit is of an ability the lesson no
@@ -87,9 +90,12 @@ def read_only_lessons(db) -> dict:
     position is the content row's rowid (the order of enrolment, which follows the route). Which
     lessons can be only read is remembered per connection until enrolment changes or the content caches
     are dropped (_candidates); each call then reads only those lessons' rows (none in a course without
-    such lessons), so a pass after an ordinary answer costs two small counts.
+    such lessons), so a pass after an ordinary answer costs one small statement. lesson_ids: the ids of every
+    enrolled lesson when the caller has just read them in the same pass; none enrolled needs no statement.
     """
     from .probe_rules import explanation_shown
+    if lesson_ids is not None and not lesson_ids:
+        return {}
     candidates, with_units = _candidates(db)
     if not candidates:
         return {}

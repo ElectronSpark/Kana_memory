@@ -8,6 +8,12 @@ ScopeCatalog.members, so pausing a part never pauses the earlier lessons it
 builds on). current(now) is the filter of the moment (rules/review_filter.
 ServeFilter, None when nothing restricts) that every reader asks.
 
+Work the learner started by hand (section 22, brief J11 F3) comes from
+``started`` (the assembly reads it from the explicit-start record and the
+first formal ratings, explicit_learning_start.started_work): it is asked
+only when a filter restricts, and served as tiers 0-2 are until each of its
+abilities is formally rated.
+
 Memory of this launch only, nothing written:
 - 做范围外的 (lift): 只做范围内 has no effect until the next sitting break
   (rules/clock.sitting_break: more than 30 minutes since the last
@@ -60,11 +66,13 @@ class ReviewFilterService:
     """The two switches of one learner store, the lift and the extra-practice part."""
 
     def __init__(self, preferences: ArrangementPreferences, focus: FocusService, *,
-                 study_day: Callable[[datetime], str], restart: Callable[[], object] | None = None):
+                 study_day: Callable[[datetime], str], restart: Callable[[], object] | None = None,
+                 started: Callable[[], Collection[tuple[str, str | None]]] | None = None):
         self._preferences = preferences
         self._focus = focus
         self._study_day = study_day
         self._restart = restart
+        self._started = started   # (lesson, ability) of work started by hand, not yet formally rated
         self._lifted_at: datetime | None = None   # the last "继续学习" since 做范围外的
         self._part: frozenset[str] | None = None
 
@@ -149,12 +157,16 @@ class ReviewFilterService:
 
     def current(self, now: datetime, *, with_part: bool = True) -> ServeFilter | None:
         """The filter of ``now``: paused members, the focus scope under 只做范围内 (unless lifted) and, while extra
-        practice runs with one, its part (``with_part`` False: without it). None when nothing restricts."""
+        practice runs with one, its part (``with_part`` False: without it), and the work started by hand that it
+        serves all the same (ServeFilter.started). None when nothing restricts."""
         setting = self.setting()
         if not setting.only and not setting.excluded and (not with_part or self.part() is None):
             return None
-        return serve_filter(excluded=self.paused_members(setting), only=self.only_members(setting),
-                            lifted=self.lifted(now), part=self.part() if with_part else None)
+        value = serve_filter(excluded=self.paused_members(setting), only=self.only_members(setting),
+                             lifted=self.lifted(now), part=self.part() if with_part else None)
+        if value is None or self._started is None:
+            return value
+        return replace(value, started=frozenset(self._started()))
 
     def apart(self, now: datetime, due_members: Collection[str]) -> Apart:
         """The home page's two apart counts over the due reviews' members (H10)."""

@@ -719,7 +719,9 @@ class StudyPathService:
                     for cid, values in stages.items()}
         # J6 R1/R4: a lesson that is only read is complete once read, else new content of its section.
         read_only = getattr(self.store.queries, 'read_only_lessons', None)
-        for cid, value in (read_only() if callable(read_only) else {}).items():
+        # learning_rows hold every enrolled lesson (course_progress_rows): with none there is nothing to read.
+        lesson_ids = {row['content_id'] for row in learning_rows}
+        for cid, value in (read_only(lesson_ids=lesson_ids) if callable(read_only) else {}).items():
             learning[cid] = 'done' if value['read'] else 'intro'
         needs_teaching = {row["content_id"] for row in learning_rows
                           if json.loads(row["checkpoint_json"]).get("initial_familiarity", {}).get(

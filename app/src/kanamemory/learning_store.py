@@ -2460,8 +2460,9 @@ class LearningStore:
             if only_recent and (_read_only_row(row) or row["result_json"] is not None
                                 or not recent_review(row, dispatch_priority(row))):
                 continue
-            if serve is not None and not serve.serves(row["content_id"], dispatch_priority(row)[0]):
-                continue   # design 12 H8, H9: left out by the learner's filter from tier 3 on
+            if serve is not None and not serve.serves(row["content_id"], dispatch_priority(row)[0], row["ability"]):
+                continue   # design 12 H8, H9: left out by the learner's filter from tier 3 on (section 22: not
+                           # work started by hand before its first formal rating)
             content_row = content_row_for(row)
             if _read_only_row(row):
                 # J6 R1: a lesson that is only read, not read yet: its explanation page with 「知道了」.
@@ -2686,7 +2687,8 @@ class LearningStore:
             if gate_closed(row):
                 # Not yet open (四之二): neither ready, waiting nor disabled.
                 continue
-            if serve is not None and not serve.allows(row["content_id"]) and self._filter_tier(
+            if serve is not None and not serve.allows(row["content_id"]) and not serve.started_work(
+                    row["content_id"], row["ability"]) and self._filter_tier(
                     row, now, exposure_times=exposure_times, review_day=review_day, daily_counts=daily_counts) >= 3:
                 continue   # design 12 H10: left out by the learner's filter; the home counts it apart
             # Decode only if this row reaches a consumer, at most once per row.
@@ -2742,8 +2744,8 @@ class LearningStore:
             else:
                 counts["ready"] += 1
         for cid, _ in self.read_only_unread(projection=projection):
-            if serve is not None and not serve.allows(cid):
-                continue   # design 12 H10: new content the learner's filter leaves out
+            if serve is not None and not serve.allows(cid) and not serve.started_work(cid):
+                continue   # design 12 H10: new content the learner's filter leaves out (not one started by hand)
             if self.prerequisite_status(cid, None, ready_ids=ready_ids)["blocked"]:
                 counts["blocked"] += 1
                 blocked_content.add(cid)

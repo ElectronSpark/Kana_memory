@@ -66,6 +66,10 @@ class ExtraStates(Protocol):
         """The same state read again at ``now`` (a point read), keeping its scope flag and card;
         None when it is no longer a learned state."""
 
+    def any_learned(self, now: datetime) -> bool:
+        """Whether read(now) would hold at least one state, answered by the first one found (the home page's
+        加练… entry; no due or scope view is computed). Optional: without it ExtraSession reads the pool."""
+
 
 class ConfirmedMissMove(Protocol):
     """The one schedule change practice can make: a confirmed miss (design 12 E3, 10 (6))."""

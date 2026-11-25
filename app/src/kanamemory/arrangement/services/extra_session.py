@@ -74,6 +74,7 @@ class ExtraSession:
         self._new_sitting, self._new_deck = new_sitting, new_deck
         self._refresh, self._probe_reuse = refresh, probe_reuse
         self._probe: tuple[datetime, list[ExtraEntry]] | None = None
+        self._learned: tuple[datetime, bool] | None = None   # the home entry's answer, reused like the probe
         self._batch_unchecked = True
         self._clear()
 
@@ -143,20 +144,30 @@ class ExtraSession:
 
     def stop(self) -> None:
         """Switch the mode off and forget everything of it (also its part, through ``on_stop``)."""
-        self._probe = None
+        self._probe = self._learned = None
         self._clear()
         self._on_stop()
 
     def learned(self, now: datetime) -> bool:
         """Whether some learned state is in the pool at ``now`` (the home page's 加练… entry, design 12 E9).
 
-        Uses the button's read (available(); reused for ``probe_reuse``) while the mode is off.
+        While the mode is off: the button's read when one is younger than ``probe_reuse``, else the pool
+        reader's any_learned (it stops at the first state; the counts are left to the page 加练; its answer is
+        reused for ``probe_reuse`` too), else one full read kept as the button's.
         """
         if self._active:
             return bool(self._pool)
-        if not (self._probe is not None and timedelta(0) <= now - self._probe[0] < self._probe_reuse):
+        def fresh(value):
+            return value is not None and timedelta(0) <= now - value[0] < self._probe_reuse
+        if fresh(self._probe):
+            return bool(self._probe[1])
+        check = getattr(self._states, "any_learned", None)
+        if check is None:
             self._probe = (now, list(self._states.read(now)))
-        return bool(self._probe[1])
+            return bool(self._probe[1])
+        if not fresh(self._learned):
+            self._learned = (now, bool(check(now)))
+        return self._learned[1]
 
     @property
     def batch_unchecked(self) -> bool:

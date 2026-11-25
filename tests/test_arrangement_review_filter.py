@@ -435,3 +435,74 @@ def test_a_paused_read_only_lesson_is_neither_offered_nor_counted(learning_app):
         assert learning.counts(kinds)["instruction"] == before - 1
     with serving(app.store, serve_filter(only={read["id"]})):
         assert learning.current(kinds, fair_new=True)["content"]["id"] == read["id"]
+
+
+# --- section 22 (brief J11 F3): work the learner started by hand -----------------------------------------------
+
+def test_work_started_by_hand_is_served_as_tiers_zero_to_two_until_its_first_rating():
+    serve = serve_filter(excluded={"lesson:x"}, only={"lesson:a"}, started={("lesson:x", "use"), ("lesson:r", None)})
+    for tier in (3, 4, None):
+        assert serve.serves("lesson:x", tier, "use")                 # paused, but started by hand: served
+        assert not serve.serves("lesson:x", tier, "understanding")   # its other ability is rated already
+        assert not serve.serves("lesson:x", tier)
+        assert serve.serves("lesson:r", tier) and serve.serves("lesson:r", tier, "use")   # a lesson as a whole
+        assert not serve.serves("lesson:c", tier, "use")
+    assert serves(serve, "lesson:x", 3, "use") and serves(None, "lesson:c", 3, "use")
+    # allows() (the deck, extra practice's pool, the apart counts) is not changed by it.
+    assert not serve.allows("lesson:x") and serve.started_work("lesson:x", "use")
+    assert not serve.started_work(None, None)
+    # Started work alone restricts nothing.
+    assert serve_filter(started={("lesson:x", "use")}) is None
+
+
+def test_the_service_asks_for_started_work_only_when_a_filter_restricts():
+    store = Settings()
+    preferences = ArrangementPreferences(store)
+    preferences.set_focus(Focus(scope=SCOPE))
+    asked = []
+
+    def started():
+        asked.append(1)
+        return {("lesson:b", "use")}
+    filters = ReviewFilterService(preferences, FocusService(preferences, Catalog({SCOPE: {"lesson:a"}})),
+                                  study_day=lambda at: at.date().isoformat(), started=started)
+    assert filters.current(NOW) is None and asked == []
+    filters.set_only(True)
+    serve = filters.current(NOW)
+    assert serve.started == {("lesson:b", "use")} and asked == [1]
+    assert serve.serves("lesson:b", 3, "use") and not serve.serves("lesson:b", 3, "understanding")
+
+
+def test_the_home_entry_asks_the_pool_for_its_first_state_and_leaves_the_counts_to_the_page():
+    """Brief J11 F5: ExtraSession.learned uses the reader's any_learned (no full read); a reader without it is
+    read in full as before; a fresh read of the 继续加练 button is reused."""
+    calls = []
+
+    class Pool:
+        def __init__(self, found):
+            self.found = found
+
+        def read(self, now, **kwargs):
+            calls.append("read")
+            return ["state"] if self.found else []
+
+        def any_learned(self, now):
+            calls.append("any")
+            return self.found
+
+    class OldPool:
+        def read(self, now, **kwargs):
+            calls.append("read")
+            return ["state"]
+
+    def session(pool):
+        return ExtraSession(pool, new_sitting=lambda: None, new_deck=lambda items, sitting: None)
+    assert session(Pool(True)).learned(NOW) is True and calls == ["any"]
+    del calls[:]
+    assert session(Pool(False)).learned(NOW) is False and calls == ["any"]
+    del calls[:]
+    assert session(OldPool()).learned(NOW) is True and calls == ["read"]
+    del calls[:]
+    reused = session(Pool(False))
+    reused.available(NOW)                  # the button's full read ...
+    assert reused.learned(NOW + timedelta(seconds=10)) is False and calls == ["read"]   # ... is reused

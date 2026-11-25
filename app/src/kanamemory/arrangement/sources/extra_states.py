@@ -63,6 +63,31 @@ class StoreExtraStates:
         entries = [*self.kana(now, scope), *self.course(now, scope)]
         return entries if serve is None else [entry for entry in entries if allows(serve, entry_member(entry))]
 
+    def any_learned(self, now: datetime) -> bool:
+        """Whether read(now) holds a state: the first course unit or kana state that read() would keep (same
+        tests and the same filter, with the part), without computing any due or view (brief J11 F5)."""
+        serve = self._serve(now)
+        kinds = tuple(self._course_kinds())
+        if kinds:
+            rows = self._states.learning.iter_pending_questions(kinds)
+            try:
+                for row in rows:
+                    if row["review_count"] and row["scheduler_state_json"] and allows(serve, row["content_id"]):
+                        return True
+            finally:
+                rows.close()
+        kana = set(self._kana_kinds())
+        if not kana:
+            return False
+        unavailable = self._store.unavailable_content_ids(now)
+        for card in self._store.scheduling_cards(aliases=True):
+            content_id, skill, script = card["content_id"], card["skill"], card["script"]
+            if (card["review_count"] > 0 and not card["suspended"] and skill not in WORD_SKILLS and skill in kana
+                    and content_id not in unavailable and card.get("mode_reviewed") is not False
+                    and direction_allowed(content_id, skill, script) and allows(serve, kana_member(content_id, script))):
+                return True
+        return False
+
     def reread(self, entry: ExtraEntry, now: datetime) -> ExtraEntry | None:
         view = self._states.view(entry.ref, now)
         if view.last_rated is None:
