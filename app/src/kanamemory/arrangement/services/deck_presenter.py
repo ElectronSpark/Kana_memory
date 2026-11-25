@@ -41,7 +41,7 @@ class DeckPresenter:
         progress = f"第 {card.number} 题" + (f" · 还有 {pending} 题" if pending else " · 最后一题")
         return DeckQuestionModel(
             header=self._header, progress=progress, prompt=texts.prompt, mode=card.mode, task=texts.task,
-            cue=texts.cue,
+            cue=texts.cue, prompt_view=texts.prompt_view,
             note=self._note if card.number == 1 else "",
             options=texts.options if card.mode is DeckAnswerMode.CHOICE else (),
             audio_text=texts.audio_text,

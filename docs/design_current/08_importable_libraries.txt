@@ -649,7 +649,8 @@ Q12 demo 构建是否也演示安装一个 extension 示例库（有利于公开
   - 产出核心库 manifest 生成器与 validate_library_pack（纯规则＋工具），不接 App。
 阶段 1 注册表、有效目录、可用性过滤（无安装 UI） [I（注册表、有效目录、备份校验、首页孤儿计数；8.2 读取点与写入口过滤 I，2026-11-08，见第 16.3 节）]
   - content_library_rules.py（纯规则：manifest/注册表校验、合并策略表、冲突解析、可用性函数）；
-  - content_libraries.py（服务：读注册表、构造有效目录、回退、catalogue_token）；
+  - content_pack.py 的库层（读注册表 active_registry、库根 library_root、有效目录 effective_catalogue 与 library_layers、
+    回退、目录令牌 _catalogue_token）；安装、停用、移除等服务在 content_library_service.py；
   - load_namespace 改为从有效目录取值；核心库预装；备份校验新增键校验；
   - 8.2 全部读取点与写入口接入 AvailabilityView；首页/学习库/记录页显示孤儿状态。
   - 验证：用“核心库＋一个测试 extension 库（demo 内容复制改 ID）”跑停用/启用往返，断言进度库字节不变。

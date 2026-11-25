@@ -519,6 +519,8 @@ class DeckQuestionModel:
     answer: str = ""
     answer_cells: object = field(default=None, compare=False)   # DeckTexts.answer_cells, for the shown answer
     cue: object = field(default=None, compare=False)   # DeckTexts.cue: the task as the question page shows it (N12)
+    # DeckTexts.prompt_view: the prompt's widgets as the question page draws them (N12); None: ``prompt`` as a label.
+    prompt_view: object = field(default=None, compare=False)
     play_caption: str = DECK_PLAY
     submit_caption: str = DECK_SUBMIT
     input_hint: str = DECK_INPUT

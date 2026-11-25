@@ -3,9 +3,9 @@
 question -> result -> next question -> end, over a PracticeDeck, its
 DeckPresenter and the page functions of practice_deck_page. The app hands in
 the deck and the presenter (a page module imports no service) and
-callbacks: show(header, widgets) puts a page on screen and returns a
+callbacks: show(header, widgets, back) puts a page on screen and returns a
 liveness check of that page (a button of a page that is no longer shown does
-nothing), failed(error) reports an answer that could not be recorded (the
+nothing; ``back`` is the page's leave action, for the back key), failed(error) reports an answer that could not be recorded (the
 card stays open for the same answer again), unreadable(error) reports that
 the next card's state could not be read (a busy database: the deck ends
 there), speak(text), now() and leave(). Screen and token handling stay with
@@ -21,7 +21,7 @@ from collections.abc import Callable
 from ..model import DeckOutcome
 from . import practice_deck_page as pages
 
-Show = Callable[[str, list], Callable[[], bool]]
+Show = Callable[[str, list, Callable[[], object]], Callable[[], bool]]
 
 
 class DeckFlow:
@@ -63,7 +63,9 @@ class DeckFlow:
             return run
 
         widgets = build(live)
-        shown["live"] = self._show(header, widgets)
+        # The back key on every deck page does what its leave button does, through the same handler
+        # (先到这里 / 结束加练 / 结束练习, and 完成 on the end page): the leave pause and records stay as with the button.
+        shown["live"] = self._show(header, widgets, live(self._leave))
 
     def _question(self, first: bool = False) -> bool:
         deck, presenter = self._deck, self._presenter

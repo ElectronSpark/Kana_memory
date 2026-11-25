@@ -90,7 +90,10 @@ class _QuestionForm:
             rows.extend(_cue_rows(model.cue()))
         elif model.task:
             rows.append(u.label(model.task, size=14))
-        rows.append(u.label(model.prompt, size=22, text_role="study"))
+        # Design 12 N12: the prompt as the ordinary question page draws it (readings, emphasised target);
+        # a view that gives None (or none given): the prompt as a plain label.
+        drawn = model.prompt_view() if model.prompt_view is not None else None
+        rows.extend([u.label(model.prompt, size=22, text_role="study")] if drawn is None else drawn)
         if model.audio_text and self._on_play is not None:
             rows.append(u.button(model.play_caption, lambda widget: self._on_play(model.audio_text)))
         if model.mode is DeckAnswerMode.CHOICE:

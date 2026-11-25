@@ -8,8 +8,9 @@ inside a transaction the LearningStore owns, writes what a start writes:
   qualifying question): profile ``probe_rules.probe_profile``, stage check,
   the unit ready, the probe question in the unit's queue (the planned one when
   it qualifies, else an exchange with a replacement receipt). Teaching (the
-  lesson's very first scope when nothing can be probed, or its explanation was
-  already shown): ``probe_rules.plain_profile``, stage intro. An ordinary
+  lesson's very first scope when nothing can be probed, its explanation was
+  already shown, or its own page was opened within the last 24 hours, design 12
+  N15): ``probe_rules.plain_profile``, stage intro. An ordinary
   first check (a later ability once the lesson was taught; listening):
   ``plain_profile``, stage bridge with the after-teaching spacing.
 - GateReader: one dispatch or count pass's view of which introduction rows
@@ -404,7 +405,11 @@ def open_scope_in_transaction(learning, content_id, *, instruction_scope, expect
 
     untouched = track is not None and _untouched(learning, row, abilities)
     if instruction_scope is None and view.fresh:
-        if untouched and view.probing:
+        # Design 12 N15: a lesson whose own page was opened within the learning day (24 hours) is taught, not probed.
+        from .arrangement.rules.recent import LEARNING_DAY
+        from .retention_check import page_viewed_at
+        read = probe_rules.page_read_recently(page_viewed_at(db, content_id), now, LEARNING_DAY)
+        if untouched and view.probing and not read:
             for ability in probe_rules.order(track):
                 if ability not in abilities:
                     continue
@@ -424,7 +429,7 @@ def open_scope_in_transaction(learning, content_id, *, instruction_scope, expect
                         break   # the abilities could not be given their own starts: teach the lesson
                 return start_probe(row, ability, kept, planned)
             abilities = list(_teaching.abilities(db, row))
-        # Nothing to probe, or the explanation was already shown: the lesson is taught.
+        # Nothing to probe, the explanation was already shown, or its page was just read (N15): the lesson is taught.
         _write_profile(db, row, probe_rules.plain_profile(abilities, now))
         _claim(db, row, now)
         return {"route": "teach"}

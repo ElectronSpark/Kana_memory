@@ -585,6 +585,13 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             return KanaMemory.tutor_back(self)
         if self.page in AI_PRACTICE_PAGES:
             return KanaMemory.request_ai_practice_exit(self)
+        if self.page == "practice_deck":
+            # A practice deck page (巩固, 加练, the batch's deck): back = its leave button, the same handler.
+            content = self.content_slot.children[0] if self.content_slot.children else None
+            back = getattr(getattr(content, "content", content), "_back_action", None)
+            if back is not None:
+                back()
+                return True
         KanaMemory.cancel_ai_generation(self, navigation=True)
         if self.page == 'feedback_batch':
             self.show_feedback_manager()
@@ -4628,8 +4635,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         from .arrangement.ui.practice_deck_flow import DeckFlow
         from .domain import utc_now
 
-        def show(header, widgets):
-            self.screen("practice_deck", header, *widgets)
+        def show(header, widgets, back):
+            body = self.screen("practice_deck", header, *widgets)
+            if body is not None:   # the back key acts through the page's own leave button (_go_back_navigate)
+                body._back_action = back
             token = self._page_token
             return lambda: self.page == "practice_deck" and self._page_token == token
 

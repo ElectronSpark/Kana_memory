@@ -119,9 +119,41 @@ class CourseDeckLane:
                          # line that is the answer sentence is dropped; the sentence is shown once, in the
                          # answer line with its readings above (before, the inline-kana answer never matched).
                          explanation=distinct_explanation(question.get("feedback", ""), answer),
-                         audio_text=str(question.get("audio_text") or "") if question.get("requires_audio") else "",
+                         # As on the course question page: a question with audio is heard (播放题目), its
+                         # prompt text is not shown (prompt_rows draws none for it).
+                         audio_text=str(question.get("audio_text") or ""),
                          # Design 12 N12: the task as the course question page shows it, read when it is shown.
-                         cue=lambda shown=dict(question): self.cue(shown))
+                         cue=lambda shown=dict(question): self.cue(shown),
+                         prompt_view=lambda shown=dict(question): self.prompt_rows(shown))
+
+    def prompt_rows(self, question: Mapping[str, object]) -> list | None:
+        """The prompt of ``question`` as the course question page draws it (learning_ui.show_learning_question).
+
+        The same presentation function (question_support.build_prompt_block; multi_cloze_ui.prompt_view for a
+        multi-gap sentence, with no saved draft) and the same reading rule: the learner's prompt display
+        setting and the readings of words not yet learned (course_planning.known_ids), so the deck shows no
+        reading the question page would hide. Nothing for a question with audio (the page plays it instead);
+        None for a pitch question: the deck keeps its prompt as a plain label (the question page draws its
+        pitch editor there).
+        No window here: the cells wrap at a phone's width, as the deck's answer cells do.
+        """
+        from ... import ui_components as u
+        from ...course_planning import known_ids
+        from ...pitch_practice import is_pitch_question
+        from ...question_support import PROMPT_DISPLAY_SETTING, build_prompt_block, clean_prompt_preferences
+        question = dict(question)
+        if question.get("audio_text"):
+            return []
+        if is_pitch_question(question):
+            return None
+        store = getattr(self, "_store", None)
+        queries = getattr(store, "queries", None)
+        known = known_ids(queries) if queries is not None else None
+        preferences = clean_prompt_preferences(store.get_setting(PROMPT_DISPLAY_SETTING, {}) if store else {})
+        if question.get("input_mode") == "multi_cloze":
+            from ...multi_cloze_ui import prompt_view
+            return [prompt_view(None, u, question, {}, preferences, known_ids=known)]
+        return [build_prompt_block(None, question, preferences, size=20, known_ids=known)]
 
     def cue(self, question: Mapping[str, object]) -> tuple:
         """The task of ``question`` as the course question page shows it (instruction_view with the known set)."""

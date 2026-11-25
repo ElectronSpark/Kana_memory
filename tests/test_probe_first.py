@@ -666,3 +666,25 @@ def test_new_content_attribution_covers_probe_failure_teaching_and_first_rating(
     units = [event.unit for event in attribute(events_, {"u1": first})]
     # Design 12 N3: reviews on later days (two and fifteen days after the first rating) are course review.
     assert units == [Unit.NEW, Unit.NEW, Unit.NEW, Unit.COURSE, Unit.COURSE]
+
+
+
+def test_the_probe_page_offers_still_unknown_and_show_answer_in_one_row(learning_app, monkeypatch):
+    """「还不会」 and 「显示答案」 stand in one row, 「还不会」 first, with equal widths (flex 1 each, nothing fixed)."""
+    from kanamemory import ui_components as component_ui
+    from support.fake_ui import descendants
+    styles, fake = {}, component_ui.button
+
+    def button(text, handler, **style):
+        styles.setdefault(text, []).append(style)
+        return fake(text, handler, **style)
+    monkeypatch.setattr(component_ui, "button", button)
+    app = learning_app
+    start(app)
+    assert app.page == "learning_question" and app._learning_question["kind"] == "vocab_meaning"
+    rows = [node for node in descendants(app.body)
+            if any(child.text in {"还不会", "显示答案"} for child in node.children)]
+    assert len(rows) == 1 and [child.text for child in rows[0].children] == ["还不会", "显示答案"]
+    for caption in ("还不会", "显示答案"):
+        style = styles[caption][-1]
+        assert style.get("flex") == 1 and "width" not in style and "min_width" not in style, (caption, style)

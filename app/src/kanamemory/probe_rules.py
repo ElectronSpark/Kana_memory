@@ -187,6 +187,16 @@ def explanation_shown(checkpoints: Iterable[Mapping], *, batch_route: bool = Fal
     return False
 
 
+def page_read_recently(viewed_at: datetime | None, now: datetime, window: timedelta) -> bool:
+    """Design 12 N15: the lesson's own page (its explanation) was opened less than ``window`` before ``now``.
+
+    Such a lesson is not probed when it is started: a probe right after reading the answer would be taken for
+    knowledge; it is taught instead. ``viewed_at`` None: never opened. A moment after ``now`` (a clock set
+    back) counts as read.
+    """
+    return viewed_at is not None and now - viewed_at < window
+
+
 def teaching_pending(checkpoints: Iterable[Mapping]) -> bool:
     """Some scope failed its probe or diagnostic and waits for teaching."""
     return any((checkpoint.get("initial_familiarity") or {}).get("diagnostic_state") == "needs_teaching"

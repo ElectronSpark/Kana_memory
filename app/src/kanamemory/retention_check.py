@@ -70,6 +70,19 @@ def exposure_times(store, now=None):
     return project_exposure_times(store._db, result)
 
 
+def page_viewed_at(db, target_id):
+    """When the lesson's own page (source "instruction", the detail page) was last opened, or None (reads only).
+
+    The one record design 12 N15 reads; ``db`` is the caller's connection (inside its transaction)."""
+    row = db.execute('SELECT value_json FROM app_setting WHERE key=?',
+                     (EXPOSURE_PREFIX + sha256(target_id.encode()).hexdigest(),)).fetchone()
+    if row is None:
+        return None
+    stamps = [_date(record['at']) for record in validate_exposure(json.loads(row[0]))['abilities'].values()
+              if record['source'] == 'instruction']
+    return max(stamps, default=None)
+
+
 def validate_episode(value):
     if (not isinstance(value, dict) or set(value) != {'format','version','id','status','created_at_utc','purpose','entries'}
             or value['format'] != FORMAT or type(value['version']) is not int or value['version'] != 1

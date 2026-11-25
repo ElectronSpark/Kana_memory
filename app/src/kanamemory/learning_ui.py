@@ -709,7 +709,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if item.get("depends_on"):
             children.append(u.button("前置知识", lambda w: self.show_learning_dependencies(item), compact=True))
         enrolled = self.learning_store.get_item(item["id"])
-        if verified_teaching and enrolled and enrolled["stage"] == "intro":
+        # A lesson not started yet (no profile) is decided by the page's exposure record below (design 12 N15:
+        # read within 24 hours before its start, it is taught); a started one waiting for teaching is taught here.
+        if (verified_teaching and enrolled and enrolled["stage"] == "intro"
+                and (enrolled.get("checkpoint") or {}).get("initial_familiarity")):
             self.learning_store.mark_instruction_exposed(item["id"], expected_introduction_id=enrolled["introduction_id"])
         if verified_teaching:
             children.append(u.button("继续学习" if enrolled else "学习这一用法", lambda w: self.enroll_learning(item), primary=True))
@@ -779,9 +782,11 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         plan = self.learning_store.enroll_with_prerequisites([item], self.learning_items_available(views=True))
         from .practice_round import restart
         restart(self.store, lane="main")
-        if getattr(self, "_learning_detail_item", {}).get("id") == item["id"]:
-            # Joining from an answer-bearing detail page is already exposure.
-            # It must not become an immediate, supposedly unseen placement test.
+        # Design 12 N15: a lesson whose page was read within 24 hours before its start is taught, whichever way it is
+        # joined (the page's exposure record, read when its scope opens). Its own page's button, pressed while that
+        # page is on screen, also stamps the teaching as shown (the explicit start and its place before due work); the
+        # last detail page shown no longer stamps a join made from anywhere else.
+        if self.page == "learning_detail" and getattr(self, "_learning_detail_item", {}).get("id") == item["id"]:
             saved = self.learning_store.get_item(item["id"])
             self.learning_store.mark_instruction_exposed(item["id"], expected_introduction_id=saved["introduction_id"])
         for content_id in plan["ordered_ids"]:

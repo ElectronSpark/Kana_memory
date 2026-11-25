@@ -432,6 +432,10 @@ class DeckTexts:
     # A callable giving the task as the ordinary question page shows it (question_instruction_ui.instruction_view:
     # the short cue, its role, the Chinese hint, whether it is folded; design 12 N12); None: ``task`` as text.
     cue: object = field(default=None, compare=False)
+    # A callable giving the prompt's widgets as the ordinary question page draws them (its readings above the
+    # written forms and its emphasised target, by that page's own presentation function and reading rule;
+    # design 12 N12), called when the question is shown; None, or a view giving None: ``prompt`` as a plain label.
+    prompt_view: object = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
