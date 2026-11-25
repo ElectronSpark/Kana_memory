@@ -24,9 +24,10 @@ min_os_version = "26"
 target_os_version = "36"
 android_abis = ["arm64-v8a", "x86_64"]
 base_theme = "Theme.MaterialComponents.Light.NoActionBar"
-# The template's splash and adaptive-icon background colour (rendered on create only; the adaptive foreground
-# is itself a full vermilion square, so a project generated before this keeps a correct launcher icon).
-splash_background_color = "#E0452F"
+# The template's splash and adaptive-icon background colour (rendered on create only): white, as the app's
+# pages are light, so the start shows no coloured flash; the adaptive foreground is itself a full vermilion
+# square, so the launcher icon does not show this colour.
+splash_background_color = "#FFFFFF"
 # One MainActivity per task; launcher/share intents reach it via onNewIntent. configChanges is
 # hard-coded by the template, so environment/run_app.ps1 adds assetsPaths after generation.
 android_manifest_activity_attrs_extra_content = 'android:launchMode="singleTask"'

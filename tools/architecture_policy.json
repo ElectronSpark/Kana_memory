@@ -8,6 +8,7 @@
   "app/src/kanamemory/answer_policy/__init__.py": [],
   "app/src/kanamemory/answer_policy/overlay.py": ["__future__", "collections.abc", "dataclasses", "re", "unicodedata"],
   "app/src/kanamemory/answer_policy/numbers.py": ["__future__", "re"],
+  "app/src/kanamemory/answer_policy/near_miss.py": ["__future__", "dataclasses", "re", "unicodedata", ".overlay"],
   "app/src/kanamemory/answer_policy/source.py": ["__future__", "collections.abc", "functools", "..content_caches", "..content_pack", ".", "..learning_content", "..learning_questions"],
   "app/src/kanamemory/answer_policy/kana_answer.py": ["__future__", "collections.abc", "hashlib", "json", "re", "..content_caches", ".", "..", "..learning_questions", ".source"],
   "app/src/kanamemory/question_readings.py": ["__future__", "collections.abc", "functools", "re", ".", ".content_pack", ".question_kinds", ".learning_questions", ".learning_content", ".question_presentation", ".content_caches"],

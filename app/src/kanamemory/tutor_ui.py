@@ -532,7 +532,9 @@ class TutorUIMixin:
         children = [build_answer_feedback(result), u.row(answer, u.speaker_button(
             play_answer, "朗读答案对应的日语")) if text else answer]
         entered = result.get("answered_text", "")
-        if not result.get("correct") and entered and entered != q["answer"]:
+        from .spelling_display import near_miss_block
+        near = near_miss_block(self, q, result, text_role=learning_text_role(q, "answer"))
+        if not result.get("correct") and entered and entered != q["answer"] and near is None:
             if pitch:
                 entered = answer_label(q, entered)
             else:
@@ -542,6 +544,8 @@ class TutorUIMixin:
         note = known_wrong_note(q, result)
         if note:
             children.append(u.label(shown_explanation(q, note), size=15))
+        if near is not None:
+            children.append(near)
         explanation = str(result.get("explanation") or q.get("feedback") or "").strip()
         if explanation and explanation != answer_text(q).strip():
             children.append(u.label(shown_explanation(q, explanation), size=15))

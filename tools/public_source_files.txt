@@ -63,6 +63,7 @@ tests/test_answer_policy.py
 tests/test_answer_overlay.py
 tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
+tests/test_near_miss_answers.py
 tests/test_probe_first.py
 tests/test_arrangement_recent.py
 tests/test_arrangement_review_filter.py
@@ -75,6 +76,7 @@ app/src/kanamemory/answer_feedback.py
 app/src/kanamemory/answer_input.py
 app/src/kanamemory/answer_policy/__init__.py
 app/src/kanamemory/answer_policy/kana_answer.py
+app/src/kanamemory/answer_policy/near_miss.py
 app/src/kanamemory/answer_policy/numbers.py
 app/src/kanamemory/answer_policy/overlay.py
 app/src/kanamemory/answer_policy/source.py

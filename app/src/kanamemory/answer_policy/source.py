@@ -1,4 +1,5 @@
-"""The installed answer overlay row of a question's own template, and the lesson forms of rule T8.
+"""The installed answer overlay row of a question's own template, the lesson forms of rule T8, and
+the lesson readings and kana answers the near-miss rule (near_miss, rule 10) reads.
 
 Content lookup only: no Toga, learner database, platform or clock. The namespace is read at import
 like question_readings (a library change takes effect after a restart). A row is found from the
@@ -16,7 +17,7 @@ from functools import lru_cache
 
 from ..content_caches import content_cache, register as register_content_cache
 from ..content_pack import load_namespace
-from . import overlay
+from . import near_miss, overlay
 
 # Absent in demo builds and in packs without rows: then every question keeps its own policy.
 _OVERLAY = load_namespace(overlay.NAMESPACE, {})
@@ -148,6 +149,77 @@ def policy_for(question, *, row_value=_NO_ROW, normal=None):
     found = question_row(question) if row_value is _NO_ROW else row_value
     lesson = lesson_forms(question.get("target_id")) if question.get("kind") == overlay.RECALL_KIND else None
     return overlay.effective(question, found, lesson=lesson, normal=normal)
+
+
+def _fold_normal(text):
+    from ..learning_questions import _normal
+    return overlay.fold_katakana(_normal(text))
+
+
+def _readings_of(item):
+    values = [item.get("reading"), *(item.get("accepted_readings") or ()), *(item.get("alternative_readings") or ())]
+    return {_fold_normal(v) for v in values if isinstance(v, str) and v.strip()}
+
+
+@content_cache
+@lru_cache(maxsize=1024)
+def word_readings(content_id):
+    """The readings of one word lesson (its reading, accepted and dictionary readings), normalised with
+    katakana folded, or an empty set."""
+    from ..learning_content import learning_item_view
+    item = learning_item_view(content_id) if isinstance(content_id, str) else None
+    if not isinstance(item, Mapping) or item.get("family") != "word":
+        return frozenset()
+    return frozenset(_readings_of(item))
+
+
+def near_miss_candidates(question, normal):
+    """The kana answers a near miss is measured against: the question's (effective) accepted answers and
+    the all-kana renderings of its reading forms (answer_policy.kana_answer), normalised with ``normal``."""
+    from . import kana_answer
+    accepted = question.get("accepted_answers", [question.get("answer")])
+    values = [normal(x) for x in (accepted if isinstance(accepted, list) else []) if isinstance(x, str)]
+    try:
+        values += [normal(x) for x in kana_answer._reading_form_candidates(question)]
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        pass
+    return [x for x in dict.fromkeys(values) if near_miss.is_kana(x)]
+
+
+def graded_near_miss(question, value, normal):
+    """Rule P2 for the judge: the near miss of a typed kana answer to a word question that is not strict.
+
+    ``question``: the policy view the judge reads; ``value``: the answer normalised with ``normal``.
+    None for grammar questions, strict ones and an answer that is a form of this same lesson the judge
+    knows (its readings, the question's alternative answers). Another lesson's word one or two kana
+    away IS a near miss: that confusion is judged wrong and shown.
+    """
+    if (question.get("family") != "word" or question.get("input_mode") != "text" or question.get("strict")
+            or not near_miss.is_kana(value)):
+        return None
+    alternatives = question.get("alternative_answers")
+    exempt = {normal(x) for x in (alternatives if isinstance(alternatives, list) else ()) if isinstance(x, str)}
+    exempt |= word_readings(question.get("target_id"))
+    return near_miss.find(value, near_miss_candidates(question, normal), exempt=exempt)
+
+
+def shown_near_miss(question, answered_text):
+    """Result pages: the near miss of a typed kana answer by P2's distance alone (no exemptions), or None.
+
+    The caller shows it only under a stored WRONG verdict, whatever gave it (this rule, a strict row, a
+    known-wrong row; grammar answers too). Display only, from the stored answer and the question snapshot
+    when the page is drawn: nothing is stored and the stored verdict never changes.
+    """
+    if (not isinstance(question, Mapping) or question.get("input_mode") != "text"
+            or not isinstance(answered_text, str) or not answered_text.strip()):
+        return None
+    from ..learning_questions import typed_answer_normal
+    try:
+        view = overlay.view(question, policy_for(question))
+        normal = typed_answer_normal(view)
+        return near_miss.find(normal(answered_text), near_miss_candidates(view, normal))
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        return None
 
 
 def known_wrong_feedback(question, answered_text) -> str:

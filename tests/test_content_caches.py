@@ -49,6 +49,7 @@ CACHES = {
     "study_routes.py::_BUILT": REGISTERED,
     "answer_policy/source.py::_LOCATED": REGISTERED,  # its key does not name the lesson it was located in
     "answer_policy/source.py::lesson_forms": REGISTERED,
+    "answer_policy/source.py::word_readings": REGISTERED,
     "answer_policy/kana_answer.py::_JUDGED": REGISTERED,  # judged with the catalogue's word tables
     # The source itself: keyed by file path and stamp, dropped by content_pack.clear_cache.
     "content_pack.py::_mirror": "the registry mirror, by path and stamp; clear_cache",

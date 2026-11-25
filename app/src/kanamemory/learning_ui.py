@@ -2489,7 +2489,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if result.get("diagnostic_needs_teaching"):
             children.append(u.label("先补学这项内容，再安排独立练习。", size=14, color=u.MUTED))
         entered = result.get("answered_text", result.get("answer", ""))
-        if entered and not correct and entered != q["answer"] and not compare_reading:
+        from .spelling_display import near_miss_block
+        near = near_miss_block(self, q, result, text_role=learning_text_role(q, "answer"), comparison=not compare_reading)
+        if entered and not correct and entered != q["answer"] and not compare_reading and near is None:
             if is_pitch_question(q):
                 entered = pitch_answer_label(q, entered)
             else:
@@ -2503,6 +2505,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         note = known_wrong_note(q, result)
         if note:
             children.append(u.label(shown_explanation(q, note)))
+        if near is not None:
+            children.append(near)
         if explanation and explanation != str(q["answer"]).strip():
             children.append(u.label(shown_explanation(q, explanation)))
         from .personal_content_notes_ui import append_notes

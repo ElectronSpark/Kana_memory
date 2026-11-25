@@ -1291,7 +1291,9 @@ def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True,
     accepted and known-wrong answers with the installed overlay row of its own template and, for
     vocab_recall, the lesson reading (T8); read now, never stored. ``policy``: that policy when the
     caller already has it. A typed answer also matches with kanji numerals as digits (T5); a typed grammar
-    answer may use either kana script (T7) unless it is a known-wrong answer as written.
+    answer may use either kana script (T7) unless it is a known-wrong answer as written. A typed kana
+    answer to a word question that is not strict and is a near miss of an accepted answer
+    (answer_policy.source.graded_near_miss) is wrong instead of unresolved.
     reading_forms=False: the judge before 2026-11-18, without answers that write kanji words as their
     readings (reading_form_answers). Only for checking a result stored by that judge.
     """
@@ -1365,6 +1367,16 @@ def grade_learning_answer(question: dict, answer, *, reading_forms: bool = True,
         if own:
             # The row's feedback for this very wrong answer comes before the template's own.
             message = own + ("\n" + message if isinstance(message, str) and message.strip() else "")
+        result = {"status": "incorrect", "correct": False, "message": message, "scorable": True}
+        if grader is not None:
+            result.update(grader.incorrect_fields)
+        return result
+    # Near miss (design 03): a typed kana answer to a word question one or two kana from an accepted
+    # answer is an ordinary wrong answer; how it differs is shown by the result page, not stored.
+    near = answer_source.graded_near_miss(question, value, normal)
+    if near is not None:
+        feedback = question.get("feedback")
+        message = "；".join(near.lines) + ("\n" + feedback if isinstance(feedback, str) and feedback.strip() else "")
         result = {"status": "incorrect", "correct": False, "message": message, "scorable": True}
         if grader is not None:
             result.update(grader.incorrect_fields)

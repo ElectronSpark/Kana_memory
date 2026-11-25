@@ -120,3 +120,36 @@ def build_spelling_comparison(app, expected, actual, *, correct=False, assisted=
         children.append(label("…", size=size * 2 / 3, color=MUTED, margin_bottom=0,
                               text_role=text_role))
     return col(*children, margin_bottom=8)
+
+
+def near_miss_block(app, question, result, *, text_role="study", comparison=True):
+    """A wrong typed kana answer one or two kana from an accepted answer, on a result page (design 03).
+
+    Only under a stored wrong verdict of an unaided answer (whatever gave it: the near-miss rule, a strict
+    row, a known-wrong row; never a revealed or helped one); the near miss is measured again from the stored answer and the question when the page is drawn
+    (answer_policy.source.shown_near_miss), nothing is stored. 「我的回答：」 beside this module's spelling
+    comparison (the right answer above with its missing or wrong kana in red, the answer as typed below
+    with its extra kana in red, a blank where a kana is missing), then one line per difference.
+    comparison=False: only the lines, for a page that already shows the comparison. None: nothing to show.
+    """
+    if (not isinstance(question, dict) or not isinstance(result, dict) or result.get("correct") is not False
+            or result.get("assisted") or result.get("revealed") or result.get("outcome", "incorrect") != "incorrect"):
+        return None  # a revealed or helped answer keeps its plain 「我的回答：」 row without error marks
+    from .multi_cloze import is_cloze_question
+    from .pitch_practice import is_pitch_question
+    if is_cloze_question(question) or is_pitch_question(question):
+        return None
+    from .answer_policy.source import shown_near_miss
+    found = shown_near_miss(question, result.get("answered_text", result.get("answer", "")))
+    if found is None:
+        return None
+    from .ui_components import col, row, label, MUTED, font_scale
+    children = []
+    if comparison:
+        width = (5 * 12 * 96 / 72 + 4) * font_scale()
+        children.append(row(label("我的回答：", size=12, color=MUTED, width=width),
+                            build_spelling_comparison(app, found.target, found.answer, text_role=text_role,
+                                                      reserved_width=width),
+                            align_items="start", margin_bottom=0))
+    children.extend(label(line, size=13, color=MUTED, margin_bottom=0) for line in found.lines)
+    return col(*children, margin_bottom=8)

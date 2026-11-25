@@ -162,7 +162,9 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         children=[build_answer_feedback(result),answer_furigana_block(self,q,size=20,text_role=learning_text_role(q,'answer'))]
         text=self._learning_answer_audio_text(q)
         if text:children[-1]=u.row(children[-1],u.speaker_button(lambda w:self.speak_text(text)))
-        if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer']:
+        from .spelling_display import near_miss_block
+        near = near_miss_block(self, q, result, text_role=learning_text_role(q, 'answer'))
+        if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer'] and near is None:
             children.append(entered_answer_row(u, shown_answer(q, result['answered_text']), text_role=learning_text_role(q, 'answer')))
         explanation = distinct_explanation(q.get('feedback'), q['answer'])
         asked = asked_text(q, explanation)
@@ -170,6 +172,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         from .answer_result_ui import known_wrong_note
         note = known_wrong_note(q, result)
         if note: children.append(u.label(shown_explanation(q, note), size=15))
+        if near is not None: children.append(near)
         if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
         children.append(u.label('本次只作检查，不调整复习。' if not result['assisted'] else '这次使用了帮助，只记录练习。',size=12,color=u.MUTED))
         def advance(widget=None,**kwargs):

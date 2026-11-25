@@ -48,6 +48,11 @@ def test_icon_setting_is_shared_by_both_editions_and_every_implied_file_exists()
     assert on_disk == listed - {"tools/render_app_icon.py"}, sorted(on_disk ^ (listed - {"tools/render_app_icon.py"}))
 
 
+def test_splash_background_is_white_like_the_pages():
+    android = tomllib.loads((APP / "pyproject.toml").read_text("utf-8"))["tool"]["briefcase"]["app"]["kanamemory"]["android"]
+    assert android["splash_background_color"] == "#FFFFFF"
+
+
 def test_icon_drawings_are_drawn_not_typeset():
     for name in ("kanamemory_icon.svg", "kanamemory_icon_mono.svg"):
         text = (APP / "icons/source" / name).read_text("utf-8")

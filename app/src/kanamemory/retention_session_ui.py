@@ -510,7 +510,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
             self.speak_text(text)
 
         children = [context['budget'], self.diagnostic_permission_control(context), build_answer_feedback(viewed), u.row(answer, u.speaker_button(play_answer)) if text else answer]
-        if viewed.get('correct') is not True and result['answered_text'] and result['answered_text'] != q['answer']:
+        from .spelling_display import near_miss_block
+        near = near_miss_block(self, q, viewed, text_role=learning_text_role(q, 'answer'))
+        if viewed.get('correct') is not True and result['answered_text'] and result['answered_text'] != q['answer'] and near is None:
             entered = answer_label(q, result['answered_text']) if pitch else shown_answer(q, result['answered_text'])
             children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, 'answer')))
         explanation = distinct_explanation(q.get('feedback'), answer_text(q))
@@ -519,8 +521,9 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         from .answer_result_ui import known_wrong_note
         note = known_wrong_note(q, result)
         if note: children.append(u.label(shown_explanation(q, note), size=15))
+        if near is not None: children.append(near)
         if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
-        formal = (result.get('assessment', {}).get('settlement_channel') == 'formal'
+        formal =(result.get('assessment', {}).get('settlement_channel') == 'formal'
                   and value['purpose'] == 'check_and_adjust' and not row['credit_revoked'])
         children.append(u.label('这次是接受帮助后的练习。' if result['assisted'] else '按本次作答调整此项复习。' if formal else '检查已保存，复习间隔不变。', size=12, color=u.MUTED))
         detail = (lambda w: self.show_material_candidate_facts(value['material_id'], q['target_id'])) if q['target_id'].startswith('material-candidate:') else (lambda w: self.show_learning_detail(q['target_id']))
