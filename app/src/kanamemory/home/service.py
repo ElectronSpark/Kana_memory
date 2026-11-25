@@ -24,6 +24,7 @@ from typing import Any
 
 from .. import app_clock
 from ..arrangement.model import RouteFacts
+from ..arrangement.rules.review_filter import ends_in_scope_done, waits_within
 from ..arrangement.services.presenters import no_new_content
 from ..home_counts import home_counts
 from ..practice_availability import summarize_queue_availability
@@ -111,13 +112,26 @@ class HomeOverviewService:
         inside = bool(ready or counts["instruction"] or waiting or availability.blocked_count or counts["disabled"]
                       or counts["blocked"] or counts.get('blocked_material') or counts.get('blocked_input'))
         has_work = bool(inside or path["in_progress_sections"] or others_in_progress)
-        # Design 12 H8, H10: under 只做范围内 with nothing inside to serve now (work that only waits shows the same
-        # page in 继续学习), the main action says so.
-        # The disabled count is the record's, not the scope's: it does not keep the button.
-        scope_done = bool(serve is not None and serve.limits_to_scope
-                          and not (ready or counts["instruction"] or availability.blocked_count or counts["blocked"]
-                                   or counts.get('blocked_material') or counts.get('blocked_input')))
-        has_work = has_work and not scope_done
+        if serve is not None:
+            from ..domain import _utc
+            # Design 12 H12: under the learner's filter the home follows the dispatch's one decision on the
+            # filtered candidates (rules/review_filter.ends_in_scope_done): a question, the wait page (short steps
+            # waiting inside), the offer of a next section the filter allows, or 范围内的都做完了. Sections in
+            # progress outside the filter are no work it serves; a next section it does not allow is not offered.
+            # The disabled count is the record's, not the scope's: it does not keep the button.
+            offer = arrangement.review_filter.next_offer(serve, current, path, others)
+            next_section = offer[1] if offer is not None and offer[0] == current else None
+            serveable = bool(ready or counts["instruction"] or availability.blocked_count or counts["blocked"]
+                             or counts.get('blocked_material') or counts.get('blocked_input'))
+            if serve.limits_to_scope and not serveable:
+                # 继续学习 serves a ready consolidation deck of the allowed work before its end page (N5).
+                serveable = bool(arrangement.consolidation.due_deck(_utc(None), nothing_else=True))
+            has_work = serveable or bool(waiting)
+            scope_done = ends_in_scope_done(serve, can_serve=serveable,
+                                            waiting=waits_within(next_change_at, app_clock.localize(_utc(None))),
+                                            next_section=offer is not None)
+        else:
+            scope_done = False
         # Design 12 UI2, UI3 (B10), UI5: the arrangement's rows, from its presenter.
         facts = RouteFacts.from_overview(path)
         nothing_new = no_new_content(has_work=has_work, teaching_ready=summary.instruction, overview=path,

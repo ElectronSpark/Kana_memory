@@ -1,10 +1,13 @@
-"""Which learned state extra practice offers next (design 12 E2).
+"""Which learned state extra practice offers next (design 12 E2, design 12 E10).
 
-Pure. Extra practice only runs when scheduled work is done, so due states and
-states inside their steps are never candidates. First come the states that
-may be rated early, the one closest to being forgotten first; when those are
-used up, the states rated within the last 24 hours go round as practice only,
-so the supply never runs dry while one such state exists.
+Pure. Extra practice is the learner's own request and has no time rule: every
+learned state (one formal rating at least) is practisable now (eligible), also
+one rated a minute ago, one waiting inside its steps and one that is not due.
+Three segments, in this order: due work first (the wiring hands it to the main
+dispatch, rules here leave it out); then the states that may be rated early,
+the one closest to being forgotten first; then, in rotation, practice only:
+the states that may not be rated early (rated within the last 24 hours, or
+inside their steps), so the supply never runs dry while one learned state exists.
 """
 from __future__ import annotations
 
@@ -20,14 +23,22 @@ _UNMARKED = PracticeMark()
 
 
 def eligible(states: Sequence[StateView], now: datetime) -> list[StateView]:
-    """Learned states that are not due and not inside their steps."""
-    return [state for state in states
-            if state.last_rated is not None and not state.in_step and state.due is not None and state.due > now]
+    """The practisable states: every learned one, whatever its due or step (design 12 E10; ``now`` unused)."""
+    return [state for state in states if state.last_rated is not None]
+
+
+def _not_due(states: Sequence[StateView], now: datetime) -> list[StateView]:
+    """Learned states that are not due work at ``now`` (due work goes to the main dispatch first)."""
+    return [state for state in eligible(states, now) if state.due is None or state.due > now]
+
+
+def _early(state: StateView, now: datetime) -> bool:
+    return not state.in_step and classify(state, now) is Credit.FORMAL_EARLY
 
 
 def first_segment(states: Sequence[StateView], now: datetime) -> list[StateView]:
     """States that may be rated early: in scope first, then lowest retrievability first."""
-    pool = [state for state in eligible(states, now) if classify(state, now) is Credit.FORMAL_EARLY]
+    pool = [state for state in _not_due(states, now) if _early(state, now)]
     return sorted(pool, key=lambda state: (
         not state.in_scope, 1.0 if state.retrievability is None else state.retrievability, state.key))
 
@@ -40,7 +51,7 @@ def second_segment(states: Sequence[StateView], now: datetime, marks: Mapping[st
     practised. A state practised within the last ``gap`` questions is left out
     unless nothing else remains, in which case the least recent one leads.
     """
-    pool = [state for state in eligible(states, now) if classify(state, now) is Credit.PRACTICE]
+    pool = [state for state in _not_due(states, now) if not _early(state, now)]
 
     def mark(state):
         return marks.get(state.key, _UNMARKED)

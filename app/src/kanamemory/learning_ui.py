@@ -1244,13 +1244,17 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         can_continue = callable(available) and available()
         if can_continue:
             controls.append(u.button("继续已加入的学习", self.continue_study_path, primary=True))
-        if overview.get("next_section"):
+        # Design 12 H12: during a "继续学习" under the learner's filter, only a section it allows is offered.
+        offered = getattr(self, "offered_section", lambda route_id, section: section)
+        next_section = offered(route.get("route_id"), overview.get("next_section"))
+        if next_section:
             controls.append(u.button("继续下一节",
-                lambda w, identity=overview["next_section"]["id"]: self._add_study_sections((identity,), **route),
+                lambda w, identity=next_section["id"]: self._add_study_sections((identity,), **route),
                 primary=not can_continue))
-            controls.append(u.label(overview["next_section"]["title"], size=13, color=u.MUTED))
+            controls.append(u.label(next_section["title"], size=13, color=u.MUTED))
         else:
-            others = [row for row in other_route_rows(service, route.get("route_id")) if row.get("next_section")][:3]
+            others = [row for row in other_route_rows(service, route.get("route_id"))
+                      if offered(row["route_id"], row.get("next_section"))][:3]
             if others:
                 controls.append(u.label("其他路线的下一小节", size=13, bold=True))
             for row in others:

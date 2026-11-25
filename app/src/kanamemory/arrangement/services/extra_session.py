@@ -73,8 +73,10 @@ class ExtraSession:
         self._on_stop = on_stop   # the assembly: forget the extra-practice part (design 12 E9)
         self._new_sitting, self._new_deck = new_sitting, new_deck
         self._refresh, self._probe_reuse = refresh, probe_reuse
-        self._probe: tuple[datetime, list[ExtraEntry]] | None = None
-        self._learned: tuple[datetime, bool] | None = None   # the home entry's answer, reused like the probe
+        # (read at, value, the reader's revision token): a read is reused for ``probe_reuse`` while the learner
+        # records have not changed (the reader's optional token(); design 12 E10: an answer just given counts).
+        self._probe: tuple[datetime, list[ExtraEntry], object] | None = None
+        self._learned: tuple[datetime, bool, object] | None = None   # the home entry's answer, reused like the probe
         self._batch_unchecked = True
         self._clear()
 
@@ -107,21 +109,13 @@ class ExtraSession:
         return self._sitting
 
     def available(self, now: datetime) -> bool:
-        """Whether some learned state can be practised at ``now`` (the 继续加练 button).
-
-        Mode off: a full read of the pool (its last one when younger than
-        ``probe_reuse``), kept for a start() within ``refresh``. Mode on: the
-        session's own pool.
-        """
+        """Whether the page 加练 can start something at ``now``: the 继续加练 buttons of the wait, end and
+        范围内的都做完了 pages ask exactly what the home's entry asks (learned(): design 12 E10, one cheap question;
+        every learned state the filter allows is practisable now, rules/extra.eligible)."""
         if self._active:
             self._keep_fresh(now)
-            entries = list(self._pool.values())
-        elif self._probe is not None and timedelta(0) <= now - self._probe[0] < self._probe_reuse:
-            entries = self._probe[1]
-        else:
-            entries = list(self._states.read(now))
-            self._probe = (now, entries)
-        return bool(eligible([entry.view for entry in entries], now))
+            return bool(eligible([entry.view for entry in self._pool.values()], now))
+        return self.learned(now)
 
     def start(self, now: datetime) -> None:
         """Switch the mode on with a new sitting. The pool is the read of available() when it is at most
@@ -129,7 +123,7 @@ class ExtraSession:
         an Arranged step over the states due at ``now``: the wiring lets the main-lane dispatch serve
         them first, and the next call to next() settles what it did."""
         probe, self._probe = self._probe, None
-        if probe is not None and timedelta(0) <= now - probe[0] < self._refresh:
+        if probe is not None and probe[2] == self._token() and timedelta(0) <= now - probe[0] < self._refresh:
             entries, read_at = probe[1], probe[0]
         else:
             entries, read_at = list(self._states.read(now)), now
@@ -149,7 +143,8 @@ class ExtraSession:
         self._on_stop()
 
     def learned(self, now: datetime) -> bool:
-        """Whether some learned state is in the pool at ``now`` (the home page's 加练… entry, design 12 E9).
+        """Whether some learned state is in the pool at ``now`` (the home page's 加练… entry, design 12 E9; and,
+        through available(), the 继续加练 buttons: one question, design 12 E10).
 
         While the mode is off: the button's read when one is younger than ``probe_reuse``, else the pool
         reader's any_learned (it stops at the first state; the counts are left to the page 加练; its answer is
@@ -157,17 +152,24 @@ class ExtraSession:
         """
         if self._active:
             return bool(self._pool)
+        token = self._token()
+
         def fresh(value):
-            return value is not None and timedelta(0) <= now - value[0] < self._probe_reuse
+            return value is not None and value[2] == token and timedelta(0) <= now - value[0] < self._probe_reuse
         if fresh(self._probe):
             return bool(self._probe[1])
         check = getattr(self._states, "any_learned", None)
         if check is None:
-            self._probe = (now, list(self._states.read(now)))
+            self._probe = (now, list(self._states.read(now)), token)
             return bool(self._probe[1])
         if not fresh(self._learned):
-            self._learned = (now, bool(check(now)))
+            self._learned = (now, bool(check(now)), token)
         return self._learned[1]
+
+    def _token(self):
+        """The pool reader's revision token (None without one: then only the time limits a reuse)."""
+        reader = getattr(self._states, "token", None)
+        return reader() if callable(reader) else None
 
     @property
     def batch_unchecked(self) -> bool:

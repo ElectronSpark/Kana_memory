@@ -13,14 +13,16 @@ through its owner, then memory.
   direction_allowed) and, for a routed ability, a kind already reviewed in
   that mode (mode_reviewed not False, as kana_routing.candidate_cards).
   ``due`` is the projected card's due.
-- Course: LearningStore.iter_pending_questions(``course_kinds``) (pending
-  questions of enabled kinds, without suspended units, unavailable content
-  or units held by a retention reservation), the first per unit, of units
-  already rated (review_count > 0). ``due`` is LearningStore.
-  scheduled_question_due with one exposure_tables() pass for the whole read.
+- Course: LearningStore.iter_rated_units(``course_kinds``) (units already
+  rated, not suspended, content available, not held by a retention
+  reservation; with a pending question of an enabled kind, or without one when
+  an enabled kind practises the ability: every app start ends the pending
+  course questions and a sealed round queues none, design 12 E10). ``due`` is
+  LearningStore.serviceable_due with one exposure_tables() pass for the whole read.
 
-States inside their steps are read too: they are never offered (rules/extra
-drops them), but their due is what "arranged work has come due" watches.
+No time condition leaves a state out (design 12 E10): states inside their steps
+and states rated a minute ago are read and offered (rules/extra); their due is
+also what "arranged work has come due" watches.
 ``in_scope`` comes from the focus scope (``scope``: lesson ids and kana entry
 ids "kana:<id>:<script>", None for no scope). A point read again goes through
 sources/states.StoreStates, the same reader the credit rule uses. The
@@ -63,16 +65,22 @@ class StoreExtraStates:
         entries = [*self.kana(now, scope), *self.course(now, scope)]
         return entries if serve is None else [entry for entry in entries if allows(serve, entry_member(entry))]
 
+    def token(self):
+        """The store's read revision (StudyStore.read_revision): a reuse of a read ends with any change of the
+        learner records (an answer, a setting), design 12 E10."""
+        reader = getattr(self._store, "read_revision", None)
+        return tuple(reader()) if callable(reader) else None
+
     def any_learned(self, now: datetime) -> bool:
         """Whether read(now) holds a state: the first course unit or kana state that read() would keep (same
         tests and the same filter, with the part), without computing any due or view (brief J11 F5)."""
         serve = self._serve(now)
         kinds = tuple(self._course_kinds())
         if kinds:
-            rows = self._states.learning.iter_pending_questions(kinds)
+            rows = self._states.learning.iter_rated_units(kinds)
             try:
                 for row in rows:
-                    if row["review_count"] and row["scheduler_state_json"] and allows(serve, row["content_id"]):
+                    if allows(serve, row["content_id"]):
                         return True
             finally:
                 rows.close()
@@ -116,7 +124,7 @@ class StoreExtraStates:
         return result
 
     def course(self, now: datetime, scope=_FOCUS) -> list[ExtraEntry]:
-        """The learned course units with a pending question of an enabled kind, in pending order."""
+        """The learned course units extra practice may offer (LearningStore.iter_rated_units), in unit order."""
         scope = self._scope() if scope is _FOCUS else scope
         kinds = tuple(self._course_kinds())
         if not kinds:
@@ -125,12 +133,13 @@ class StoreExtraStates:
         tables = learning.exposure_tables(now)
         scheduler = self._store.scheduler
         seen, result = set(), []
-        for row in learning.iter_pending_questions(kinds):
-            if row["unit_id"] in seen or not row["review_count"] or not row["scheduler_state_json"]:
+        for row in learning.iter_rated_units(kinds):
+            if row["unit_id"] in seen:
                 continue
             seen.add(row["unit_id"])
             ref = StateRef.course(row["content_id"], row["ability"])
-            due, early = learning.serviceable_due(dict(row), json.loads(row["snapshot_json"]), now, tables=tables)
+            question = json.loads(row["q_snapshot_json"]) if row["q_snapshot_json"] else {}
+            due, early = learning.serviceable_due(dict(row), question, now, tables=tables)
             view = state_view(scheduler, ref.key, json.loads(row["scheduler_state_json"]), due, now,
                               in_scope=scope is None or row["content_id"] in scope, early=early)
             result.append(ExtraEntry(ref, view))

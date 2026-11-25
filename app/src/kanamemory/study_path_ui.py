@@ -124,8 +124,10 @@ class StudyPathUIMixin:
         others: routes_overview rows listed as "其他路线的下一小节" when this
         route has no next section (design 10 section 8.2, at most 3).
         """
-        next_section = overview.get("next_section")
         route = route_kwargs(route_id)
+        # Design 12 H12: during a "继续学习" under the learner's filter, only a section it allows is offered.
+        offered = getattr(self, "offered_section", lambda route_id, section: section)
+        next_section = offered(route.get("route_id"), overview.get("next_section"))
         children = []
         available = getattr(self, "study_path_can_continue", None)
         can_continue = callable(available) and available()
@@ -145,7 +147,7 @@ class StudyPathUIMixin:
             children.append(u.label(title + "小节都已加入，可继续复习或选择拓展内容。", size=15, color=u.MUTED))
             if not can_continue:
                 children.append(u.button("继续已加入的学习", self.continue_study_path, primary=True, multiline=True))
-            others = [row for row in others if row.get("next_section")][:3]
+            others = [row for row in others if offered(row["route_id"], row.get("next_section"))][:3]
             if others:
                 children.append(u.label("其他路线的下一小节", size=15, bold=True))
             for row in others:

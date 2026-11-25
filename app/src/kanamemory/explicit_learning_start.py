@@ -119,8 +119,9 @@ def started_work(db):
     those of the stored request and of its deferred one: the selected entry once a real start chose it, else
     every entry (an unclaimed start of a section or lesson). An entry counts while its lesson keeps that
     introduction (a reset ends it); each of its abilities until the ability's first formal rating (a primary
-    learning_event, the rule that consumes the request); a lesson without units as (lesson, None) until it is
-    read. Read-only: it survives an app start because it is derived from stored records alone.
+    learning_event, the rule that consumes the request): the lesson's own abilities and the added abilities
+    introduced since the start (design 12 H13: taught in the same block); a lesson without units as (lesson,
+    None) until it is read. Read-only: it survives an app start because it is derived from stored records alone.
     """
     db = _db(db)
     value = read(db)
@@ -130,7 +131,8 @@ def started_work(db):
     for request in (value, value.get('pending_start')):
         if request:
             selected = request['selected_entry_id']
-            entries += [entry for entry in request['entries'] if entry['kind'] == 'learning'
+            entries += [{**entry, 'started_at': datetime.fromisoformat(request['created_at_utc'])}
+                        for entry in request['entries'] if entry['kind'] == 'learning'
                         and (selected is None or entry['entry_id'] == selected)]
     if not entries:
         return frozenset()
@@ -158,6 +160,13 @@ def started_work(db):
         if scope is None and rows[cid][0] != entry['introduction_id']:
             continue
         abilities = [scope] if scope else (state.get('original_abilities') or units.get(cid, []))
+        if not scope:
+            # Design 12 H13: every ability of the lesson the start opened, also those taught as additions in the
+            # same teaching (an addition introduced at or after the start), each until its first formal rating.
+            abilities = list(dict.fromkeys([*abilities, *(
+                ability for ability, item in state.get('additions', {}).items()
+                if item.get('introduced_at_utc')
+                and datetime.fromisoformat(item['introduced_at_utc']) >= entry['started_at'])]))
         if not abilities:
             if rows[cid][1] != 'done':
                 wanted.append((cid, None))

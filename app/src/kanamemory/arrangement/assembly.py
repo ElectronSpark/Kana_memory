@@ -96,11 +96,12 @@ class StoreArrangement:
         focus = FocusService(preferences, catalog, restart=lambda: _restart_main_round(store))
         review_filter = ReviewFilterService(preferences, focus, study_day=lambda at: store.study_day(at).isoformat(),
                                             restart=lambda: _restart_main_round(store),
-                                            started=lambda: store.teaching_queries.explicit_started_work())
+                                            started=lambda: store.teaching_queries.explicit_started_work(),
+                                            learned=lambda: store.queries.learned_members())
         # The extra-practice part lives as long as the mode: every stop() forgets it (design 12 E9).
         extra = extra_session(store, scope=focus.scope_contents, repository=repository, kana_kinds=kana_kinds,
                               course_kinds=course_kinds, japanese_input=japanese_input, serve=review_filter.current,
-                              on_stop=lambda: review_filter.set_part(None))
+                              on_stop=review_filter.end_extra)
         parts = ExtraParts(lambda now: extra.states.read(now, with_part=False), lambda: lesson_firsts(store),
                            study_day=lambda at: store.study_day(at).isoformat(), scope=focus.scope_contents)
         return cls(store, preferences, events, dispatcher, ProbeMemo(), launch_notes,
@@ -199,7 +200,8 @@ def practice_sitting(store, learning=None) -> PracticeSitting:
 
 def practice_deck(store, items: Iterable[DeckItem], *, sitting: PracticeSitting | None = None, learning=None,
                   repository: Callable[[], object] | None = None, course_kinds: Iterable[str] = (),
-                  system_japanese_input: bool = False, consolidation: bool = False) -> PracticeDeck:
+                  system_japanese_input: bool = False, consolidation: bool = False,
+                  avoid_last: bool = False) -> PracticeDeck:
     """A practice deck of ``items`` over ``store`` (design 12 E5).
 
     ``sitting``: the sitting it belongs to (a new one when None);
@@ -207,14 +209,16 @@ def practice_deck(store, items: Iterable[DeckItem], *, sitting: PracticeSitting 
     spot; ``course_kinds``: the learner's enabled course kinds, for course
     questions built on the spot (none: no course question is built).
     ``consolidation``: a consolidation deck (design 12 N5): its exposure
-    rows carry practice:consolidation: event ids.
+    rows carry practice:consolidation: event ids. ``avoid_last``: a course question is planned with another
+    template than the state's most recent exposure whenever the ability has one (the consolidation deck always;
+    extra practice's rotation, design 12 E10).
     """
     states = StoreStates(store, learning)
     sitting = sitting or PracticeSitting(states, StorePracticeMoves(store, states))
     questions = StoreDeckQuestions(KanaDeckLane(store, repository),
                                    CourseDeckLane(store, states.learning if course_kinds else learning, course_kinds,
                                                   system_japanese_input=system_japanese_input,
-                                                  avoid_last=consolidation))
+                                                  avoid_last=consolidation or avoid_last))
     exposure = StorePracticeExposure(store, learning)
     return PracticeDeck(items, credit=PracticeCredit(states), sitting=sitting, questions=questions,
                         exposure=ConsolidationExposure(exposure) if consolidation else exposure)
@@ -253,7 +257,7 @@ def extra_session(store, *, scope: Callable[[], frozenset[str] | None] = lambda:
 
     def new_deck(items: Sequence[DeckItem], sitting: PracticeSitting) -> PracticeDeck:
         return practice_deck(store, items, sitting=sitting, repository=repository, course_kinds=course_kinds(),
-                             system_japanese_input=japanese_input())
+                             system_japanese_input=japanese_input(), avoid_last=True)
 
     return ExtraSession(states, new_sitting=lambda: practice_sitting(store), new_deck=new_deck, on_stop=on_stop)
 

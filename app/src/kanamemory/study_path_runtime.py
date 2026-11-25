@@ -622,12 +622,62 @@ class StudyPathRuntimeMixin:
                                                                scope=scope, rearrange=not kwargs.get("_rearranged"))
         StudyPathRuntimeMixin._rearrange_round(self, outcome)
 
-    def _wait_or_scope_done(self, wait, serve):
-        """A waiting outcome of 继续学习: under 只做范围内 nothing inside can be served now, so the page
-        范围内的都做完了 (design 12 H8: 做范围外的 or 加练 meanwhile); otherwise the lane's own wait page."""
-        if serve is not None and serve.limits_to_scope:
+    def _wait_or_scope_done(self, wait, serve, due):
+        """A wait outcome of 继续学习: the lane's own wait page (``wait()``), as without a filter; under 只做范围内
+        only when the inside work it waits for (``due``, ISO) falls within the wait page's horizon or other work
+        is left (design 12 H12, _scope_done_instead), else 范围内的都做完了."""
+        from datetime import datetime as _datetime
+        from .arrangement.rules.review_filter import waits_within
+        from .domain import _utc
+        if (serve is not None and serve.limits_to_scope
+                and not (due and waits_within(_datetime.fromisoformat(due), _utc(None)))
+                and StudyPathRuntimeMixin._scope_done_instead(self, serve)):
             return StudyPathRuntimeMixin.show_scope_done(self)
         return wait()
+
+    def _scope_done_instead(self, serve):
+        """Whether the end page of 继续学习 is 范围内的都做完了 instead (design 12 H12): the one rule the home
+        follows too (rules/review_filter.ends_in_scope_done), asked where the lanes of this round serve nothing
+        and nothing of the round waits. The work the home counts beyond the round is asked as the home asks it
+        (the unqueued course and kana previews under the same filter: a lesson's next review is created at the
+        next collection), and the offer of a next section the filter allows (next_offer); with any of them the
+        lanes' own end page is shown, as without a filter. Waiting counts within the wait page's horizon
+        (rules/review_filter.waits_within)."""
+        from .arrangement.rules.review_filter import ends_in_scope_done
+        if serve is None or not serve.limits_to_scope:
+            return False
+        from .home_runtime import home_inputs, home_service
+        home = home_service(self, queue_kinds=lambda pending: self._queue_kinds(pending))
+        courses = home.unqueued_courses(round_limited=False)
+        kana = home.unqueued_reviews(home_inputs(self))
+        from datetime import datetime as _datetime
+        from .arrangement.rules.review_filter import waits_within
+        from .domain import _utc
+        dues = [_datetime.fromisoformat(value) for value in (courses["next_due"], kana["next_due"]) if value]
+        return ends_in_scope_done(serve, can_serve=bool(courses["ready"] or courses["instruction"] or kana["ready"]),
+                                  waiting=waits_within(min(dues) if dues else None, _utc(None)),
+                                  next_section=StudyPathRuntimeMixin.next_offer(self, serve) is not None)
+
+    def next_offer(self, serve):
+        """(route id, section) of the next section 继续学习's pages offer under ``serve`` (None: none), as the home
+        decides it (ReviewFilterService.next_offer over the current route's overview and the other routes)."""
+        from .study_path_display import active_route, other_route_rows, route_kwargs
+        service = self.study_path_service()
+        current = active_route(service)
+        return StudyPathRuntimeMixin.study_arrangement(self).review_filter.next_offer(
+            serve, current, service.overview(**route_kwargs(current)), other_route_rows(service, current))
+
+    def offered_section(self, route_id, section):
+        """``section`` (an overview's next section, or None) when 继续学习's pages may offer it now, else None: the
+        review filter in force during a "继续学习" leaves out a section it does not allow (design 12 H12); outside
+        one (the route page) every section is offered."""
+        if not section:
+            return None
+        from .study_routes import CORE_ROUTE_ID
+        arrangement = StudyPathRuntimeMixin.study_arrangement(self)
+        serve = arrangement.serving_now()
+        return (section if arrangement.review_filter.offers_section(serve, route_id or CORE_ROUTE_ID,
+                                                                    str(section["id"])) else None)
 
     def show_scope_done(self):
         """Design 12 H8: 范围内的都做完了 -- nothing inside the focus scope can be served now.
@@ -819,7 +869,9 @@ class StudyPathRuntimeMixin:
         from .practice_round import promote, promote_initial, sealed
         enabled = self.learning_preferences()["enabled"]
         was_sealed = sealed(self.store)
-        if not was_sealed:
+        # Design 12 E11: inside 加练 an explicit start (new content) is never served.
+        learned_only = getattr(StudyPathRuntimeMixin.study_arrangement(self).serving_now(), "learned_only", False)
+        if not was_sealed and not learned_only:
             explicit = explicit_start_head(self.store, self.learning_store, normal_kana, current,
                 enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read)
             if explicit and not (explicit[0] == "course" and explicit[1].get("type") == "instruction"
@@ -1014,7 +1066,9 @@ class StudyPathRuntimeMixin:
                 return
             protected, share_lane = None, None   # nothing could be shown: the lanes as usual
         if not StudyPathRuntimeMixin.study_arrangement(self).dispatcher.active():
-            protected = (None if sealed(self.store) else choose_protected(self.store, self.learning_store, normal_kana, current,
+            # Design 12 E11: inside 加练 no protected first teaching (new content) is chosen.
+            protected = (None if sealed(self.store) or getattr(serve, "learned_only", False)
+                         else choose_protected(self.store, self.learning_store, normal_kana, current,
                 enabled_kinds=self.learning_preferences()["enabled"],
                 kana_kinds=KanaMemory._queue_kinds(self, pending) if pending else (), now=now, projection=read,
                 **({} if scope is None else {"scope": scope})))
@@ -1077,7 +1131,7 @@ class StudyPathRuntimeMixin:
                 if finished(self.store):
                     if take_over(self):
                         return
-                    if serve is not None and serve.limits_to_scope:
+                    if StudyPathRuntimeMixin._scope_done_instead(self, serve):
                         StudyPathRuntimeMixin.show_scope_done(self)
                         return
                     self.screen("learning_done", "本轮已保存",
@@ -1097,17 +1151,19 @@ class StudyPathRuntimeMixin:
                        or datetime.fromisoformat(availability.next_due_utc)
                        < datetime.fromisoformat(current["due_at_utc"]))):
                 if not take_over(self):
-                    StudyPathRuntimeMixin._wait_or_scope_done(self, lambda: self.resume_practice(**reuse), serve)
+                    StudyPathRuntimeMixin._wait_or_scope_done(self, lambda: self.resume_practice(**reuse), serve,
+                                                              availability.next_due_utc)
             elif current:
                 if not (current.get("type") == "waiting" and take_over(self)):
                     if current.get("type") == "waiting":
                         StudyPathRuntimeMixin._wait_or_scope_done(
-                            self, lambda: self.continue_learning(_projection=read), serve)
+                            self, lambda: self.continue_learning(_projection=read), serve, current.get("due_at_utc"))
                     else:
                         self.continue_learning(_projection=read)
             elif availability.waiting_count:
                 if not take_over(self):
-                    StudyPathRuntimeMixin._wait_or_scope_done(self, lambda: self.resume_practice(**reuse), serve)
+                    StudyPathRuntimeMixin._wait_or_scope_done(self, lambda: self.resume_practice(**reuse), serve,
+                                                              availability.next_due_utc)
             elif availability.blocked_count:
                 self.resume_practice(**reuse)
             elif not (isinstance(pending, dict) and pending.get("serve_held")) and any(
@@ -1120,7 +1176,7 @@ class StudyPathRuntimeMixin:
                     u.button("学习路线", self.show_study_path), u.button("回到今日", self.leave_learning))
             elif take_over(self):
                 return
-            elif serve is not None and serve.limits_to_scope:
+            elif StudyPathRuntimeMixin._scope_done_instead(self, serve):
                 StudyPathRuntimeMixin.show_scope_done(self)
             else:
                 # Design 10 section 8.2: the current route's next section;
@@ -1133,6 +1189,9 @@ class StudyPathRuntimeMixin:
                 others = other_route_rows(service, current) if not shown.get("next_section") else ()
                 # B10 under breadth: the next section first (presenter.end_note is None otherwise).
                 note = StudyPathRuntimeMixin.study_arrangement(self).presenter.end_note(RouteFacts.from_overview(shown))
+                if note is not None and not StudyPathRuntimeMixin.offered_section(
+                        self, note.route_id or current, {"id": note.section_id}):
+                    note = None   # design 12 H12: not a section the learner's filter leaves out
                 self.screen("learning_done", "本次学习已保存",
                     *(section_note_rows(note, on_add_next=lambda identity: self._add_study_sections(
                         [identity], **route_kwargs(note.route_id or current))) if note is not None else ()),

@@ -382,23 +382,24 @@ def test_the_consolidation_deck_leaves_out_what_the_filter_does_not_allow():
 
 
 def test_the_parts_count_what_can_be_practised_now_inside_each_part():
+    """Design 12 E10: no time rule; a state inside its steps or due counts like any learned state."""
     from kanamemory.arrangement.model import ExtraEntry, StateRef, StateView
     from kanamemory.arrangement.services.extra_parts import ExtraParts, PartCount
 
     def entry(ref, *, due=NOW + timedelta(days=3), in_step=False, rated=NOW - timedelta(hours=2)):
         return ExtraEntry(ref, StateView(ref.key, due, rated, in_step=in_step), "card:1" if ref.script else "")
     pool = [entry(StateRef.course("lesson:today", "understanding")),
-            entry(StateRef.course("lesson:today", "usage"), in_step=True),           # inside its steps: not counted
+            entry(StateRef.course("lesson:today", "usage"), in_step=True),           # inside its steps: counted
             entry(StateRef.course("lesson:week", "understanding")),
-            entry(StateRef.course("lesson:old", "understanding"), due=NOW - timedelta(hours=1)),   # due: not counted
+            entry(StateRef.course("lesson:old", "understanding"), due=NOW - timedelta(hours=1)),   # due: counted
             entry(StateRef.kana("kana:a", "kana_choice", "hiragana"))]
     firsts = [("lesson:today", NOW - timedelta(hours=3)), ("lesson:week", NOW - timedelta(days=5)),
               ("lesson:old", NOW - timedelta(days=40))]
     scope = [frozenset({KANA_A, "lesson:week"})]
     parts = ExtraParts(lambda now: pool, lambda: firsts, study_day=lambda at: at.date().isoformat(),
                        scope=lambda: scope[0])
-    assert parts.counts(NOW) == (PartCount(Part.TODAY, 1), PartCount(Part.RECENT, 2), PartCount(Part.SCOPE, 2),
-                                 PartCount(Part.ALL, 3))
+    assert parts.counts(NOW) == (PartCount(Part.TODAY, 2), PartCount(Part.RECENT, 3), PartCount(Part.SCOPE, 2),
+                                 PartCount(Part.ALL, 5))
     assert parts.members(Part.TODAY, NOW) == {"lesson:today"}
     assert parts.members(Part.ALL, NOW) is None
     scope[0] = None
@@ -475,7 +476,7 @@ def test_the_service_asks_for_started_work_only_when_a_filter_restricts():
 
 def test_the_home_entry_asks_the_pool_for_its_first_state_and_leaves_the_counts_to_the_page():
     """Brief J11 F5: ExtraSession.learned uses the reader's any_learned (no full read); a reader without it is
-    read in full as before; a fresh read of the 继续加练 button is reused."""
+    read in full as before. Design 12 E10: the 继续加练 button asks the same question, and its answer is reused."""
     calls = []
 
     class Pool:
@@ -504,5 +505,5 @@ def test_the_home_entry_asks_the_pool_for_its_first_state_and_leaves_the_counts_
     assert session(OldPool()).learned(NOW) is True and calls == ["read"]
     del calls[:]
     reused = session(Pool(False))
-    reused.available(NOW)                  # the button's full read ...
-    assert reused.learned(NOW + timedelta(seconds=10)) is False and calls == ["read"]   # ... is reused
+    assert reused.available(NOW) is False and calls == ["any"]   # the button asks the entry's question ...
+    assert reused.learned(NOW + timedelta(seconds=10)) is False and calls == ["any"]   # ... and it is reused

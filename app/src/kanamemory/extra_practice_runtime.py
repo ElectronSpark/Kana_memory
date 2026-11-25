@@ -130,6 +130,21 @@ def _hold_batch(app, session_id):
         getattr(app, name, set()).clear()
 
 
+def _queue_missing(app, ref):
+    """A learned course unit without a pending question (every app start ends them; a sealed round queues
+    none) gets its next question queued, as after an early answer (early_queue), so it can be rated early
+    (design 12 E10); True when one was queued."""
+    learning = app.learning_store
+    unit = learning.get_unit(ref.content_id, ref.ability)
+    if unit is None or app.store.queries.first_pending_question_id(unit["unit_id"]) is not None:
+        return False
+    item = learning.get_item(ref.content_id)
+    if item is None:
+        return False
+    app._queue_learning_questions(item, early_ability=ref.ability)
+    return app.store.queries.first_pending_question_id(unit["unit_id"]) is not None
+
+
 def _forget_batch(app, session_id):
     """An ended early batch leaves the app's memory too when it is the queue held there, so no later
     checkpoint can write it back."""
@@ -210,7 +225,7 @@ class ExtraPracticeFlow:
             members = None if part in (None, Part.ALL) else arrangement.extra_parts.members(part, now)
             # stop() forgets an earlier read of the pool and an earlier part; the part acts from the first read.
             self.session.stop()
-            arrangement.review_filter.set_part(members)
+            arrangement.review_filter.begin_extra(members)   # design 12 E11: only what is learned, in the part
             self.session.start(now)
             restart(self.app.store, lane="main")
         except Exception as exc:   # a busy database: the mode stays off and the page stays
@@ -279,7 +294,10 @@ class ExtraPracticeFlow:
 
     def _early_course(self, step):
         app = self.app
-        head = app.learning_store.early_head(step.ref.content_id, step.ref.ability, _now())
+        learning = app.learning_store
+        head = learning.early_head(step.ref.content_id, step.ref.ability, _now())
+        if head is None and _queue_missing(app, step.ref):
+            head = learning.early_head(step.ref.content_id, step.ref.ability, _now())
         if head is None:
             return self.carry_on()   # not answerable early now: the session sets it aside
         self.session.permit(step.ref, head["question"]["id"])

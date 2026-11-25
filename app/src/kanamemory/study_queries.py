@@ -184,6 +184,31 @@ class StudyQueries:
         return self._connection.execute("""SELECT rating,occurred_at_utc FROM learning_event
             WHERE unit_id=? AND role='primary' ORDER BY rowid DESC LIMIT 1""", (unit_id,)).fetchone()
 
+    def learned_members(self) -> frozenset[str]:
+        """The review filter's members with a formally rated state: lesson content ids with a rated unit and kana
+        entry ids ("kana:<id>:<script>") with a reviewed card (design 12 E11: what 加练 may serve)."""
+        found = set()
+        for sql, member in (("SELECT DISTINCT content_id FROM learning_unit WHERE review_count>0", lambda row: row[0]),
+                            ("SELECT DISTINCT content_id,script FROM study_card WHERE review_count>0",
+                             lambda row: f"kana:{row[0]}:{row[1]}")):
+            try:
+                found.update(member(row) for row in self._connection.execute(sql))
+            except sqlite3.OperationalError:   # a store without that lane's tables has nothing learned there
+                continue
+        return frozenset(found)
+
+    def rated_unit_rows(self) -> Iterator[sqlite3.Row]:
+        """Formally rated, unsuspended course units without a retention reservation, in unit order, each with its
+        pending question when it has one (question_id, q_kind, q_snapshot_json, q_not_before_utc; NULL without);
+        LearningStore.iter_rated_units filters them (design 12 E10). The cursor belongs to this connection."""
+        return self._connection.execute("""SELECT u.unit_id,u.content_id,u.ability,u.suspended,u.instruction_ready,
+                u.due_at_utc,u.probe_due_at_utc,u.review_count,u.scheduler_state_json,
+                q.question_id,q.kind AS q_kind,q.snapshot_json AS q_snapshot_json,q.not_before_utc AS q_not_before_utc
+                FROM learning_unit u LEFT JOIN learning_question q ON q.unit_id=u.unit_id AND q.status='pending'
+                WHERE u.review_count>0 AND u.scheduler_state_json IS NOT NULL AND NOT u.suspended
+                AND NOT EXISTS (SELECT 1 FROM app_setting a WHERE a.key='retention_reservation_v1:' || u.unit_id)
+                ORDER BY u.rowid""")
+
     def first_pending_question_id(self, unit_id: str) -> str | None:
         """Any retained pending snapshot, without eligibility/reservation filters."""
         row = self._connection.execute(

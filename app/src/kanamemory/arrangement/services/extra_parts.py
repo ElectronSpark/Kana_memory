@@ -11,8 +11,9 @@ and one read of the lessons' first formal ratings answer every part:
 - 全部: everything extra practice serves (as before E9).
 
 A part's count is the states of the pool inside it that extra practice can
-offer at ``now`` (rules/extra.eligible: learned, not due, not inside a step),
-the same test as the button 继续加练. members(part, now) is what the review
+offer at ``now`` (rules/extra.eligible: every learned state, without a time
+condition, design 12 E10), the same test as the button 继续加练 and the home's
+entry (ExtraSession.learned, D6). members(part, now) is what the review
 filter receives when the mode starts with that part (None for 全部).
 """
 from __future__ import annotations

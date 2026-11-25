@@ -2148,6 +2148,30 @@ class LearningStore:
                 continue   # J6 R4: an ability the lesson no longer lists is never served
             yield row
 
+    def iter_rated_units(self, enabled_kinds, *, projection=None):
+        """Formally rated units extra practice may offer, in unit order, each once (design 12 E10).
+
+        The learner's own exclusions and what can be shown, never time: not suspended, no retention reservation,
+        content available, the ability not retired; a unit with a pending question when that question's kind is
+        enabled (the row carries it: q_kind, q_snapshot_json, q_not_before_utc, question_id), one without (every
+        app start ends the pending course questions; a sealed round queues none) when some enabled kind practises
+        its ability (the practice deck plans one on the spot). Read only; the iterator belongs to this connection.
+        """
+        from .learning_questions import KIND_ABILITIES
+        kinds = set(enabled_kinds)
+        abilities = {KIND_ABILITIES[kind] for kind in kinds if kind in KIND_ABILITIES}
+        unavailable = self.availability(projection=projection).unavailable_ids
+        rows = self.queries.rated_unit_rows()
+        try:
+            for row in rows:
+                if row["content_id"] in unavailable or retired_ability(row["content_id"], row["ability"]):
+                    continue
+                if (row["q_kind"] not in kinds) if row["question_id"] is not None else row["ability"] not in abilities:
+                    continue
+                yield row
+        finally:
+            rows.close()
+
     def dispatch_pending(self, enabled_kinds=None, *, projection=None):
         """Read small sort fields; hydrate only the selected question later.
 
@@ -2535,6 +2559,8 @@ class LearningStore:
                 # A whole lesson (its id) or one of its scopes ((id, scope): no qualifying probe yet).
                 if content["id"] in skip_teaching_ids or (content["id"], scope) in skip_teaching_ids:
                     continue
+                if serve is not None and serve.learned_only:
+                    continue   # design 12 E11: 加练 never serves a teaching block, also of an added ability
                 if teaching_only:
                     due = self.effective_question_due(row, q, now, exposure_times=exposure_times)
                     if due and datetime.fromisoformat(due) > now:
