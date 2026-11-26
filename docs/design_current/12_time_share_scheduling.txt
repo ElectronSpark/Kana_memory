@@ -1403,6 +1403,29 @@ practice:consolidation: 开头）；假名线不变。
   2026-11-26（0.36.27 之后）：bounded 先问 content_question_may_block（personal_content_versions.question_block_possible：
     held、个人版本的 head、personal_question.rows_for；material_validity.model_material），再对每个要算的单位问 live_template；
     任一成立这课就排题。对照测试的“退役”“材料”两个状态也逐项相同（不再有允许的差别；“材料”状态改为让这两课处于待核，走真实的挡题路径）。
+[I 2026-11-26（计算量一步之二：结果不变，少做重复的读取与复制）；旧路径留在代码里作参照，合成学习记录上的对照测试，原生未验]
+  假名排队一趟只读一遍：study_path.plan_kana_queue 与 kana_early_batch 经 study_path.card_builder 用 domain.KanaCardPass。一趟里
+    假名目录（kana_list）与 metadata 各读一次，每个（题型，字形）的合格行、罗马字值、选项候选与上次的选项（previous_choice_options）
+    各算一次；每个状态的题与 build_questions(repository, _BatchQuestionStore(store, [content_id]), limit=1, include_extended=True)
+    逐项相同：同样的资格与内容限制，同样的种子，每道题一条新的随机流，抽取次序相同。一趟共用的目录行与上次选项经
+    shared_tables.share（测试套件下只读）；一趟只读，结束即丢。card_questions 是单个状态的路径与参照；study_path.PER_PASS_CARDS
+    为 False 时排队与提前批次逐个状态调用它（对照测试 tests/test_kana_card_pass_equivalence.py）。
+  首页的假名预览：home/previews.kana_preview 各方向的资格由同一种一趟读取给出（KanaCardPass.targets，一次目录读取代替每个方向一次）；
+    KANA_TARGET_PASS 为 False 是逐方向的参照。按读修订保存预览结果没有做：结果依赖“现在”（candidate_cards、反馈等待、埋藏到期、
+    推进目标、语境词的正式作答数与探针的 not_before、复习过滤），能让它变化的最早时刻不能逐项确定，不能确切作键，所以不保存。
+  启动预热：先读当前路线两条线下一小节的就绪（StudyPathRuntimeMixin.prepare_line_readiness），再照旧依次建例句索引、预热例句服务、
+    算主线混排计划（计划之后只补读新次序还缺的就绪）。预热读到东西后，首页只在画出的首页会因此变化时重画：HomeOverviewService
+    记下画出时两条线的（路线概览、behind、显示部分）为 drawn_lines，HomeShowing.lines 保存它；lines_changed 用内存里现在的就绪重算
+    line_view（每条线的名称、小节与标题，B10 的建议与标记）再比较；存了新计划总是重画。重画像首页定时器一样作为单独的事件循环回调，
+    排在已在等的点按之后，且只在仍是同一次显示（页面与 page token）时进行（warm_up_refresh）。
+  例句索引不复制：learning_conditions._reviewed_index 用 _build_reviewed_index(copies=False)：material_review.example_source_view、
+    example_catalogue.bundled_example_pack(copies=False) 与 material_review.reviewed_pack(copies=False) 让记录直接共享课程视图与审核
+    数据的值（测试套件下经 share 只读），证明哈希只为有两个以上目标的例句计算；copies=True 是参照（tests/test_reviewed_index_views.py）。
+    索引不存文件。
+  测得（桌面，同时有别的测试在跑，五次中位数，括号里是最小到最大）：478 张到期假名卡的 plan_kana_queue，学习者 A／B／C 由
+    5.09（4.94–5.23）／5.14（5.06–5.37）／5.14（5.02–5.23）秒降到 0.065（0.055–0.10）／0.072（0.066–0.10）／0.084（0.068–0.098）秒；
+    首页一次刷新里的假名预览 0.24／0.22／0.23 秒降到 0.17／0.17／0.18 秒；冷进程里的例句索引 2.68（2.55–2.78）秒降到 2.17（1.96–2.29）
+    秒（deepcopy 由 168 万次降到 1.3 万次；剩下的是审核替换要的指纹、焦点区间的查找、证明哈希、课程视图与首次导入）。
 
 22 学习者决定复习什么：只做一部分、不做一部分、多练一部分（决定 H8–H10、E9）
 来由：所有者 2026-11-23 要求能一直复习下去，并能多复习某一部分、只复习某一部分、不复习某一部分。在此之前：加练没有上限，但只在结束页与

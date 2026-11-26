@@ -314,6 +314,9 @@ _NO_PLAN = MappingProxyType({"input_mode": "choice"})
 # The plan-free bounds of course_preview (design 12, N16); False plans every unit (the reference the
 # equivalence test compares with).
 PLAN_FREE_BOUNDS = True
+# kana_preview's eligibility of each direction's due states from one catalogue read (domain.KanaCardPass);
+# False runs one target-only build_questions per direction (the reference the equivalence test compares with).
+KANA_TARGET_PASS = True
 
 
 class _LessonRecord:
@@ -397,10 +400,13 @@ def kana_preview(store, inputs, *, repository, paths, queue_kinds, pending=UNREA
     # once for every due card. Target-only previews create no choices.
     ready, future, by_ability = context_count, [], {}
     count_identities = prospective_identities(store, due_by_key) if due_by_key else {}
+    from ..domain import KanaCardPass
+    cards = KanaCardPass(repository(), store, seed=0, now=now) if KANA_TARGET_PASS and grouped else None
     for (kind, script), content_ids in grouped.items():
-        targets = build_questions(repository(), _BatchQuestionStore(store, content_ids),
-            kind=kind, script=script, limit=len(content_ids), seed=0, now=now,
-            include_extended=True, _targets_only=True)
+        targets = (cards.targets(content_ids, kind, script) if cards is not None else
+            build_questions(repository(), _BatchQuestionStore(store, content_ids),
+                kind=kind, script=script, limit=len(content_ids), seed=0, now=now,
+                include_extended=True, _targets_only=True))
         for target in targets:
             due = due_by_key[target.content_id, kind, script]
             key = count_identities[target.content_id, kind, script]

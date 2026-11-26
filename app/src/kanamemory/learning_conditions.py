@@ -47,7 +47,7 @@ def _single_flight(function):
     return cached
 
 
-def _reviewed_targets(items):
+def _reviewed_targets(items, *, copies=True):
     """{item id: revision} of reviewed targets, via the precomputed review index.
 
     Equal to testing each fingerprint against the target_fingerprints list
@@ -56,22 +56,33 @@ def _reviewed_targets(items):
     it is neither copied nor fingerprinted.
     """
     from .material_review import (has_reviewed_targets, is_reviewed_target, item_fingerprint,
-                                  example_source_item)
+                                  example_source_item, example_source_view)
+    source = example_source_item if copies else example_source_view
     return {item["id"]: str(item["revision"]) for item in items
             if has_reviewed_targets(item["id"])
-            and is_reviewed_target(item["id"], item_fingerprint(example_source_item(item)))}
+            and is_reviewed_target(item["id"], item_fingerprint(source(item)))}
 
 
 @content_cache
 @_single_flight
 def _reviewed_index():
+    return _build_reviewed_index(copies=False)
+
+
+def _build_reviewed_index(*, copies):
+    """The reviewed-example index. It only reads the pack, so it is built from read-only views of the
+    lessons, the examples and the review data (copies=False); copies=True builds it from the pack's
+    independent copies, the reference the equivalence test compares with. Equal key by key."""
     from .learning_content import learning_item_views
-    from .example_catalogue import bundled_example_pack
+    from . import example_catalogue
     items = learning_item_views()  # read only: no copy of every lesson with all its templates
-    known = _reviewed_targets(items)
+    known = _reviewed_targets(items, copies=copies)
     # This applies exact retirements/replacements to original course examples
     # as well as additions. Keep only the compact ID/text index after building.
-    pack = bundled_example_pack(items)
+    build = example_catalogue.bundled_example_pack
+    # A replaced pack builder (a fixture's own pack) keeps its one-argument call.
+    pack = (build(items, copies=False) if not copies and build is example_catalogue.BUNDLED_EXAMPLE_PACK
+            else build(items))
     examples = {row["id"]: row for row in pack["examples"]}
     by_example, proofs = {}, {}
     for ref in pack["references"]:
@@ -85,19 +96,24 @@ def _reviewed_index():
                or not 0 <= s["start"] < s["end"] <= len(text) or text[s["start"]:s["end"]] != s.get("quote") for s in spans):
             continue
         by_example.setdefault(example["id"], set()).add(ref["target_id"])
-        proofs.setdefault(example["id"], []).append(sha256(json.dumps(ref, ensure_ascii=False,
-            sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+        # A proof is needed only for an example of two or more targets: without copies it is computed then.
+        proofs.setdefault(example["id"], []).append(_proof(ref) if copies else ref)
     index = {}
     for eid, ids in by_example.items():
         if len(ids) > 1:
             text = examples[eid]["text"]
             # A text collision with different reviewed identities is skipped.
             refs = tuple(sorted((cid, known[cid]) for cid in ids))
+            digests = proofs[eid] if copies else [_proof(ref) for ref in proofs[eid]]
             context_revision = sha256(json.dumps([eid, examples[eid]["revision"], refs,
-                sorted(proofs[eid])], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+                sorted(digests)], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
             value = (eid, refs, context_revision)
             index[text] = value if text not in index or index[text] == value else None
     return index
+
+
+def _proof(ref):
+    return sha256(json.dumps(ref, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def for_question(question):

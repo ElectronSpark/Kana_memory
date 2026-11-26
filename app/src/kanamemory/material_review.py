@@ -209,6 +209,15 @@ def example_source_item(item):
     return result
 
 
+def example_source_view(item):
+    """example_source_item for a caller that only reads: equal to it, but sharing the item's and the
+    review's values instead of copying them (read-only: change a copy of it)."""
+    entry = review_data().get("items", {}).get(item.get("id"))
+    if entry and item_fingerprint(item) == entry["after_sha256"]:
+        return {**item, **entry["original_fields"]}
+    return item
+
+
 def reviewed_plan(item_id, plan):
     entry = review_data().get("plans", {}).get(item_id)
     return (deepcopy(entry["replacement"]) if entry and fingerprint(plan) == entry["before_sha256"]
@@ -286,9 +295,14 @@ def reviewed_question(question):
     return result
 
 
-def reviewed_pack(pack, *, include_additions=False, known_targets=None):
-    """Replace only exact known old records; unrelated imported data survives."""
+def reviewed_pack(pack, *, include_additions=False, known_targets=None, copies=True):
+    """Replace only exact known old records; unrelated imported data survives.
+
+    copies=False: the same pack, read-only, whose records are the source pack's and the review data's own
+    values instead of copies (a caller that only reads it; shared_tables guards it under the test suite).
+    """
     data = review_data()
+    own = deepcopy if copies else (lambda value: value)
     # Both record lists are rebuilt below. Copy only their sibling metadata
     # here; copying the full pack first discards a second copy of every record.
     # Metadata and every published record still own their mutable children.
@@ -303,7 +317,7 @@ def reviewed_pack(pack, *, include_additions=False, known_targets=None):
         row = (change["replacement"] if change and fingerprint(source) in change.get("input_sha256s", [change["before_sha256"]])
                else source)
         if row is not None:
-            examples[row["id"]] = deepcopy(row)
+            examples[row["id"]] = own(row)
     for source in pack["references"]:
         change = data.get("references", {}).get(source["id"])
         exact_match = change and fingerprint(source) in change.get("input_sha256s", [change["before_sha256"]])
@@ -319,7 +333,7 @@ def reviewed_pack(pack, *, include_additions=False, known_targets=None):
                 change = None
         row = change["replacement"] if change and exact_match else source
         if row is not None:
-            references[row["id"]] = deepcopy(row)
+            references[row["id"]] = own(row)
     if include_additions:
         targets = set(known_targets) if known_targets is not None else None
         if isinstance(known_targets, dict):
@@ -329,17 +343,20 @@ def reviewed_pack(pack, *, include_additions=False, known_targets=None):
                        and item_fingerprint(item) in index["target_fingerprints"][cid]}
         for row in data.get("added_references", []):
             if (targets is None or row["target_id"] in targets) and row["id"] not in references:
-                references[row["id"]] = deepcopy(row)
+                references[row["id"]] = own(row)
         used = {row["example_id"] for row in references.values()}
         for row in data.get("added_examples", []):
             if row["id"] in used and row["id"] not in examples:
-                examples[row["id"]] = deepcopy(row)
+                examples[row["id"]] = own(row)
     # Imported snapshots may retain an old, modified reference to old text.
     # Keep that immutable text too instead of inventing a replacement anchor.
     used = {row["example_id"] for row in references.values()}
     for source in pack["examples"]:
         if source["id"] in used and source["id"] not in examples:
-            examples[source["id"]] = deepcopy(source)
+            examples[source["id"]] = own(source)
     result["examples"] = sorted(examples.values(), key=lambda row: row["id"])
     result["references"] = sorted(references.values(), key=lambda row: row["id"])
+    if not copies:
+        from .shared_tables import share
+        return share(result)
     return result

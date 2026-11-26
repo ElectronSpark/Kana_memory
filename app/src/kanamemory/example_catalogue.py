@@ -134,18 +134,21 @@ def _samples(item):
     return result
 
 
-def bundled_example_pack(items, *, apply_review=True):
+def bundled_example_pack(items, *, apply_review=True, copies=True):
     """Build an independent v1 pack; no learner state or fuzzy grammar matching.
 
     Saved dictionary-only courses may have no authored examples. They remain
     addable via the separate user pack instead of receiving invented material.
+    copies=False: the same pack, read-only, for a caller that only reads it (the reviewed-example index):
+    its rows share the items' and the review data's values instead of copying them (shared_tables).
     """
     items = list(items.values() if isinstance(items, dict) else items)
     if apply_review:
         # example_source_item only changes an item review_data() names; the others are read as they are
         # (its copy of each would also decode every template an extension library reads on demand).
-        from .material_review import example_source_item, has_item_review
-        items = [example_source_item(item) if has_item_review(item.get('id')) else item for item in items]
+        from .material_review import example_source_item, example_source_view, has_item_review
+        source = example_source_item if copies else example_source_view
+        items = [source(item) if has_item_review(item.get('id')) else item for item in items]
     by_target = {item['id']: item for item in items}
     examples, references = {}, {}
 
@@ -170,7 +173,7 @@ def bundled_example_pack(items, *, apply_review=True):
             hints = {'meaning': '', 'reading': '', 'rule': _short(hint)}
             detail = explanation or (translation + '\n' + item.get('instruction', {}).get('rule', ''))
         references[rid] = {'id': rid, 'example_id': eid, 'example_revision': '1',
-            'target_id': item['id'], 'spans': deepcopy(spans), 'hint': hints,
+            'target_id': item['id'], 'spans': deepcopy(spans) if copies else spans, 'hint': hints,
             'explanation': detail.strip(), 'weight': 1.0}
         if item.get('family') == 'word' and rule_hint:
             references[rid]['surface_hint'] = True
@@ -219,9 +222,15 @@ def bundled_example_pack(items, *, apply_review=True):
             'references': sorted(references.values(), key=lambda r: r['id'])}
     if apply_review:
         from .material_review import reviewed_pack
-        return reviewed_pack(pack, include_additions=True, known_targets=by_target)
+        return reviewed_pack(pack, include_additions=True, known_targets=by_target, copies=copies)
+    if not copies:
+        from .shared_tables import share
+        return share(pack)
     return pack
 
+
+# The builder above as defined here (learning_conditions passes copies=False only to it).
+BUNDLED_EXAMPLE_PACK = bundled_example_pack
 
 _SHARED_ANNOTATIONS = _CONTENT.get('_SHARED_ANNOTATIONS', [])
 

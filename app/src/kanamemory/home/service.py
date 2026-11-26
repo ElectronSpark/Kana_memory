@@ -41,7 +41,8 @@ def suggestion_mark(suggestion) -> str:
 
 
 class HomeOverviewService:
-    """The home's reads and rules for one pair of learner stores; built per refresh, it keeps nothing."""
+    """The home's reads and rules for one pair of learner stores; built per refresh, it keeps nothing but
+    drawn_lines of its last overview (what of the drawing the line readiness decides: lines_changed)."""
 
     def __init__(self, store, learning_store, *, repository: Callable[[], Any], paths: Callable[[], Any],
                  presenter: Callable[[], Any], costs: Callable[[], Any], course_kinds: Callable[[], Sequence[str]],
@@ -146,6 +147,7 @@ class HomeOverviewService:
         # Sections that share a title are named apart wherever the home offers one (study_lines.section_name).
         names = SectionNames(path)
         lines = self._lines(service, path, behind, names=names)
+        self.drawn_lines = (path, behind, self.line_view(lines))
         listed_lines = [(item.line_title, item.section_id, item.title) for item in lines.lines
                         if serve is None or arrangement.review_filter.offers_section(serve, current, item.section_id)]
         suggestion = lines.suggestion if lines.suggestion is not None and lines.suggestion.line is not None else None
@@ -176,6 +178,23 @@ class HomeOverviewService:
             paused_line=presenter.paused_line(apart) if apart is not None else None,
             extra_entry=self._extra_entry(arrangement), line_sections=listed_lines,
             suggested_section=(marked.section_id, SUGGEST_MARK) if marked is not None else None)
+
+    @staticmethod
+    def line_view(lines: RouteLines) -> tuple:
+        """What the home draws of lines: each line's (title, section id, title) and B10's suggestion with
+        its mark. The line readiness changes the drawn home only through these."""
+        suggestion = lines.suggestion if lines.suggestion is not None and lines.suggestion.line is not None else None
+        return (tuple((item.line_title, item.section_id, item.title) for item in lines.lines), suggestion,
+                suggestion_mark(suggestion))
+
+    @staticmethod
+    def lines_changed(service, drawn) -> bool:
+        """Whether the home drawn with drawn (an overview's drawn_lines) would now draw its lines or the
+        suggestion differently with the readiness service holds: the same computation, nothing read."""
+        path, behind, view = drawn
+        # the same names the drawing used (SectionNames of the drawn path), so like is compared with like
+        lines = HomeOverviewService._lines(service, path, behind, names=SectionNames(path))
+        return HomeOverviewService.line_view(lines) != view
 
     @staticmethod
     def _lines(service, path, behind: str | None = None, *, names=None) -> RouteLines:

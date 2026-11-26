@@ -346,9 +346,11 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             self.refresh_home_actions()
 
     async def _warm_content(self):
-        # One CPU-heavy worker at a time (each holds the GIL in long Python
+        # First the cheap read the add page and B10's note show (the line readiness of the current
+        # route), then one CPU-heavy worker at a time (each holds the GIL in long Python
         # stretches): the reviewed-example index, then the example service
         # (otherwise built on the UI thread by the first example card).
+        await KanaMemory.prepare_line_readiness(self)
         from .learning_conditions import _reviewed_index
         await asyncio.to_thread(_reviewed_index)
         await KanaMemory.prewarm_examples(self)

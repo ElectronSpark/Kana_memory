@@ -101,12 +101,30 @@ def card_questions(repo, store, content_id, kind, script, *, seed, now):
     """The question about one kana scheduling state (content, kind, script), as the main-lane queue builds each:
     the single-skill builder restricted to that content, at most one question, extended tiers included.
 
-    Shared by plan_kana_queue and the early batch of extra practice (kana_early_batch); each caller adds
-    its own metadata. Empty when the builder's own eligibility leaves the content out.
+    Shared by plan_kana_queue and the early batch of extra practice (kana_early_batch) through
+    card_builder; each caller adds its own metadata. Empty when the builder's own eligibility leaves the
+    content out. This one-call-per-state path is the reference the per-pass builder is equal to.
     """
     from .domain import build_questions, _BatchQuestionStore
     return build_questions(repo, _BatchQuestionStore(store, [content_id]), kind=kind, script=script, limit=1,
                            seed=seed, now=now, include_extended=True)
+
+
+# The kana queue and the early batch build their states' questions in one read-only pass
+# (domain.KanaCardPass: catalogue, metadata and eligibility read once); False builds each with
+# card_questions (the reference the equivalence test compares with).
+PER_PASS_CARDS = True
+
+
+def card_builder(repo, store, *, seed, now):
+    """(build(content_id, kind, script) -> card_questions' result, the pass's kana_list() or None) for one
+    pass over many states; nothing may be written while it is used."""
+    if not PER_PASS_CARDS:
+        return (lambda content_id, kind, script: card_questions(repo, store, content_id, kind, script,
+                                                                seed=seed, now=now)), None
+    from .domain import KanaCardPass
+    cards = KanaCardPass(repo, store, seed=seed, now=now)
+    return cards.questions, cards.catalogue
 
 
 def plan_kana_queue_in_worker(content, progress, *, catalogue, kinds, audio_available,
@@ -1331,6 +1349,7 @@ class StudyPathService:
         projected = project_cards(self.store, aliases=True)
         stages = {script: _adaptive_stages(self.store, script, now) for script in ("hiragana", "katakana")}
         occupied = {identity(self.store, cid, kind, script) for cid, kind, script in active}
+        build, catalogue = card_builder(self.repo, self.store, seed=seed, now=now)
 
         def can_build(content_id, kind, script):
             nonlocal audio_candidates
@@ -1348,7 +1367,7 @@ class StudyPathService:
                 # Use that same predicate once per visit; retain no stale cache
                 # across repository or settings changes. Other builders keep
                 # their original eligibility and choice generation unchanged.
-                rows = self.repo.kana_list()
+                rows = catalogue() if catalogue is not None else self.repo.kana_list()
                 audio_candidates = {
                     alphabet: {row.get("id", row.get("entry_id")) for row in rows
                                if _eligible_kana(row, alphabet, True, audio_only=True)}
@@ -1369,7 +1388,7 @@ class StudyPathService:
                 continue
             if not can_build(cid, kind, script):
                 continue
-            made = card_questions(self.repo, self.store, cid, kind, script, seed=seed, now=now)
+            made = build(cid, kind, script)
             for q in made:
                 q.metadata.update(study_path_due_v1=True, not_before_utc=card["due_at_utc"])
                 q.metadata["practice_config"].update(schedule_mode="spaced", kinds=kinds, rounds=1)
@@ -1383,7 +1402,7 @@ class StudyPathService:
                     continue
                 if not can_build(cid, kind, script):
                     continue
-                made = card_questions(self.repo, self.store, cid, kind, script, seed=seed, now=now)
+                made = build(cid, kind, script)
                 for q in made:
                     q.metadata.update(kana_intro_v1=True, kana_familiarity_v1=True, study_path_entry=entry["id"],
                                       schedule_mode="spaced", adaptive_policy="scaffold-v1",
@@ -1401,7 +1420,7 @@ class StudyPathService:
             cid, script = entry["content_id"], entry["script"]
             if not can_build(cid, kind, script):
                 continue
-            made = card_questions(self.repo, self.store, cid, kind, script, seed=seed, now=now)
+            made = build(cid, kind, script)
             for q in made:
                 q.metadata.update(study_path_entry=entry["id"], schedule_mode="spaced",
                                   adaptive_policy="scaffold-v1", adaptive_stage=stage)

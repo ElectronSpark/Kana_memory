@@ -36,7 +36,7 @@ from datetime import datetime
 from .arrangement.model import Lane, StateRef
 from .arrangement.services.extra_session import EARLY_KANA_BATCH
 from .domain import PreparedSession, Question, _utc, any_question_metadata, prepare_session_snapshot
-from .study_path import card_questions
+from .study_path import card_builder
 
 EXTRA_PRACTICE_MARK = "extra_practice_v1"   # question metadata: asked by an early batch of extra practice
 
@@ -70,8 +70,9 @@ def plan_early_kana_batch(repo, store, states: Iterable[StateRef], *, kinds: Seq
     now = _utc(now)
     seed = secrets.randbits(32) if seed is None else seed
     questions, skipped = [], []
+    build = card_builder(repo, store, seed=seed, now=now)[0]
     for ref in refs:
-        made = card_questions(repo, store, ref.content_id, ref.ability, ref.script, seed=seed, now=now)
+        made = build(ref.content_id, ref.ability, ref.script)
         for question in made:
             question.metadata["practice_config"].update(kinds=list(kinds), rounds=1)
             question.metadata[EXTRA_PRACTICE_MARK] = True

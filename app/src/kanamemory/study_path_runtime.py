@@ -379,22 +379,68 @@ class StudyPathRuntimeMixin:
             self._study_path_service_key = key
         return self._study_path_service_value
 
+    def _warm_up_allowed(self) -> bool:
+        """The start-up warm-up's guard: only the started app (_background_assembly), not fixtures or tools,
+        never while a backup runs or the app closes, and only with a path service accessor."""
+        return not (not getattr(self, "_background_assembly", False) or getattr(self, "_backup_closing", False)
+                    or getattr(self, "_backup_busy", False) or not callable(getattr(self, "study_path_service", None)))
+
+    async def prepare_line_readiness(self):
+        """Startup warm-up, first step: the readiness of each line's next section on the current route (the
+        two-line design: the add page's hint, the suggestion of B10's note; memory only), read on a worker
+        thread before the slower warm-up steps, so the add page opened right after the start has it. Home is
+        redrawn only when the drawn home shows something the read changes (warm_up_refresh). True when
+        something was read."""
+        if not StudyPathRuntimeMixin._warm_up_allowed(self):
+            return False
+        read = await read_line_readiness(self.study_path_service)
+        if read:
+            await StudyPathRuntimeMixin.warm_up_refresh(self, plan_saved=False)
+        return read
+
     async def prepare_main_route_mix(self):
         """Startup warm-up, last step (design 11 section 16, M10): the main route mix plan of the current
         derivation tree on a worker thread when it has none (route_mix.service); home is refreshed once
         when one was saved. Only the started app (_background_assembly) runs it, not fixtures or tools, and
         never while a backup runs or the app closes; a failure, getting the service included, returns False."""
-        if (not getattr(self, "_background_assembly", False) or getattr(self, "_backup_closing", False)
-                or getattr(self, "_backup_busy", False) or not callable(getattr(self, "study_path_service", None))):
+        if not StudyPathRuntimeMixin._warm_up_allowed(self):
             return False
         from .route_mix.service import prepare_in_background
         saved = await prepare_in_background(self.study_path_service)
-        # The two-line design: the readiness of each line's next section, for the add page's hint and the
-        # suggestion of B10's note (memory only; without it both are drawn as before).
+        # The two-line design: the readiness of each line's next section (read at the start of the warm-up;
+        # here only what a new plan's next sections still lack).
         read = await read_line_readiness(self.study_path_service)
-        if (saved or read) and self.page == "home" and not getattr(self, "_backup_closing", False):
-            self.refresh_home_actions()
+        if saved or read:
+            await StudyPathRuntimeMixin.warm_up_refresh(self, plan_saved=saved)
         return saved
+
+    async def warm_up_refresh(self, *, plan_saved):
+        """Redraw home after a warm-up step when it changes what home shows: a saved route mix plan (the
+        route order) always; a readiness read only when the drawn home's lines or B10's suggestion would be
+        drawn differently (HomeOverviewService.lines_changed on the drawing's HomeShowing.lines; a drawing
+        without them is redrawn). Like the home timer, the redraw runs as its own event-loop callback, after
+        any tap already waiting, and only if home is still the same showing (page and page token)."""
+        if self.page != "home" or getattr(self, "_backup_closing", False):
+            return False
+        if not plan_saved:
+            drawn = getattr(getattr(self, "_study_home", None), "lines", None)
+            if drawn is not None:
+                from .home.service import HomeOverviewService
+                try:
+                    if not HomeOverviewService.lines_changed(self.study_path_service(), drawn):
+                        return False
+                except Exception:  # noqa: BLE001 - the comparison is only a saving: redraw as without it
+                    pass
+        import asyncio
+        token = getattr(self, "_page_token", None)
+
+        def redraw():
+            if (self.page == "home" and getattr(self, "_page_token", None) == token
+                    and not getattr(self, "_backup_closing", False)):
+                self.refresh_home_actions()
+        asyncio.get_running_loop().call_soon(redraw)
+        await asyncio.sleep(0)   # the callback runs on the next loop turn, before this step goes on
+        return True
 
     def cancel_main_route_mix(self):
         """App exit (on_exit): a running main route mix computation stops and saves nothing."""
@@ -445,9 +491,9 @@ class StudyPathRuntimeMixin:
         from .app import KanaMemory
         from .home.ui.home_page import draw_home
         from .home_runtime import home_inputs, home_service, record_drawing, run_action
-        model = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending),
-                             word_count=lambda pending: KanaMemory._word_drill_remaining(self, pending)
-                             ).overview(home_inputs(self))
+        home = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending),
+                            word_count=lambda pending: KanaMemory._word_drill_remaining(self, pending))
+        model = home.overview(home_inputs(self))
         showing = self._study_home
 
         def on_action(action, widget=None):
@@ -455,6 +501,7 @@ class StudyPathRuntimeMixin:
         draw_home(model, action_slot=showing.action_slot, secondary_slot=showing.secondary_slot,
                   stats_label=showing.stats_label, on_action=on_action)
         record_drawing(self, showing, model.next_change_at)
+        showing.lines = getattr(home, "drawn_lines", None)
         KanaMemory._arm_home_review_refresh(self)
 
     def press_home_primary(self, widget, action, *, route, no_new_content, add_next):

@@ -3130,6 +3130,202 @@ class _BatchQuestionStore:
         return self.store.previous_choice_options(kind, script)
 
 
+class KanaCardPass:
+    """One kana state's question, for many states in one read-only pass (the kana queue, an early batch).
+
+    Each question is exactly what build_questions(repository, _BatchQuestionStore(store, [content_id]),
+    kind=kind, script=script, limit=1, seed=seed, include_extended=True) returns for that state (the
+    single-card path, study_path.card_questions): the same eligibility and content restriction, prompt,
+    options in their order, answer, accepted answers and metadata, and the same random draws in the same
+    order (a fresh stream from the seed for every question). What that call reads again for every state
+    is read once per pass here: the catalogue and the metadata once, and per (kind, script) the eligible
+    rows, their romaji values, the option candidates and the learner's previous choice options. A pass
+    only reads (nothing it reads may be written while it runs) and is dropped when it ends; the catalogue
+    rows and the previous options are shared by its questions, read-only (shared_tables). Word kinds and
+    an unseeded pass take build_questions itself.
+    """
+
+    def __init__(self, repository, store, *, seed, now=None):
+        self.repository, self.store, self.seed, self.now = repository, store, seed, now
+        self._rows = self._content_version = None
+        self._tables, self._previous = {}, {}
+
+    def catalogue(self) -> list[dict]:
+        """repository.kana_list(), read once for the pass (read-only rows)."""
+        if self._rows is None:
+            from .shared_tables import share
+            self._rows = share(self.repository.kana_list())
+        return self._rows
+
+    def questions(self, content_id, kind, script) -> list[Question]:
+        if kind in WORD_SKILLS or self.seed is None:
+            return build_questions(self.repository, _BatchQuestionStore(self.store, [content_id]), kind=kind,
+                                   script=script, limit=1, seed=self.seed, now=self.now, include_extended=True)
+        table = self._table(kind, script)
+        if content_id not in table.by_id:
+            return []
+        previous = {}
+        if kind in {"kana_choice", "romaji_kana"}:
+            previous = self._previous.get((kind, script))
+            if previous is None:
+                from .shared_tables import share
+                previous = self._previous[kind, script] = share(self.store.previous_choice_options(kind, script))
+        _check_build_cancelled(self.store)
+        return [table.question(content_id, self.seed, self._content_version[0], previous)]
+
+    def targets(self, content_ids, kind, script) -> list[_PracticeTarget]:
+        """build_questions(repository, _BatchQuestionStore(store, content_ids), kind=kind, script=script,
+        limit=len(content_ids), seed=seed, include_extended=True, _targets_only=True): the given states the
+        builder's eligibility keeps, in their order, as selection-only targets."""
+        if kind in WORD_SKILLS:
+            return build_questions(self.repository, _BatchQuestionStore(self.store, content_ids), kind=kind,
+                                   script=script, limit=len(content_ids), seed=self.seed, now=self.now,
+                                   include_extended=True, _targets_only=True)
+        table = self._table(kind, script)
+        return [_PracticeTarget(content_id, kind, script, {"practice_config": {}})
+                for content_id in content_ids if content_id in table.by_id]
+
+    def _table(self, kind, script):
+        # build_questions' reads before its selection, in its order: cancellation, key, metadata, catalogue.
+        _check_build_cancelled(self.store)
+        _validate_key("questions", kind, script)
+        if self._content_version is None:
+            self._content_version = (self.repository.metadata().get("content_version", "1"),)
+        table = self._tables.get((kind, script))
+        if table is None:
+            table = self._tables[kind, script] = _KanaCardTable(self.catalogue(), kind, script)
+        return table
+
+
+class _KanaCardTable:
+    """build_questions' per-(kind, script) reads for KanaCardPass, and its kana branch for one row."""
+
+    def __init__(self, rows, kind, script):
+        self.kind, self.script = kind, script
+        self.all_kana = [r for r in rows if _eligible_kana(r, script, True, audio_only=False, kind=kind)]
+        self.romaji = {id(row): _romaji_values(row) for row in self.all_kana}
+        records = [r for r in self.all_kana
+                   if _eligible_kana(r, script, True, audio_only=kind == "kana_handwriting", kind=kind)
+                   and (kind == "kana_handwriting" or self.romaji[id(r)])]
+        self.by_id = {r.get("id", r.get("entry_id")): r for r in records}
+        self._records, self._candidates = records, None
+        self._full_options = self._same_romaji = None
+
+    def _choice_candidates(self):
+        """(records, all_kana) as _kana_choices reads each candidate, and the excluded romaji."""
+        if self._candidates is None:
+            def info(row):
+                values = self.romaji[id(row)]
+                symbol = normalize_answer(row[self.script])
+                return (len(symbol) == 1, symbol, values, {normalize_romaji(value) for value in values},
+                        normalize_romaji(values[0]) if values else None,
+                        (values[0] if values else None) if self.kind == "kana_choice" else symbol)
+            excluded = _non_teaching_romaji(self.all_kana) if self.kind == "kana_choice" else frozenset()
+            self._candidates = ([info(row) for row in self._records], [info(row) for row in self.all_kana], excluded)
+        return self._candidates
+
+    def _choices(self, row, count, rng, previous):
+        # _kana_choices over the precomputed candidates: the same pools, draws and result.
+        kind, script = self.kind, self.script
+        values = self.romaji[id(row)]
+        primary = values[0]
+        answer = primary if kind == "kana_choice" else normalize_answer(row[script])
+        accepted = {normalize_romaji(value) for value in values}
+        records, all_records, excluded = self._choice_candidates()
+        single = len(normalize_answer(row[script])) == 1
+        homophones = homophone_answers(answer, script) if kind == "romaji_kana" else ()
+        choices = []
+        pools = []
+        for candidates in (records, all_records):
+            pool = []
+            for shape, symbol, candidate_romaji, normalized, first, value in candidates:
+                if shape != single:
+                    continue
+                if kind == "romaji_kana" and symbol in homophones:
+                    continue
+                if not candidate_romaji or not accepted.isdisjoint(normalized):
+                    continue
+                if first in excluded:
+                    continue
+                if value != answer and value not in pool:
+                    pool.append(value)
+            pools.append(pool)
+        for pool in pools:
+            pool = [value for value in pool if value not in choices]
+            rng.shuffle(pool)
+            choices.extend(pool[:max(0, count - 1 - len(choices))])
+            if len(choices) >= count - 1:
+                break
+        if choices and set([answer, *choices]) == set(previous):
+            for pool in pools:
+                alternatives = [value for value in pool if value not in previous]
+                if alternatives:
+                    choices[rng.randrange(len(choices))] = rng.choice(alternatives)
+                    break
+        options = [answer, *choices]
+        rng.shuffle(options)
+        if len(options) > 1 and options == list(previous):
+            options = options[1:] + options[:1]
+        return options
+
+    def question(self, content_id, seed, content_version, previous):
+        """build_questions' kana branch for the chosen row (limit 1, extended tiers, 4 options)."""
+        kind, script = self.kind, self.script
+        row = self.by_id[content_id]
+        metadata = {"session_seed": seed, "audio_only": True, "context_given": False, "content_version": content_version,
+                    "new_only": False, "practice_config": {
+                        "kana_categories": None, "requested_count": 1, "word_collection": None,
+                        "include_research": False, "include_extended": True,
+                        "word_table": "partial", "new_only": False}}
+        symbol = normalize_answer(row[script])
+        metadata["kana_category"] = row.get("category")
+        audio_plan = kana_audio_plan(row)
+        audio_text = audio_plan.text if audio_plan.isolated else ""
+        romaji_values = self.romaji[id(row)]
+        romaji = romaji_values[0] if romaji_values else ""
+        accepted = ()
+        if kind in ROMAJI_ANSWER_SKILLS:
+            answer = romaji
+            prompt = f"选出「{symbol}」的罗马字。" if kind == "kana_choice" else f"拼出「{symbol}」的罗马字。"
+            options = (self._choices(row, 4, random.Random(seed), previous.get(content_id, ()))
+                       if kind == "kana_choice" else [])
+            accepted = romaji_values[1:]
+            metadata.update({"audio_only": False, "context_given": True, "kana_symbol": symbol})
+        elif kind in {"romaji_kana", "romaji_kana_full", "romaji_handwriting"}:
+            answer = symbol
+            if kind == "romaji_kana":
+                prompt = f"选出罗马音「{romaji}」对应的假名。"
+                options = self._choices(row, 4, random.Random(seed), previous.get(content_id, ()))
+            elif kind == "romaji_kana_full":
+                prompt = f"从完整假名表拼出罗马音「{romaji}」对应的假名。"
+                if self._full_options is None:
+                    self._full_options = tuple(dict.fromkeys(char for candidate in self.all_kana
+                                                             for char in normalize_answer(candidate[script])))
+                options = list(self._full_options)
+                metadata.update({"word_table": "full", "answer_tokens": list(symbol)})
+            else:
+                prompt = f"写出罗马音「{romaji}」对应的假名，并确认识别结果。"
+                options = []
+            if self._same_romaji is None:
+                same = {}
+                for candidate in self.all_kana:
+                    values = self.romaji[id(candidate)]
+                    if values:
+                        same.setdefault(normalize_romaji(values[0]), []).append(normalize_answer(candidate[script]))
+                self._same_romaji = same
+            accepted = tuple(value for value in dict.fromkeys([*homophone_answers(symbol, script),
+                *(value for value in self._same_romaji.get(normalize_romaji(romaji), ()) if value != answer)])
+                if value != answer)
+            metadata.update({"audio_only": False, "context_given": False, "kana_symbol": symbol,
+                             "answer_scope": "isolated_sound"})
+        else:
+            prompt = "听读音，写出假名，并确认识别结果。"
+            answer = symbol
+            options = []
+        metadata["romaji"] = romaji
+        return Question(content_id, kind, script, prompt, answer, options, audio_text, accepted, metadata)
+
+
 def _interleave_batch(questions_by_content, rng, previous_content=None):
     """Spread repeated items apart, with randomized skill order and tie breaks."""
     heap = []

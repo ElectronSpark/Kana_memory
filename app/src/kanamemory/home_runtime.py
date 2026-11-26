@@ -31,7 +31,8 @@ class HomeShowing:
     moment when the page has one), and ``day_ends_at``, the end of the study
     day the 今日 figures were counted in: each refresh stores the ones it drew
     (record_drawing); the home timer, a backup job on home and a feedback
-    return arm from them.
+    return arm from them. lines: the drawing's HomeOverviewService.drawn_lines (what the line
+    readiness decides of it), by which a start-up readiness read redraws the home only when it changes it.
     """
 
     stats_label: Any
@@ -40,6 +41,7 @@ class HomeShowing:
     material_slot: Any
     next_change_at: datetime | None = None
     day_ends_at: datetime | None = None
+    lines: Any = None
 
 
 # The home page refreshes itself (design 02, 今日学习): while it is shown, one check per minute compares the
