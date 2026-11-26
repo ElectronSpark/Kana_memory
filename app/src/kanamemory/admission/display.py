@@ -38,6 +38,12 @@ PREVIEW_VISIBLE = 5   # section titles the shortcut preview names before "另有
 # The first part of the two-line design: the quick choices by line, each line's next section, the mark, the
 # readiness line and the lessons it misses.
 ADD_LINE = {"word": "只勾选词汇", "grammar": "只勾选语法"}   # beside 加入勾选: the next N sections of one line
+# The preview's line per quick choice by line: what that button would tick for the same count.
+LINE_PREVIEW = "{button}：{count} 节 · {titles}"
+LINE_PREVIEW_MORE = " 等"   # after the titles when the button ticks more sections than it names
+LINE_PREVIEW_NONE = "{button}：没有可加的小节"
+LINE_PREVIEW_VISIBLE = 3
+LINE_PREVIEW_JOINER = "、"
 LINE_NEXT = "下一节{line}：{title}"
 SUGGESTED = " · " + SUGGEST_MARK
 SUGGEST_OTHER = SUGGEST_MARK + "：{title}"
@@ -288,6 +294,7 @@ class ShortcutPreview:
     titles: tuple[str, ...] = ()       # at most PREVIEW_VISIBLE section titles
     remainder: str = ""                # 另有 N 节
     complete: str = ""                 # <route>小节都已加入。
+    lines: tuple[LinePreview, ...] = ()   # below the block above: one per quick choice by line (none when invalid)
 
     @classmethod
     def invalid(cls, requested_text: str) -> ShortcutPreview:
@@ -295,17 +302,44 @@ class ShortcutPreview:
 
     @classmethod
     def planned(cls, requested_text: str, count: int, sections: Sequence, visible: Sequence[Mapping],
-                complete_title: str | None = None) -> ShortcutPreview:
-        """``visible``: the first sections as section dicts; ``complete_title``: the route title when none is left."""
+                complete_title: str | None = None, lines: Sequence[LinePreview] = ()) -> ShortcutPreview:
+        """``visible``: the first sections as section dicts; ``complete_title``: the route title when none is left;
+        ``lines``: what each quick choice by line would tick for the same count (LinePreview.of)."""
         feedback = {**_preview_feedback(requested_text), "valid": True,
                     "requested_count": count, "planned_count": len(sections),
                     "selection_rule": "next_new_main_sections_in_catalogue_order",
                     "visible_sections": [path_display_snapshot(section, "study_path_section") for section in visible],
                     "additional_count": max(0, len(sections) - len(visible))}
+        if lines:
+            feedback["line_sections"] = {line.line: list(line.section_ids) for line in lines}
         remainder = f"另有 {len(sections) - PREVIEW_VISIBLE} 节" if len(sections) > PREVIEW_VISIBLE else ""
         complete = complete_title + "小节都已加入。" if not sections and complete_title is not None else ""
         return cls(feedback, heading=f"将勾选 {len(sections)} 节",
-                   titles=tuple(section["title"] for section in visible), remainder=remainder, complete=complete)
+                   titles=tuple(section["title"] for section in visible), remainder=remainder, complete=complete,
+                   lines=tuple(lines))
+
+
+@dataclass(frozen=True)
+class LinePreview:
+    """One quick choice by line in the preview: the sections its button would tick (all of them, by id) and its
+    text, 「只勾选词汇：N 节 · <title>、<title>、<title>」 (「 等」 after more than three) or 没有可加的小节."""
+
+    line: str                          # study_lines.WORD / GRAMMAR
+    text: str
+    section_ids: tuple[str, ...]
+
+    @classmethod
+    def of(cls, line: str, section_ids: Sequence[str], titles: Sequence[str]) -> LinePreview:
+        """``titles``: the titles of the first sections (at least LINE_PREVIEW_VISIBLE of them when there are)."""
+        button = ADD_LINE[line]
+        if not section_ids:
+            return cls(line, LINE_PREVIEW_NONE.format(button=button), ())
+        count = len(section_ids)
+        text = LINE_PREVIEW.format(button=button, count=count,
+                                   titles=LINE_PREVIEW_JOINER.join(titles[:LINE_PREVIEW_VISIBLE]))
+        if count > LINE_PREVIEW_VISIBLE:
+            text += LINE_PREVIEW_MORE
+        return cls(line, text, tuple(section_ids))
 
 
 def _preview_feedback(requested_text: str) -> dict:

@@ -198,6 +198,24 @@ class HomeOverviewService:
 
     def _next_review_at(self, inputs: HomeInputs) -> datetime | None:
         from ..home_counts import show_next_review
+        summary, dues = self._counted(inputs)
+        moment = min(app_clock.localize(datetime.fromisoformat(d)) for d in dues) if dues else None
+        return moment if show_next_review(summary.ready_total + summary.instruction, summary.waiting, moment) else None
+
+    def ready_total(self, inputs: HomeInputs) -> int:
+        """The home's "现在可答 N 题" now: kana and course questions alike, with the overview's own reads (the main
+        checkpoint's kana summary, the course counts and the unqueued course preview in one read operation, the
+        unqueued kana preview), under the learner's review filter of this moment. Entering 加练 serves all of
+        them first through the main dispatch, and the page 加练 says how many (design 12 E9)."""
+        arrangement = self._arrangement() if self._arrangement is not None else None
+        if arrangement is None:
+            return self._counted(inputs)[0].ready_total
+        from ..domain import _utc
+        with arrangement.serving(arrangement.review_filter.current(_utc(None))):
+            return self._counted(inputs)[0].ready_total
+
+    def _counted(self, inputs: HomeInputs):
+        """(home_counts.HomeCounts, the future due instants of every source) as the overview reads them."""
         store, learning = self._store, self._learning
         pending = store.load_session_progress(lane="main", lazy_questions=True)
         kana_kinds = self._queue_kinds(pending) if pending else None
@@ -213,8 +231,7 @@ class HomeOverviewService:
             unqueued_teaching=teaching["unqueued"])
         dues = [date for date in (availability.next_due_utc, counts.get("next_due_at_utc"),
                                  unqueued["next_due"], courses["next_due"]) if date]
-        moment = min(app_clock.localize(datetime.fromisoformat(d)) for d in dues) if dues else None
-        return moment if show_next_review(summary.ready_total + summary.instruction, summary.waiting, moment) else None
+        return summary, dues
 
     @staticmethod
     def _extra_entry(arrangement) -> bool:
@@ -270,7 +287,7 @@ class HomeOverviewService:
     def course_ready(self) -> int:
         """The course part of the home's "现在可答 N 题": the overview's own reads (the counts and the unqueued
         preview in one read operation, under the learner's review filter of this moment, a running planned
-        round limiting the unqueued side as there). The page 加练 says that these come first (design 12 E9)."""
+        round limiting the unqueued side as there)."""
         arrangement = self._arrangement() if self._arrangement is not None else None
         if arrangement is None:
             return self._course_ready()

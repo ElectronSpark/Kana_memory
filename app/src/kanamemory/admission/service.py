@@ -11,7 +11,8 @@ whether 按顺序选多节 is open and what it says) comes in as arguments.
 C5: an operation does no more than the page did before: opening, a tick,
 清空选择 and 加入勾选 each open one read operation, plan once and count the
 workload once; a rebase also re-reads the route; the section-count preview
-asks the path service for the next sections, as each keystroke did.
+asks the path service for the next sections, as each keystroke did, and
+for the next sections of each line, as its quick choice will.
 
 The first part of the two-line design: each plan also draws the route's two
 lines (study_lines.route_lines over the overview the session holds, with the
@@ -28,12 +29,13 @@ import sqlite3
 from typing import Any
 
 from .. import admission_workload
-from ..study_lines import readiness_ids, route_lines
+from ..study_lines import LINES, next_sections, readiness_ids, route_lines
 from ..study_path_display import active_route, closure_text, has_other_routes, route_key, route_kwargs, route_title
 from ..study_path_selection import NodeKey, StudyPathSelection
 from ..study_routes import CORE_ROUTE_ID, CORE_ROUTE_TITLE
-from .display import (OUTSIDE_ROUTE, PREVIEW_VISIBLE, ROUTE_EMPTY, ROUTE_SAVE_FAILED, SELECTION_SAVE_FAILED,
-                      UNTITLED, AddDelta, AddPageModel, LinesModel, NodeModel, PlanModel, Prerequisites,
+from .display import (LINE_PREVIEW_VISIBLE, OUTSIDE_ROUTE, PREVIEW_VISIBLE, ROUTE_EMPTY, ROUTE_SAVE_FAILED,
+                      SELECTION_SAVE_FAILED, UNTITLED, AddDelta, AddPageModel, LinePreview, LinesModel, NodeModel,
+                      PlanModel, Prerequisites,
                       ShortcutPreview, route_switch, selection_feedback, tree_nodes, visible_rows)
 from .model import AddResult, section_count
 
@@ -310,13 +312,21 @@ class AddContentService:
         except ValueError:
             return ShortcutPreview.invalid(count_text)
         route = route_kwargs(session.route_id)
-        sections = read.plan_next(count, **route) if read is not None else self._paths().plan_next(count, **route)
-        visible = [self._paths().section(section, **route) if isinstance(section, str) else section
-                   for section in sections[:PREVIEW_VISIBLE]]
+        # One overview of the route for the whole preview (one pass: a plan per button read the route three times).
+        # 加入勾选, 只勾选词汇 and 只勾选语法 ask plan_next(count) and plan_next(count, line=…) of their read, which is
+        # study_lines.next_sections over that read's overview: the preview applies the same rule to its overview.
+        overview = (read if read is not None else self._paths()).overview(**route)
+        sections = next_sections(overview, count)
+        visible = sections[:PREVIEW_VISIBLE]
         complete = None
         if not sections:
             complete = route_title(self._paths(), route["route_id"]) if route else CORE_ROUTE_TITLE
-        return ShortcutPreview.planned(count_text, count, sections, visible, complete)
+        lines = []
+        for line in LINES:
+            planned = next_sections(overview, count, line)
+            lines.append(LinePreview.of(line, [section["id"] for section in planned],
+                                        [section["title"] for section in planned[:LINE_PREVIEW_VISIBLE]]))
+        return ShortcutPreview.planned(count_text, count, sections, visible, complete, lines)
 
 
 class AddOperations:

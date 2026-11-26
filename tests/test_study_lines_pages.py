@@ -3,10 +3,11 @@ and the mark on B10's note (fake UI and the add-content service over a fake path
 
 The add page: each line's next section, the mark 建议先加, the readiness line
 现在能出：…, the missing lessons and 一并加入 (a tick), the three quick choices
-(加入勾选 by route order, 只勾选词汇, 只勾选语法), and the page without a readiness
+(加入勾选 by route order, 只勾选词汇, 只勾选语法) and the preview's line for each
+quick choice by line, and the page without a readiness
 table or after a failed plan. The service: the lines of a plan (the selection
 counts as known), adding by line, 一并加入 and the readiness job. The home:
-下一节词汇：… / 下一节语法：… where 加入下一小节 · … stood, never twice the
+加入下一节词汇 · … / 加入下一节语法 · … where 加入下一小节 · … stood, never twice the
 section the card offers. B10's note: the mark and the reason.
 """
 from contextlib import contextmanager
@@ -188,6 +189,54 @@ def test_adding_by_line_ticks_the_next_sections_of_that_line(monkeypatch):
     assert service.select_next(session, "x", WORD).rejection == display.COUNT_INVALID
 
 
+def test_the_preview_names_what_each_quick_choice_will_tick(monkeypatch):
+    paths = LinePaths()
+    service = service_of(paths, monkeypatch=monkeypatch)
+    session, _ = service.open()
+    preview = service.preview_sections(session, "2")
+    # 加入勾选's block as before, then one line per quick choice by line.
+    assert (preview.heading, preview.titles, preview.remainder) == ("将勾选 2 节", ("认识假名", "表达身份"), "")
+    assert [line.text for line in preview.lines] == ["只勾选词汇：2 节 · 认识假名、稍后再见", "只勾选语法：1 节 · 表达身份"]
+    assert preview.feedback["line_sections"] == {WORD: ["s0", "s3"], GRAMMAR: ["s1"]}
+    assert preview.feedback["planned_count"] == 2 and preview.feedback["valid"] is True
+    # What a line names is exactly what its button then ticks.
+    entries = {section_id: [eid for eid, _, _ in rows] for _, _, section_id, _, rows in TREE}
+    for line in preview.lines:
+        service.clear(session)
+        service.select_next(session, "2", line.line)
+        assert session.selection.selected_entry_ids == [eid for sid in line.section_ids for eid in entries[sid]]
+    # A line without any section left; an invalid count has the error alone.
+    paths.enroll("e1")
+    assert [line.text for line in service.preview_sections(session, "1").lines] == [
+        "只勾选词汇：1 节 · 认识假名", "只勾选语法：没有可加的小节"]
+    assert service.preview_sections(session, "1").feedback["line_sections"] == {WORD: ["s0"], GRAMMAR: []}
+    invalid = service.preview_sections(session, "x")
+    assert invalid.error == display.COUNT_INVALID and invalid.lines == () and "line_sections" not in invalid.feedback
+
+
+def test_a_line_of_the_preview_names_three_titles_then_the_whole_count():
+    sections = [f"s{index}" for index in range(5)]
+    titles = ["一", "二", "三", "四", "五"]
+    assert display.LinePreview.of(WORD, sections, titles).text == "只勾选词汇：5 节 · 一、二、三 等"
+    assert display.LinePreview.of(GRAMMAR, sections[:3], titles[:3]).text == "只勾选语法：3 节 · 一、二、三"
+    assert display.LinePreview.of(GRAMMAR, (), ()).text == "只勾选语法：没有可加的小节"
+
+
+def test_the_add_page_draws_the_line_previews_below_the_block(fake_ui):
+    page, ops = build(LINES)
+    lines = (display.LinePreview.of(WORD, ["s3"], ["动物"]), display.LinePreview.of(GRAMMAR, (), ()))
+    preview = display.ShortcutPreview.planned("1", 1, [{"id": "s3", "title": "动物"}], [{"id": "s3", "title": "动物"}],
+                                              lines=lines)
+    ops.preview_sections = lambda count_text: preview
+    page.toggle_shortcut()
+    assert texts(page.section_preview) == ["将勾选 1 节", "动物", "只勾选词汇：1 节 · 动物", "只勾选语法：没有可加的小节"]
+    assert page.section_preview._feedback_fragment["line_sections"] == {WORD: ["s3"], GRAMMAR: []}
+    ops.preview_sections = lambda count_text: display.ShortcutPreview.invalid(count_text)
+    page.section_count.value = "x"
+    page.preview_sections()
+    assert texts(page.section_preview) == [display.COUNT_INVALID]
+
+
 def test_without_a_readiness_table_the_lines_have_no_readiness_and_the_job_reads_it(monkeypatch):
     paths = LinePaths(None)
     service = service_of(paths, monkeypatch=monkeypatch)
@@ -332,7 +381,7 @@ def home(**changes):
 def test_the_line_buttons_take_the_place_of_the_next_section_button():
     model = home()
     assert model.add_next is None
-    assert [button.caption for button in model.line_next] == ["下一节词汇：动物", "下一节语法：は"]
+    assert [button.caption for button in model.line_next] == ["加入下一节词汇 · 动物", "加入下一节语法 · は"]
     assert [(b.action.kind, b.action.section_id, b.action.route_id) for b in model.line_next] == [
         (HomeActionKind.ADD_SECTIONS, "w1", CORE_ROUTE_ID), (HomeActionKind.ADD_SECTIONS, "g1", CORE_ROUTE_ID)]
     # A route next section on neither line keeps 加入下一小节 · …; nothing by line: as before.
@@ -342,10 +391,10 @@ def test_the_line_buttons_take_the_place_of_the_next_section_button():
 
 def test_a_line_never_repeats_the_section_the_card_offers():
     noted = home(rows=HomeRowsModel(note=SectionNote("g1", "は")))
-    assert [button.caption for button in noted.line_next] == ["下一节词汇：动物"]
+    assert [button.caption for button in noted.line_next] == ["加入下一节词汇 · 动物"]
     idle = home(has_work=False)
     assert idle.primary.action.then.section_id == "w1"
-    assert [button.caption for button in idle.line_next] == ["下一节语法：は"]
+    assert [button.caption for button in idle.line_next] == ["加入下一节语法 · は"]
 
 
 def test_the_home_page_draws_the_line_buttons_after_the_next_section_button(fake_ui):
@@ -353,8 +402,8 @@ def test_the_home_page_draws_the_line_buttons_after_the_next_section_button(fake
     card, column, stats, pressed = View(), View(), View(), []
     home_page.draw_home(model, action_slot=card, secondary_slot=column, stats_label=stats,
                         on_action=lambda action, widget: pressed.append(action))
-    assert texts(column)[:2] == ["下一节词汇：动物", "下一节语法：は"]
-    press(column, "下一节语法：は")
+    assert texts(column)[:2] == ["加入下一节词汇 · 动物", "加入下一节语法 · は"]
+    press(column, "加入下一节语法 · は")
     assert pressed == [model.line_next[1].action]
     assert column.children[1].style.get("multiline") is True
 

@@ -326,6 +326,8 @@ class AddPage:
             self.section_preview.add(u.label(preview.remainder, size=13, color=u.MUTED))
         if preview.complete:
             self.section_preview.add(u.label(preview.complete, size=14, color=u.MUTED))
+        for line in preview.lines:   # what 只勾选词汇 / 只勾选语法 would tick
+            self.section_preview.add(u.label(line.text, size=13))
 
     def _draw_feedback(self) -> None:
         """The tree's fragment: the selection's (from the last plan) and the page's display fields."""

@@ -348,19 +348,19 @@ class ArrangementPresenter:
                               SCOPE_DONE_EXTRA if extra_available else None)
 
     @staticmethod
-    def extra_parts(counts, *, course_due: int = 0) -> ExtraPartsModel:
-        """The page 加练 (E9) from services.extra_parts.ExtraParts.counts. ``course_due``: the course questions
-        answerable now as the home page counts them (HomeOverviewService.course_ready); entering serves them first
-        through the main dispatch, scored as usual (E1), and the page says so in its first line."""
+    def extra_parts(counts, *, due: int = 0) -> ExtraPartsModel:
+        """The page 加练 (E9) from services.extra_parts.ExtraParts.counts. ``due``: the questions answerable now as
+        the home page counts them, kana and course alike (HomeOverviewService.ready_total); entering serves them
+        first through the main dispatch, scored as usual (E1), and the page says so in its first line."""
         options = []
         for item in counts:
             title = PART_TITLES[item.part.value]
             caption = (PART_COUNT.format(title=title, count=item.count) if item.count
                        else PART_EMPTY.format(title=title))
             options.append(PartOption(item.part.value, caption, item.count))
-        if course_due > 0:
+        if due > 0:
             return ExtraPartsModel(tuple(options), header=EXTRA_HEADER, text=EXTRA_INTRO_AFTER_DUE,
-                                   due_line=EXTRA_DUE_FIRST.format(count=int(course_due)))
+                                   due_line=EXTRA_DUE_FIRST.format(count=int(due)))
         return ExtraPartsModel(tuple(options), header=EXTRA_HEADER, text=EXTRA_INTRO_TEXT)
 
     def pause_chooser(self) -> PauseChooserModel:

@@ -1104,3 +1104,4 @@ tests/test_library_romaji_search.py
 app/src/kanamemory/cjk_forms.py
 tests/test_cjk_forms.py
 tests/test_button_selected_look.py
+tests/test_arrangement_backup_carries_mode.py

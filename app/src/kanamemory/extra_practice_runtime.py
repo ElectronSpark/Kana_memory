@@ -208,16 +208,18 @@ class ExtraPracticeFlow:
         from .arrangement.ui.extra_practice import extra_parts_page
         from .study_path_runtime import StudyPathRuntimeMixin
         arrangement = StudyPathRuntimeMixin.study_arrangement(self.app)
-        from .home_runtime import home_service
+        from .home_runtime import home_inputs, home_service
         try:
             counts = arrangement.extra_parts.counts(_now())
-            # The course questions the home page counts as answerable now: entering serves them first (E1).
-            course_due = home_service(self.app).course_ready()
+            # The questions the home page counts as answerable now, kana and course alike: entering serves them
+            # first through the main dispatch (E1).
+            due = home_service(self.app, queue_kinds=lambda pending: self.app._queue_kinds(pending)).ready_total(
+                home_inputs(self.app))
         except Exception as exc:   # a busy database: the page stays
             _record(exc)
             self.app.alert(BUSY)
             return
-        model = arrangement.presenter.extra_parts(counts, course_due=course_due)
+        model = arrangement.presenter.extra_parts(counts, due=due)
         self.app.screen("extra_intro", model.header, *extra_parts_page(
             model, on_start=lambda part: self.start(Part(part)), on_back=self.app.leave_learning))
 
