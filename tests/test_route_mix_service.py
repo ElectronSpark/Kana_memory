@@ -583,8 +583,10 @@ def test_readiness_follows_the_selection_rules(monkeypatch):
     narrow = word("word:narrow", {"vocab_meaning": [a], "vocab_recall": [r]}, abilities=("understanding",))
     retired = word("word:retired", {"vocab_meaning": [a, c]})
     bare, sentence = template("本"), template("本を読む", practice={"background_ids": ["word:read"]})
-    recall, base_form = template("x", task="写出"), template("y", task="基本形是什么")
-    cognate = word("word:cognate", {"vocab_meaning": [bare, sentence], "vocab_recall": [recall, base_form]})
+    recall, base_form = template("本", task="写出"), template("y", task="基本形是什么")
+    other_gloss = template("书", task="写出")
+    cognate = word("word:cognate", {"vocab_meaning": [bare, sentence],
+                                    "vocab_recall": [recall, base_form, other_gloss]})
     sha = questions.template_fingerprint
     declared = {
         "word:main": {"vocab_meaning": {sha(a): {"words": ["word:x"]}, sha(b): {"oov": ["未知"], "words": []},
@@ -593,7 +595,7 @@ def test_readiness_follows_the_selection_rules(monkeypatch):
         "word:narrow": {"vocab_meaning": {sha(a): {}}, "vocab_recall": {sha(r): {}}},
         "word:retired": {"vocab_meaning": {sha(a): {}, sha(c): {}}},
         "word:cognate": {"vocab_meaning": {sha(bare): {}, sha(sentence): {}},
-                         "vocab_recall": {sha(recall): {}, sha(base_form): {}}}}
+                         "vocab_recall": {sha(recall): {}, sha(base_form): {}, sha(other_gloss): {}}}}
     monkeypatch.setattr(questions, "_PRACTICE", {"template_retirements": {
         "word:retired": {item_fingerprint(retired): {"vocab_meaning": [sha(c)]}}}})
     monkeypatch.setattr(questions, "_SOUND_MIX", {"cognate_words": {
@@ -610,9 +612,11 @@ def test_readiness_follows_the_selection_rules(monkeypatch):
     assert set(readiness.abilities("word:narrow")) == {"understanding"}  # its abilities
     retired_rows = ((sha(a), ()),)  # the retirement table
     assert readiness.abilities("word:retired") == {"understanding": retired_rows}
-    # the cognate rule (class S): one bare meaning task and the base-form recall task stay
+    # the cognate rule (class S): one bare meaning task stays; of the recall tasks the one whose text shows
+    # the written form (本) leaves, the base-form task and the one with another gloss (书) stay
     assert readiness.abilities("word:cognate") == {"understanding": ((sha(bare), ()),),
-                                                   "use": ((sha(base_form), ()),)}
+                                                   "use": tuple(sorted([(sha(base_form), ()),
+                                                                        (sha(other_gloss), ())]))}
 
     def switched(kinds):
         return sources.read_readiness(["word:main"], items, kinds=kinds,

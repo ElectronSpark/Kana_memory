@@ -19,6 +19,7 @@ from .content_caches import content_cache, register as register_content_cache
 from .content_pack import (load_namespace, QUESTION_DEPENDENCIES, DEPENDENCY_ID_FIELDS,
                            validate_question_dependency_requirements)
 from .learning_content import get_learning_item
+from . import cjk_forms
 from . import pitch_practice
 from . import multi_cloze
 from . import reading_form_answers
@@ -426,9 +427,12 @@ def _cognate_mapping_variants(item, templates):
     S (transparent same form): every vocab_meaning task but one bare one (the
     word alone, no practice metadata; without one, the first-ranked task, which
     prefers needing no other word, so understanding never starves on this
-    rule) and every vocab_recall task except base-form recall from a sentence;
+    rule) and, of the vocab_recall tasks other than base-form recall from a
+    sentence, those whose shown text shows the written form (_recall_shows_form:
+    then "write the word" is only a reading question; any other gloss stays);
     P (and a listed word without a class): two meaning tasks that need no other
-    known word, and the same recall rule; D and E: nothing. Base-form recall stays: it tests the form, not a
+    known word, and every vocab_recall task except base-form recall from a
+    sentence; D and E: nothing. Base-form recall stays: it tests the form, not a
     translation. For S and P, meaning tasks whose practice family is
     KANA_FORM_MEANING always stay: they write the word in kana (alone or
     inside a sentence), so the meaning must come from the reading, not the
@@ -443,7 +447,8 @@ def _cognate_mapping_variants(item, templates):
     meaning = templates.get("vocab_meaning", [])
     kana_form = {index for index, raw in enumerate(meaning) if _kana_form_meaning(raw)}
     recall = [("vocab_recall", i) for i, raw in enumerate(templates.get("vocab_recall", []))
-              if not (isinstance(raw, dict) and "基本形是" in str(raw.get("task", "")))]
+              if not (isinstance(raw, dict) and "基本形是" in str(raw.get("task", "")))
+              and (group != "S" or _recall_shows_form(item, raw))]
     def keep_order(pair):
         practice = pair[1].get("practice") if isinstance(pair[1], dict) else None
         return (bool(practice and practice.get("background_ids")), not practice, pair[0])
@@ -464,6 +469,34 @@ def _cognate_mapping_variants(item, templates):
     else:
         kept = {*ranked[:1], *bare[:1]} if bare else set(ranked[:2])
     return [*(("vocab_meaning", i) for i in range(len(meaning)) if i not in kept), *recall]
+
+
+# The template fields the question page shows before the answer: the prompt, the task (its
+# Chinese hint line, which question_presentation may fold behind the hint button, is shown
+# too) and the options.
+SHOWN_TEXT_FIELDS = ("prompt", "task", "choices")
+
+
+def shown_text(raw):
+    """Every text a template shows before the answer, one field (or option) per line."""
+    if not isinstance(raw, dict):
+        return ""
+    parts = []
+    for field in SHOWN_TEXT_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, (list, tuple)):
+            parts.extend(str(entry) for entry in value)
+        elif value is not None:
+            parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _recall_shows_form(item, raw):
+    """Whether a recall task's shown text contains the lesson's written form (its title as written)
+    in Japanese or simplified Chinese spelling (cjk_forms). Fail safe: a title with a kanji that has
+    no Chinese spelling counts as shown, so its tasks stay withheld."""
+    shown = cjk_forms.shows_form(str(item.get("title", "")), shown_text(raw))
+    return True if shown is None else shown
 
 
 # Practice family of a meaning task that writes the target in kana inside a

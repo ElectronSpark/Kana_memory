@@ -16,6 +16,7 @@
   "app/src/kanamemory/early_rules.py": ["__future__", "collections.abc", "re", ".learning_content", ".question_readings"],
   "app/src/kanamemory/result_readings.py": ["__future__", "collections.abc", "re", ".", ".question_readings", ".learning_content", ".learning_questions", ".content_caches"],
   "app/src/kanamemory/practice_preferences.py": [],
+  "app/src/kanamemory/cjk_forms.py": [],
   "app/src/kanamemory/practice_kind_policy.py": ["__future__", ".practice_preferences"],
   "app/src/kanamemory/draft_debounce.py": [],
   "app/src/kanamemory/thread_switching.py": ["__future__", "sys"],

@@ -1092,3 +1092,5 @@ tools/render_app_icon.py
 tests/test_app_icon.py
 tests/test_word_task_cues.py
 tests/test_library_romaji_search.py
+app/src/kanamemory/cjk_forms.py
+tests/test_cjk_forms.py
