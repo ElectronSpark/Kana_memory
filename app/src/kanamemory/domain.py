@@ -1896,6 +1896,11 @@ class StudyStore:
         """
         return now.astimezone().date() if self._device_local else now.astimezone(self.zone).date()
 
+    def study_day_end(self, now: datetime) -> datetime:
+        """The aware UTC instant the study day of ``now`` ends (the next day's start): where the 今日 figures
+        roll over. No database read."""
+        return datetime.fromisoformat(self._day_bounds(now)[1])
+
     def _day_bounds(self, now: datetime):
         day = self.study_day(now)
         if self._device_local:

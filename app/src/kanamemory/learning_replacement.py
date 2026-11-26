@@ -190,6 +190,11 @@ class LearningReplacementStore:
                 raise ValueError('请先更新引导题。')
         kinds, state = self._options(item, unit['ability'])
         state.update(dict(unit))
+        # One sentence per lesson, as the planning pass: the question being replaced counts as shown.
+        from .course_planning import lesson_sentences_reader
+        state['met_sentences'] = lesson_sentences_reader(
+            item, unit['ability'], self.learning, pending=self.store.queries.pending_abilities(item['id']),
+            shown=[current] if isinstance(current, dict) else ())
         plan = select_practice_plan(source, unit['ability'], kinds, state,
                                     self.learning.practice_history(item['id'], unit['ability']))
         if plan is None:

@@ -2,9 +2,10 @@
 
 class View:
     def __init__(self, *children, text="", items=None, value=None, on_change=None,
-                 on_press=None, enabled=True, style=None, **kwargs):
+                 on_press=None, enabled=True, style=None, placeholder=None, **kwargs):
         self.children = list(children)
         self.text = text
+        self.placeholder = placeholder  # a text input's hint, as the search pages set it
         self.items = list(items or [])
         self.value = self.items[0] if value is None and self.items else value
         self.on_change, self.on_press = on_change, on_press

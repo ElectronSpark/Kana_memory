@@ -1359,7 +1359,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if getattr(self, "page", None) != "home" or not hasattr(self, "loop"):
             return
         KanaMemory._cancel_review_wait(self)
-        if getattr(getattr(self, "_study_home", None), "next_change_at", None):
+        from .home_runtime import home_refresh_due
+        if home_refresh_due(getattr(self, "_study_home", None)):
             # Start on the next event-loop turn, as on the waiting page.
             self._review_wait_handle = self.loop.call_soon(
                 KanaMemory._tick_home_review, self, self._page_token)
@@ -1368,15 +1369,16 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         if self.page != "home" or self._page_token != token:
             return
         self._review_wait_handle = None
-        due = self._study_home.next_change_at
+        from .home_runtime import HOME_CHECK_SECONDS, home_refresh_due, home_refresh_held
+        due = home_refresh_due(self._study_home)  # the next change or the end of the study day
         delay = (due - app_clock.local_now(due.tzinfo)).total_seconds() if due else 0
-        if delay <= 0:
+        if delay <= 0 and not home_refresh_held(self):
             self.refresh_home_actions()
         else:
-            # Recheck infrequently for clock changes, without saving progress.
+            # Recheck infrequently for clock changes (a suspended process included), without saving progress.
             # Armed from a native-callback chain: wake Toga Android's loop.
-            self._review_wait_handle = call_later_awake(self.loop,
-                min(60, delay), KanaMemory._tick_home_review, self, token)
+            self._review_wait_handle = call_later_awake(self.loop, min(HOME_CHECK_SECONDS, delay)
+                if delay > 0 else HOME_CHECK_SECONDS, KanaMemory._tick_home_review, self, token)
 
     def show_due_practice(self, group):
         preferences = self._clean_preferences(getattr(self, "_practice_preferences", {}))

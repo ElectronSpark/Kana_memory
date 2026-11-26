@@ -629,13 +629,17 @@ class ExampleUIMixin(LexicalExampleUIMixin):
 
     def _render_example_target_picker(self, example_id=None, query='', offset=0):
         self.example_target_query = u.toga.TextInput(value=query,
-            placeholder='搜索要关联的词义、语法或读音规则', style=u.Pack(margin_bottom=6))
+            placeholder='搜索要关联的词义、语法、读音规则或罗马音', style=u.Pack(margin_bottom=6))
         search = lambda w: self._render_example_target_picker(example_id, self.example_target_query.value or '')
         self.example_target_query.on_confirm = search
         unavailable = self.store.library_unavailable_ids()  # 08 section 8.2: no new links to them
+        # Romaji too (library_search), as in the learning library's search.
+        from .library_search import readings_of, romaji_matches, romaji_needle
+        romaji = romaji_needle(query)
         items = [x for x in self.learning_items_available(views=True) if x['id'] not in unavailable
                  and (not query.strip() or query.strip().casefold() in
-                 ' '.join(str(x.get(k, '')) for k in ('title', 'meaning', 'reading')).casefold())]
+                 ' '.join(str(x.get(k, '')) for k in ('title', 'meaning', 'reading')).casefold()
+                 or romaji_matches(romaji, readings_of(x)))]
         children = [self.example_target_query, u.button('搜索', search, compact=True)]
         for item in items[offset:offset + 12]:
             children.append(u.button(item['title'], lambda w, target=item['id']:

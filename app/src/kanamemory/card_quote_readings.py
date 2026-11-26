@@ -3,7 +3,8 @@
 Card text is Chinese prose with Japanese in 「」. Inside a quotation, each kanji part of a word that has a
 reading in the data is followed by its reading in full-width parentheses, in the style of the cue labels
 (「読（よ）み」, 「意味（いみ）」, 「食（た）べる」). Not where the text already carries a reading right after the word
-(「学校（がっこう）」, 「来よう（こよう）」, 「学校」（がっこう）: reading_given), never inside a quotation without kanji, never for a reading the question
+(「学校（がっこう）」, 「来よう（こよう）」, 「学校」（がっこう）: reading_given; an optional grammar piece such as
+「〜場合（は）」 or 「高かった（です）」 is not a reading), never inside a quotation without kanji, never for a reading the question
 shown on the same page hides (question_readings.hides_card_reading, rule 2). Without data a text stays as it is.
 
 Whether a reading is drawn follows the question prompts (question_readings rule 3) and result pages
@@ -55,14 +56,43 @@ _WORD_LIMIT = 64
 _KANA_ECHO = re.compile(r"(?<![ぁ-ゖァ-ヺー])([ぁ-ゖァ-ヺー]{2,})(?:（\1）|\(\1\))")
 
 
-def reading_given(quote, end, after=""):
+def _bracket_kana(group):
+    """The kana of a （かな） group, katakana folded to hiragana and ・ dropped."""
+    return "".join(chr(ord(char) - 0x60) if "ァ" <= char <= "ヶ" else char
+                   for char in group[1:-1] if char != "・")
+
+
+def _spells_reading(group, tail, reading):
+    """Whether the bracket ``group`` after a kanji part and its kana ``tail`` is that word's reading: it ends
+    with the span's reading and the tail (「学校（がっこう）」, 「来よう（こよう）」); after a tail, it ends with the tail
+    (the author's own reading of the inflected word, 「行った（おこなった）」; not 「高かった（です）」); right after the
+    kanji part, anything but an optional grammar piece that differs from the reading (「十分（に）」 is not one,
+    「歯（は）」 read は is)."""
+    kana = _bracket_kana(group)
+    if kana.endswith(reading + tail):
+        return True
+    if tail:
+        return kana.endswith(tail)
+    return kana not in _OPTIONAL_PIECES or kana == reading
+
+
+# Optional grammar pieces an author writes in brackets after a word (「〜場合（は）」): not a reading.
+_OPTIONAL_PIECES = frozenset({"は", "が", "を", "に", "へ", "で", "と", "も", "の", "か", "や", "ね", "よ", "だ",
+                              "です", "ます"})
+
+
+def reading_given(quote, end, after="", reading=None):
     """Whether the text spells a reading right after the word whose kanji part ends at ``end`` of ``quote``:
     （かな） right after the kanji or after the word's kana tail (「来よう（こよう）」), or right after the closing 」
-    when the word ends the quotation (``after``: the text after 」, 「学校」（がっこう）)."""
+    when the word ends the quotation (``after``: the text after 」, 「学校」（がっこう）). With the span's
+    ``reading``, a bracket counts only when it spells the reading (_spells_reading); without it, any bracket."""
     tail = _OKURIGANA.match(quote, end).end()
-    if _GIVEN_READING.match(quote, end) or _GIVEN_READING.match(quote, tail):
-        return True
-    return tail == len(quote) and _GIVEN_READING.match(after) is not None
+    group = _GIVEN_READING.match(quote, tail)
+    if group is None and tail == len(quote):
+        group = _GIVEN_READING.match(after)
+    if group is None:
+        return False
+    return reading is None or _spells_reading(group.group(), quote[end:tail], reading)
 
 
 def card_fields(view, sections=()):
@@ -146,7 +176,7 @@ def insert_readings(text, quotes, hidden=None, *, furigana=True, learned=None):
         pieces, inner = [], 0
         for start, end, reading, word in spans:
             surface = quote[start:end]
-            if reading_given(quote, end, after) or hidden is not None and hidden(surface, reading):
+            if reading_given(quote, end, after, reading) or hidden is not None and hidden(surface, reading):
                 continue
             if not furigana and word is not None and learned is not None and learned(word):
                 continue

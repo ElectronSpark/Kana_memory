@@ -447,11 +447,15 @@ class AIUIMixin(MaterialReferenceUIMixin, MaterialStudyUIMixin, RetentionCheckUI
         self._render_ai_target_picker(query, offset)
 
     def _render_ai_target_picker(self, query="", offset=0):
-        self._ai_target_query = u.toga.TextInput(value=query, placeholder="搜索假名、单词、语法或读音规则", style=u.Pack(margin_bottom=8))
+        self._ai_target_query = u.toga.TextInput(value=query, placeholder="搜索假名、单词、语法、读音规则或罗马音", style=u.Pack(margin_bottom=8))
         search = lambda w: self._render_ai_target_picker(self._ai_target_query.value or "")
         self._ai_target_query.on_confirm = search
+        # Romaji too (library_search), as in the learning library's search.
+        from .library_search import readings_of, romaji_matches, romaji_needle
+        romaji = romaji_needle(query)
         items = [item for item in self.example_targets_available() if not query.strip() or query.strip().casefold() in
-                 " ".join(str(item.get(key, "")) for key in ("title", "meaning", "reading")).casefold()]
+                 " ".join(str(item.get(key, "")) for key in ("title", "meaning", "reading")).casefold()
+                 or romaji_matches(romaji, readings_of(item))]
         children = [self._ai_target_query, u.button("搜索", search, compact=True)]
         for item in items[offset:offset + 12]:
             children.append(u.button(item["title"] + " · " + item.get("meaning", ""),

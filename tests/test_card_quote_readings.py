@@ -47,6 +47,57 @@ def test_a_reading_the_text_already_gives_is_not_doubled():
     assert cards.insert_readings("「来る → 来よう（こよう）」", tail) == "「来（く）る → 来よう（こよう）」"
 
 
+def test_case_1_a_bracket_that_ends_with_the_reading_and_the_tail_is_given():
+    given = cards.reading_given
+    assert given("学校（がっこう）", 2, reading="がっこう")
+    assert given("来よう（こよう）", 1, reading="こ")
+    assert given("食べ物（たべもの）", 3, reading="もの")  # the last part of the word
+    assert given("学校（ガッコウ）", 2, reading="がっこう") and given("東京（とう・きょう）", 2, reading="とうきょう")
+    data = {"食べ物（たべもの）": [[0, 1, "た", "course", None], [2, 3, "もの", "course", None]]}
+    assert cards.insert_readings("「食べ物（たべもの）」", data) == "「食（た）べ物（たべもの）」"
+
+
+def test_case_2_after_a_kana_tail_only_a_bracket_ending_with_the_tail_is_given():
+    given = cards.reading_given
+    assert given("行った（おこなった）", 1, reading="い")  # the author's own reading of the inflected word
+    for quote, reading in (("高かった（です）", "たか"), ("食べましょう（か）", "た"), ("思いつつ（も）", "おも")):
+        assert not given(quote, 1, reading=reading), quote
+    data = {"高い→高かった（です）": [[0, 1, "たか", "course", None], [3, 4, "たか", "course", None]]}
+    assert cards.insert_readings("「高い→高かった（です）」", data) == "「高（たか）い→高（たか）かった（です）」"
+
+
+def test_case_3_right_after_the_kanji_an_optional_piece_is_not_a_reading():
+    given = cards.reading_given
+    assert not given("〜場合（は）", 3, reading="ばあい") and not given("十分（に）", 2, reading="じゅうぶん")
+    assert given("歯（は）", 1, reading="は")  # the piece is the reading itself
+    assert given("明日（あした）", 2, reading="あす")  # an author's different reading stays given
+    data = {"〜場合（は）": [[1, 3, "ばあい", "course", None]]}
+    assert cards.insert_readings("「〜場合（は）」", data) == "「〜場合（ばあい）（は）」"
+
+
+def test_case_4_after_the_closing_bracket_the_same_steps_with_the_tail_to_the_end():
+    given = cards.reading_given
+    assert given("学校", 2, "（がっこう）", reading="がっこう")
+    assert given("行った", 1, "（おこなった）", reading="い")
+    assert not given("高かった", 1, "（です）", reading="たか")
+    assert not given("十分", 2, "（に）", reading="じゅうぶん") and given("歯", 1, "（は）", reading="は")
+    assert cards.insert_readings("「十分」（に）", {"十分": [[0, 2, "じゅうぶん", "course", None]]}) == (
+        "「十分（じゅうぶん）」（に）")
+
+
+def test_without_a_reading_any_bracket_after_the_word_counts_as_before():
+    given = cards.reading_given
+    assert given("高かった（です）", 1) and given("十分（に）", 2) and given("十分", 2, "（に）")
+    assert not given("十分です", 2) and not given("学校へ行", 2, "（がっこう）")
+
+
+def test_the_kana_echo_rule_still_applies_after_the_new_bracket_rule(monkeypatch):
+    text = "「こちらこそ（こちらこそ）、十分（に）」"
+    data = {"こちらこそ（こちらこそ）、十分（に）": [[13, 15, "じゅうぶん", "course", None]]}
+    monkeypatch.setattr(cards, "quotes_for", lambda content_id, field: data)
+    assert cards.CardReadings("x").text("f", text) == "「こちらこそ、十分（じゅうぶん）（に）」"
+
+
 def test_a_malformed_entry_leaves_its_quotation_as_it_is():
     text = "「学校へ行く」与「学校」"
     broken = {"学校へ行く": [[0, 3, "がっこう", "course", None]],  # 学校へ: not only kanji

@@ -512,7 +512,7 @@ def quote_entry(quote, spans):
             continue
         for start, end, reading in parts:
             start, end = span["start"] + start, span["start"] + end
-            if not card_format.reading_given(quote, end) and HIRAGANA_READING.fullmatch(reading):
+            if not card_format.reading_given(quote, end, reading=reading) and HIRAGANA_READING.fullmatch(reading):
                 result.append([start, end, reading, span["source"], span.get("word")])
     return result, problems
 

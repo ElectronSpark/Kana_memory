@@ -26,10 +26,12 @@ class HomeShowing:
     """One showing of 今日学习, kept on the app as _study_home (PAGE_BINDINGS["home"]: Back restores it).
 
     The four widgets show_home made (the stats label, the primary card, the
-    column under it, the shared-material notice) and ``next_change_at``, the
-    moment the shown numbers next change by themselves: each refresh stores
-    the one it drew; the home timer, a backup job on home and a feedback
-    return arm from it.
+    column under it, the shared-material notice), ``next_change_at``, the
+    moment the shown numbers next change by themselves (the 下次复习 line's
+    moment when the page has one), and ``day_ends_at``, the end of the study
+    day the 今日 figures were counted in: each refresh stores the ones it drew
+    (record_drawing); the home timer, a backup job on home and a feedback
+    return arm from them.
     """
 
     stats_label: Any
@@ -37,6 +39,35 @@ class HomeShowing:
     secondary_slot: Any
     material_slot: Any
     next_change_at: datetime | None = None
+    day_ends_at: datetime | None = None
+
+
+# The home page refreshes itself (design 02, 今日学习): while it is shown, one check per minute compares the
+# clock with the two moments its drawing recorded; it reads nothing and draws nothing until one has passed.
+HOME_CHECK_SECONDS = 60
+
+
+def record_drawing(app, showing: HomeShowing, next_change_at: datetime | None) -> None:
+    """Keep on ``showing`` the moments of the drawing just made: the numbers' next change and the end of
+    the study day of now (StudyStore.study_day_end: the zone the 今日 figures use; no read)."""
+    from . import app_clock
+    showing.next_change_at = next_change_at
+    showing.day_ends_at = app.store.study_day_end(app_clock.utc_now())
+
+
+def home_refresh_due(showing) -> datetime | None:
+    """The earliest moment the shown home must be drawn again, or None (no showing, nothing recorded)."""
+    moments = [moment for moment in (getattr(showing, "next_change_at", None), getattr(showing, "day_ends_at", None))
+               if moment is not None]
+    return min(moments) if moments else None
+
+
+def home_refresh_held(app) -> bool:
+    """A due refresh waits for the next check while a backup or restore job runs, the app closes, or a
+    library file is read or installed (the guards of the home's other refreshes)."""
+    activity = getattr(app, "_library_activity", None)
+    return bool(getattr(app, "_backup_busy", False) or getattr(app, "_backup_closing", False)
+                or (activity is not None and activity.working))
 
 
 def home_inputs(app) -> HomeInputs:

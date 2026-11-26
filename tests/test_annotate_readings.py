@@ -237,3 +237,11 @@ def test_the_agreement_check_counts_per_reference_and_samples_disagreements():
                                              "heteronym agreed": 1, "unaligned": 1}
     assert checked["disagreements"] == [{"reference": "reviewed", "text": MISE, "surface": "開く", "reviewed": "あく",
                                          "analyser": "ひらく", "heteronym": True}]
+
+
+def test_quote_entry_keeps_a_word_before_an_optional_piece_and_skips_a_given_reading():
+    spans = [{"start": 3, "end": 7, "surface": "高かった", "reading": "たかかった", "source": "course",
+              "word": ["高い", "たかい"]}]
+    assert tool.quote_entry("高い→高かった（です）", spans) == ([[3, 4, "たか", "course", ["高い", "たかい"]]], [])
+    given = [{"start": 0, "end": 2, "surface": "学校", "reading": "がっこう", "source": "course", "word": None}]
+    assert tool.quote_entry("学校（がっこう）", given) == ([], [])

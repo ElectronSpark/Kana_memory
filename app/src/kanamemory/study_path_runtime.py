@@ -417,7 +417,7 @@ class StudyPathRuntimeMixin:
         """
         from .app import KanaMemory
         from .home.ui.home_page import draw_home
-        from .home_runtime import home_inputs, home_service, run_action
+        from .home_runtime import home_inputs, home_service, record_drawing, run_action
         model = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending),
                              word_count=lambda pending: KanaMemory._word_drill_remaining(self, pending)
                              ).overview(home_inputs(self))
@@ -427,7 +427,7 @@ class StudyPathRuntimeMixin:
             return run_action(self, action, widget, open_word_drill=lambda: KanaMemory.open_home_word_drill(self))
         draw_home(model, action_slot=showing.action_slot, secondary_slot=showing.secondary_slot,
                   stats_label=showing.stats_label, on_action=on_action)
-        showing.next_change_at = model.next_change_at
+        record_drawing(self, showing, model.next_change_at)
         KanaMemory._arm_home_review_refresh(self)
 
     def press_home_primary(self, widget, action, *, route, no_new_content, add_next):

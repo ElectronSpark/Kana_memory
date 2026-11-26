@@ -134,6 +134,20 @@ class _LessonSentences:
         return {unit: frozenset(prints) for unit, prints in merged.items()}
 
 
+def lesson_sentences_reader(item: dict, ability: str, learning_store: CourseProgressReader, *,
+                            pending: Iterable[str] = (), shown: Iterable[dict] = ()):
+    """The met_sentences reader of one selection outside a planning pass (select_practice_plan's
+    state["met_sentences"]), by the planning pass's own rule (_LessonSentences): every ability's practice
+    history, the lesson's questions queued for other abilities (``pending``: the abilities with a queued
+    question), and ``shown``, questions the learner has also met (a replacement: the question it replaces).
+    Nothing is read until the selection asks."""
+    admitted = item.get("enrolled_abilities", item.get("abilities", []))
+    sentences = _LessonSentences(item, admitted, pending, learning_store)
+    for question in shown:
+        sentences.chosen(question)
+    return sentences.reader(ability)
+
+
 def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,
                         learning_store: CourseProgressReader, system_japanese_input: bool,
                         unit_states: dict | None = None,

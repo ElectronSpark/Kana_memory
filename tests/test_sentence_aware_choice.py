@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kanamemory.course_planning import iter_question_plans
+from kanamemory.course_planning import iter_question_plans, lesson_sentences_reader
 from kanamemory.domain import StudyStore
 from kanamemory.learning_practice_policy import met_sentences, select_practice_plan
 from kanamemory.learning_store import LearningStore
@@ -279,3 +279,36 @@ def test_a_queued_question_in_the_store_takes_its_sentence(learning):
     assert learner.queued_questions(CID)[0][0] == "understanding"
     plans = list(iter_question_plans(learner.get_item(CID), **kwargs))
     assert [(p.question["ability"], p.question["variant"]) for p in plans] == [("application", 1)]
+
+
+# --- a replacement (learning_replacement): the reader outside a planning pass ----------------------------------
+
+def replace(item, reader, replaced, ability="application"):
+    """The plan a replacement of ``replaced`` selects, with the reader the replacement path builds."""
+    state = {"attempt_count": 0, "met_sentences": lesson_sentences_reader(
+        item, ability, reader, pending=reader.pending, shown=[replaced])}
+    return select_practice_plan(item, ability, ["grammar_cloze"], state, reader.practice_history(CID, ability))
+
+
+def test_a_replacement_avoids_the_sentence_of_the_question_it_replaces():
+    item = lesson(meaning=(S2,), cloze=(S0, S1))
+    replaced = dict(item["question_templates"]["grammar_meaning"][0], kind="grammar_meaning",
+                    prompt=S0 + "。")   # the replaced question showed S0, like cloze template 0
+    assert replace(item, Reader(item, pending={"application"}), replaced)["variant"] == 1
+
+
+def test_without_a_shared_sentence_the_replacement_is_todays():
+    item = lesson(meaning=(S2,), cloze=(S0, S1))
+    replaced = dict(item["question_templates"]["grammar_meaning"][0], kind="grammar_meaning")   # shows S2
+    today = select_practice_plan(item, "application", ["grammar_cloze"], {"attempt_count": 0}, [])
+    assert replace(item, Reader(item, pending={"application"}), replaced) == today and today["variant"] == 0
+
+
+def test_the_replacement_reader_also_reads_the_other_abilities_history_and_queue():
+    item = lesson(meaning=(S0,), cloze=(S0, S1))
+    other = dict(item["question_templates"]["grammar_meaning"][0], kind="grammar_meaning")
+    unrelated = {"kind": "grammar_meaning", "prompt": S3 + "。", "answer": "x"}
+    queued = Reader(item, pending={"understanding", "application"}, queued=[("understanding", other)])
+    assert replace(item, queued, unrelated)["variant"] == 1
+    history = Reader(item, histories={"understanding": [seen(item, "grammar_meaning", 0, "understanding")]})
+    assert replace(item, history, unrelated)["variant"] == 1
