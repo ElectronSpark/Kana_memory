@@ -837,6 +837,11 @@ class ContentLibraryService:
         if fixed is not None and fixed[0] == manifest["library_id"]:
             return fixed[1], fixed[2]
         existing = rules.registry_entry(registry, manifest["library_id"])
+        if manifest["profile"] == "core" and existing is not None and existing["source"]["kind"] == "bundled":
+            # A core pack over the built-in core is an update of it (design 08 section 5.5): the built-in
+            # content is the previous version (the catalogue's ids), so 新增 is only what it lacks. The
+            # precheck of a core pack counts no catalogue item as installed, so none is "its own" here.
+            return self._provided_ids(existing), frozenset()
         previous = (self._provided_ids(existing) if existing is not None and existing["source"]["kind"] == "file"
                     and manifest["profile"] != "core" else frozenset())
         provider = self.availability().catalogue.provider if previous else None

@@ -1042,6 +1042,8 @@ class ExampleStore:
             raise ValueError("例句分页范围不正确。")
         self._ensure_fresh()
         statuses = self._statuses(self.items)
+        from .library_search import readings_of, romaji_matches, romaji_needle
+        romaji = romaji_needle(query)   # the example's own reading and its linked lessons' (library_search)
         query = str(query).strip().casefold()
         rows = []
         extra, _, _ = self._lexical_resources()
@@ -1056,7 +1058,9 @@ class ExampleStore:
             if query:
                 searchable = "\n".join([source["text"], source.get("translation", ""), source.get("reading", ""),
                                          *[self.items.get(ref["target_id"], {}).get("title", "") for ref in refs]])
-                if query not in searchable.casefold():
+                if query not in searchable.casefold() and not (romaji and (
+                        romaji_matches(romaji, [source.get("reading", "")])
+                        or any(romaji_matches(romaji, readings_of(self.items.get(ref["target_id"]))) for ref in refs))):
                     continue
             weights = {}
             for ref in refs:

@@ -687,3 +687,46 @@ def test_a_start_heals_the_stuck_bundled_entry_an_earlier_version_left(world):
     service.startup_sync()
     assert service.registry() == rules.default_registry() and not service.pending_restart()
     assert json.loads((root / rules.MIRROR_FILE).read_text("utf-8")) == rules.default_registry()
+
+
+def _core_pack_over_built_in(world, tmp_path, items):
+    """A core pack (package_library_pack) whose lessons are ``items``, inspected over the built-in core."""
+    from package_library_pack import package
+    from support.content_library_support import CORE_NAMESPACES
+    namespaces = {**CORE_NAMESPACES, "lesson": {**CORE_NAMESPACES["lesson"], "_ITEMS": items}}
+    package(build_core_resources(tmp_path / "core-source", namespaces), tmp_path / "core.zip")
+    assert rules.registry_entry(world["service"].registry(), rules.CORE_LIBRARY_ID)["source"]["kind"] == "bundled"
+    return world["service"].inspect_bytes((tmp_path / "core.zip").read_bytes(), "core.zip")
+
+
+def _upgrade_of(service, inspection):
+    """The precheck page's upgrade differences (content_library_ui.content_library_differences)."""
+    from types import SimpleNamespace
+    from kanamemory.content_library_ui import ContentLibraryUIMixin
+    page = SimpleNamespace(content_library_service=lambda: service, content_library_installed_revisions=lambda ids: {})
+    return ContentLibraryUIMixin.content_library_differences(page, inspection)["upgrade"]
+
+
+def test_a_core_pack_over_the_built_in_core_equal_to_it_adds_nothing(world, tmp_path):
+    # Seen on a device: 新增内容 1861 项 for a core pack equal to the built-in content. The built-in core is
+    # the previous version (design 08 section 5.5): its items are neither new nor reported as installed copies.
+    inspection = _core_pack_over_built_in(world, tmp_path, CORE_ITEMS)
+    check = inspection.precheck
+    assert check.replaces_core and check.new_item_count == 0
+    assert check.conflicting_ids == () and check.same_fingerprint_ids == () and check.blocking_reasons() == ()
+    upgrade = _upgrade_of(world["service"], inspection)
+    assert upgrade.fingerprint_changed_ids == () and upgrade.added_ids == () and upgrade.removed_ids == ()
+    unchanged = set(inspection.manifest["provides"]["items"]) - set(upgrade.fingerprint_changed_ids)
+    assert unchanged == set(CORE_ITEMS)
+
+
+def test_a_core_pack_over_the_built_in_core_counts_the_added_lesson_and_reports_the_changed_one(world, tmp_path):
+    items = {**CORE_ITEMS,
+             "grammar:demo:desu": dict(CORE_ITEMS["grammar:demo:desu"], revision=2, meaning="是（改写）"),
+             "word:demo:yama": dict(CORE_ITEMS["word:demo:mizu"], id="word:demo:yama", title="山", reading="やま",
+                                    meaning="山")}
+    inspection = _core_pack_over_built_in(world, tmp_path, items)
+    check = inspection.precheck
+    assert check.new_item_count == 1 and check.conflicting_ids == () and check.same_fingerprint_ids == ()
+    upgrade = _upgrade_of(world["service"], inspection)
+    assert upgrade.added_ids == ("word:demo:yama",) and upgrade.fingerprint_changed_ids == ("grammar:demo:desu",)

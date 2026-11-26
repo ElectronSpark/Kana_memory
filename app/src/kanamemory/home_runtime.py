@@ -68,6 +68,21 @@ def home_service(app, *, queue_kinds: Callable[[dict], Sequence[str]] | None = N
         arrangement=lambda: StudyPathRuntimeMixin.study_arrangement(app))
 
 
+def round_end_review_line(app) -> str | None:
+    """The 下次复习 line of a page that ends a round (本轮已保存, 本次学习已保存。), or None.
+
+    The wait page's text (LearningUIMixin._learning_due_label) of the home's moment
+    (HomeOverviewService.next_review_at): only when nothing can be answered now and a review is
+    planned. Read once when the page is drawn; the page has no timer and does not refresh itself.
+    None without the study path (a standalone course controller has no home overview).
+    """
+    from .new_dispatch import study_path_available
+    if not study_path_available(app):
+        return None
+    moment = home_service(app, queue_kinds=lambda pending: app._queue_kinds(pending)).next_review_at(home_inputs(app))
+    return None if moment is None else app._learning_due_label(moment)
+
+
 def run_action(app, action: HomeAction, widget=None, *, open_word_drill: Callable[[], object]):
     """Do what a home control carries, as the home did before the move (design 13 S3).
 

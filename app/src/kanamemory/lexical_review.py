@@ -53,6 +53,20 @@ class LexicalReview:
         self._valid_words = {}
         self._candidate_states = {}
         self._provenance = {}
+        self._link_readings = None   # the distinct readings of the sentences' word links, read once
+
+    def _romaji_ids(self, needle):
+        """Sentences linked (not rejected) to a word whose reading's romaji holds ``needle`` (library_search)."""
+        from .library_search import romaji_of
+        if self._link_readings is None:
+            self._link_readings = [row[0] for row in self.db.execute(
+                "SELECT DISTINCT reading FROM association WHERE status != 'rejected'")]
+        matched = [reading for reading in self._link_readings if needle in romaji_of(reading)]
+        if not matched:
+            return set()
+        return {row[0] for row in self.db.execute(
+            "SELECT DISTINCT example_id FROM association WHERE status != 'rejected' "
+            "AND reading IN (SELECT value FROM json_each(?))", (json.dumps(matched, ensure_ascii=False),))}
 
     def close(self):
         self.db.close()
@@ -60,6 +74,7 @@ class LexicalReview:
         self._valid_words.clear()
         self._candidate_states.clear()
         self._provenance.clear()
+        self._link_readings = None
 
     def _matches(self, row):
         identity = row["id"]
@@ -114,6 +129,12 @@ class LexicalReview:
         needle = query.strip().casefold()
         additional_ids = set(additional_ids) | {cid for cid, row in display_overrides.items()
             if needle in row['search_text'].casefold()}
+        # Romaji too (library_search): the readings of the linked words and a personal version's own reading.
+        from .library_search import romaji_matches, romaji_needle
+        romaji = romaji_needle(query)
+        by_romaji = (self._romaji_ids(romaji) | {cid for cid, row in display_overrides.items()
+                     if romaji_matches(romaji, row.get('readings', ()))}) if romaji else set()
+        additional_ids |= by_romaji
         if state not in {"all", "reviewed", "corrected", "uncertain"}:
             raise ValueError("不支持的审校状态。")
         params, clauses = [], []
@@ -138,7 +159,8 @@ class LexicalReview:
                 continue
             identity = row["id"]
             current = display_overrides.get(identity)
-            if current is not None and needle and needle not in current['search_text'].casefold(): continue
+            if (current is not None and needle and needle not in current['search_text'].casefold()
+                    and identity not in by_romaji): continue
             if state != "all":
                 if identity not in self._candidate_states:
                     self._candidate_states[identity] = self.get(identity)["state"]

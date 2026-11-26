@@ -304,6 +304,7 @@ app/src/kanamemory/lesson_diagrams_grammar_b.py
 app/src/kanamemory/lesson_diagrams_words_sounds.py
 app/src/kanamemory/lexical_example_ui.py
 app/src/kanamemory/lexical_review.py
+app/src/kanamemory/library_search.py
 app/src/kanamemory/material_review.py
 app/src/kanamemory/natural_translation_policy.py
 app/src/kanamemory/natural_translations.py
@@ -345,6 +346,7 @@ app/src/kanamemory/question_presentation.py
 app/src/kanamemory/question_readings.py
 app/src/kanamemory/question_sentences.py
 app/src/kanamemory/question_support.py
+app/src/kanamemory/result_explanations.py
 app/src/kanamemory/result_readings.py
 app/src/kanamemory/reading_audio.py
 app/src/kanamemory/review_dispatch.py
@@ -1089,3 +1091,4 @@ app/icons/source/kanamemory_icon_mono.svg
 tools/render_app_icon.py
 tests/test_app_icon.py
 tests/test_word_task_cues.py
+tests/test_library_romaji_search.py

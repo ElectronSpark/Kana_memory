@@ -197,7 +197,7 @@ class LexicalExampleUIMixin:
         self._render_lexical_example_library(query, state, offset)
 
     def _render_lexical_example_library(self, query="", state="all", offset=0):
-        self.lexical_example_query = u.toga.TextInput(value=query, placeholder="搜索词库例句或中文", style=u.Pack(margin_bottom=6))
+        self.lexical_example_query = u.toga.TextInput(value=query, placeholder="搜索词库例句、罗马音或中文", style=u.Pack(margin_bottom=6))
         self.lexical_example_state = u.selection(items=list(STATES), style=u.Pack(margin_bottom=6))
         self.lexical_example_state.value = next(k for k, v in STATES.items() if v == state)
         search = lambda w: self._render_lexical_example_library(self.lexical_example_query.value or "", STATES[self.lexical_example_state.value])
@@ -213,6 +213,7 @@ class LexicalExampleUIMixin:
             current = resolve(self.store, self.repo.get_example(identity), kind=kind)
             if current:
                 overrides[identity] = {'search_text': '\n'.join([current['text'], current.get('chinese_translation', ''), current.get('reading', '')]),
+                    'readings': [current.get('reading', '')],   # its own reading, for a romaji query (library_search)
                     'state': 'uncertain' if current.get('personal_content_unavailable') else current['review_state']}
         page = self.repo.reviewed_example_page(query, state, offset, display_overrides=overrides)
         children = [self.lexical_example_query, self.lexical_example_state, u.button("搜索", search, compact=True),

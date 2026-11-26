@@ -5,8 +5,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .navigation import page_view
-from .answer_result_ui import answer_furigana_block, answer_text, asked_text, shown_answer, shown_explanation
-from .card_quote_readings import drop_kana_echo
+from .answer_result_ui import answer_furigana_block, asked_text, shown_answer, shown_explanation
 from .retention_session import DiagnosticStore, BUDGETS, LIVE
 from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role, option_labels
@@ -473,7 +472,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
 
     def show_diagnostic_result(self, context):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import entered_answer_row, distinct_explanation
+        from .answer_result_ui import entered_answer_row
         from .answer_autoplay import autoplay_answer
         row = context['row']; q = row['question']; result = row['result']; viewed = result_view(result)
         text = self._learning_answer_audio_text(q)
@@ -516,14 +515,16 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         if viewed.get('correct') is not True and result['answered_text'] and result['answered_text'] != q['answer'] and near is None:
             entered = answer_label(q, result['answered_text']) if pitch else shown_answer(q, result['answered_text'])
             children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, 'answer')))
-        explanation = drop_kana_echo(distinct_explanation(q.get('feedback'), answer_text(q)))
+        from .result_explanations import course_explanation, shown_course_explanation
+        explanation = course_explanation(q)  # the course result page's text (result_explanations)
         asked = None if pitch else asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
         from .answer_result_ui import known_wrong_note
         note = known_wrong_note(q, result)
         if note: children.append(u.label(shown_explanation(q, note), size=15))
         if near is not None: children.append(near)
-        if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
+        shown = shown_course_explanation(q, explanation)
+        if shown: children.append(u.label(shown, size=15))
         formal =(result.get('assessment', {}).get('settlement_channel') == 'formal'
                   and value['purpose'] == 'check_and_adjust' and not row['credit_revoked'])
         children.append(u.label('这次是接受帮助后的练习。' if result['assisted'] else '按本次作答调整此项复习。' if formal else '检查已保存，复习间隔不变。', size=12, color=u.MUTED))

@@ -70,6 +70,7 @@ CACHES = {
     "example_store.py::_MEMO_BUILDING": "builds in flight, keyed like _MEMO",
     "example_store.py::_CATALOGUE_FINGERPRINTS": "validated encodings, keyed by their sha256",
     "learning_questions.py::_GRAMMAR_FOLD": "keyed by the reading table it compiles",
+    "library_search.py::romaji_of": "keyed by the reading it romanizes (word_search's fixed rules); holds no content",
     "material_review.py::_INDEX": "keyed by the identity of the review data object",
     "material_review.py::_review_data": "the review file of the active core library or the bundled one, by its "
                                         "path (an installed library's folder names its version)",

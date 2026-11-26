@@ -90,24 +90,6 @@ KIND_GROUPS = {
 ALL_LIBRARIES = "全部库"
 
 
-_SELF_GLOSS = re.compile(r"(?P<word>[^（）：:]+)（(?P<reading>[^（）]+)）[：:]\s*(?P<gloss>.+?)[。．.]?")
-
-
-def without_self_gloss(text):
-    """'X（读音）：X' whose gloss only repeats the headword -> 'X（读音）'.
-
-    A display rule for the feedback explanation: other lines, and a gloss
-    that differs from the headword, are returned unchanged.
-    """
-    lines = []
-    for line in str(text or "").splitlines():
-        match = _SELF_GLOSS.fullmatch(line.strip())
-        if match and match["gloss"].strip() == match["word"].strip():
-            line = f"{match['word'].strip()}（{match['reading']}）"
-        lines.append(line)
-    return "\n".join(lines)
-
-
 class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyPathUIMixin, ExampleUIMixin,
                       ContentLibraryUIMixin):
     def _learning_prompt_block(self, question, preferences=None, *, size=20, known_ids=None):
@@ -597,7 +579,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         tracks = [EXAM_COMMON_CATEGORY] if any(item.get("curriculum_track") == EXAM_COMMON_TRACK for item in all_items) else []
         categories = ["全部主题", *tracks, *dict.fromkeys(item.get("category", "基础") for item in all_items)]
         category = category if category in categories else "全部主题"
-        self.learning_library_query = u.toga.TextInput(value=query, placeholder="搜索形式、读法或中文说明", style=u.Pack(margin_bottom=6))
+        self.learning_library_query = u.toga.TextInput(value=query, placeholder="搜索形式、读法、罗马音或中文", style=u.Pack(margin_bottom=6))
         self.learning_library_category = u.selection(items=categories, value=category, style=u.Pack(margin_bottom=8))
         self.learning_library_owner = (u.selection(items=library_names, value=library, style=u.Pack(margin_bottom=8))
                                        if multiple else None)
@@ -619,9 +601,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         children.append(u.button("例句库", self.show_example_library, compact=True))
         children.append(u.button("AI 学习助手", self.show_ai_center, compact=True))
         needle = query.strip().casefold()
+        # Romaji too (library_search): the item's reading and its accepted and alternative readings.
+        from .library_search import readings_of, romaji_matches, romaji_needle
+        romaji = romaji_needle(query)
         items = [item for item in all_items if (category == "全部主题" or item.get("category", "基础") == category
                  or category == EXAM_COMMON_CATEGORY and item.get("curriculum_track") == EXAM_COMMON_TRACK)
-                 and (not needle or needle in " ".join(str(item.get(k, "")) for k in ("title", "reading", "meaning", "category")).casefold())
+                 and (not needle or needle in " ".join(str(item.get(k, "")) for k in ("title", "reading", "meaning", "category")).casefold()
+                      or romaji_matches(romaji, readings_of(item)))
                  and (library == ALL_LIBRARIES or labels.get(item["id"]) == library)]
         # Unavailable content is listed after the joinable items, never mixed in.
         unavailable = [item for item in items if states[item["id"]] != AVAILABLE]
@@ -1189,7 +1175,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             return
         if not current or current.get("type") in {"empty", "done"}:
             mark_finished(self.store)
+            from .home_runtime import round_end_review_line
+            due = round_end_review_line(self)   # the wait page's 下次复习 line, when nothing is answerable now
             self.screen("learning_done", "课程学习", u.label("本次学习已保存。", size=20),
+                *([u.label(due, size=14, color=u.MUTED)] if due else []),
                 u.button("开始新一轮", self.continue_learning, primary=True),
                 *self.learning_next_content_controls(), u.button("回到今日", self.leave_learning))
             return
@@ -2447,7 +2436,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
 
     def show_learning_feedback(self, result):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import asked_text, entered_answer_row, distinct_explanation
+        from .answer_result_ui import asked_text, entered_answer_row
         q = self._learning_question
         originally_unresolved = result.get("outcome") == "unresolved"
         from .assessment_policy import settlement_decision
@@ -2496,7 +2485,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 text_role=learning_text_role(q, "answer"), size=20, reserved_width=48 if speaker else 0)
         children = [build_answer_feedback(result, structure_error=structure_error),
                     u.row(answer, speaker) if speaker else answer]
-        explanation = drop_kana_echo(without_self_gloss(distinct_explanation(q.get("feedback"), answer_text(q))))
+        # One text with every result page of a course question (result_explanations; the deck's too).
+        from .result_explanations import course_explanation, shown_course_explanation
+        explanation = course_explanation(q)
         asked = None if is_pitch_question(q) else asked_text(q, explanation)
         if asked:
             children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, "prompt")))
@@ -2521,8 +2512,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             children.append(u.label(shown_explanation(q, note)))
         if near is not None:
             children.append(near)
-        if explanation and explanation != str(q["answer"]).strip():
-            children.append(u.label(shown_explanation(q, explanation)))
+        shown = shown_course_explanation(q, explanation)
+        if shown:
+            children.append(u.label(shown))
         from .personal_content_notes_ui import append_notes
         append_notes(self, u, children, 'question', q, page='learning_feedback')
         children.append(u.row(u.col(flex=1), u.button("问 AI", lambda w, qid=q["id"]: self.open_tutor_question(

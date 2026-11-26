@@ -1140,8 +1140,11 @@ class StudyPathRuntimeMixin:
             from .extra_practice_runtime import extra_button_rows, take_over
 
             def round_saved():
+                from .home_runtime import round_end_review_line
+                due = round_end_review_line(self)   # the wait page's 下次复习 line, when nothing is answerable now
                 self.screen("learning_done", "本轮已保存",
                     u.label("作答记录和复习安排已保存。", size=17),
+                    *([u.label(due, size=14, color=u.MUTED)] if due else []),
                     u.button("开始新一轮", self.continue_study_path, primary=True),
                     *self.learning_next_content_controls(),
                     *extra_button_rows(self),

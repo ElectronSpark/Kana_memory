@@ -19,7 +19,7 @@
   (their input parts need the course page's own controls).
 - texts: the answer, its cells with kana above the standard spelling
   (answer_furigana.answer_cells, made only when the answer is shown) and the
-  question's own explanation.
+  question's own explanation as the course result page shows it (result_explanations).
 """
 from __future__ import annotations
 
@@ -105,7 +105,8 @@ class CourseDeckLane:
 
     def texts(self, ref: StateRef, question: Mapping[str, object]) -> DeckTexts:
         from ...answer_furigana import answer_cells, answer_pitch
-        from ...answer_result_ui import answer_text, distinct_explanation
+        from ...answer_result_ui import answer_text
+        from ...result_explanations import shown_course_explanation
         answer = answer_text(dict(question))
         options = (tuple(question.get("choices") or ())
                    if self.mode(ref, question) is DeckAnswerMode.CHOICE else ())
@@ -115,10 +116,11 @@ class CourseDeckLane:
                          # The pitch marks follow the result pages' (answer_pitch), read when it is shown.
                          answer_cells=lambda shown=dict(question): tuple(answer_cells(shown, pitch=answer_pitch(
                              getattr(self, "_store", None), getattr(self, "_learning", None), shown))),
-                         # Deliberate (owner 2026-11-18): compared with the plain answer, an explanation
-                         # line that is the answer sentence is dropped; the sentence is shown once, in the
-                         # answer line with its readings above (before, the inline-kana answer never matched).
-                         explanation=distinct_explanation(question.get("feedback", ""), answer),
+                         # The same visible text as the course result page of this question
+                         # (result_explanations.shown_course_explanation): no line that is only the answer
+                         # (owner 2026-11-18: the sentence is shown once, in the answer line), every reading
+                         # (rule 9) and no bracket that only repeats the kana before it.
+                         explanation=shown_course_explanation(dict(question)),
                          # As on the course question page: a question with audio is heard (播放题目), its
                          # prompt text is not shown (prompt_rows draws none for it).
                          audio_text=str(question.get("audio_text") or ""),

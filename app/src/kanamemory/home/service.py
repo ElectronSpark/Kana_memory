@@ -155,6 +155,42 @@ class HomeOverviewService:
             paused_line=presenter.paused_line(apart) if apart is not None else None,
             extra_entry=self._extra_entry(arrangement))
 
+    def next_review_at(self, inputs: HomeInputs) -> datetime | None:
+        """The moment of the home's 下次复习 line for a page that ends a round, or None (design 02, round end).
+
+        The overview's sources for its numbers, read the same way and under the same review filter (the
+        main checkpoint's kana summary, the course counts and the unqueued course preview in one read
+        operation, the unqueued kana preview; planned course dues come from LearningStore.planned_question_due
+        through the preview): the earliest future due when nothing can be answered now (no ready question and
+        no teaching that can start) and something waits; None otherwise. Reads only.
+        """
+        arrangement = self._arrangement() if self._arrangement is not None else None
+        if arrangement is None:
+            return self._next_review_at(inputs)
+        from ..domain import _utc
+        with arrangement.serving(arrangement.review_filter.current(_utc(None))):
+            return self._next_review_at(inputs)
+
+    def _next_review_at(self, inputs: HomeInputs) -> datetime | None:
+        from ..home_counts import show_next_review
+        store, learning = self._store, self._learning
+        pending = store.load_session_progress(lane="main", lazy_questions=True)
+        kana_kinds = self._queue_kinds(pending) if pending else None
+        availability = summarize_queue_availability(store, pending, allowed_kinds=kana_kinds)
+        with learning.read_operation() as read:
+            counts = learning.counts(self._course_kinds(), projection=read)
+            courses, teaching = self._course_preview(projection=read)
+        unqueued = self.unqueued_reviews(inputs, pending)
+        summary = home_counts(kana_ready=availability.ready_count, course_ready=counts["ready"],
+            unqueued_course_ready=courses["ready"], unqueued_kana_ready=unqueued["ready"],
+            waiting=(availability.waiting_count, counts["waiting"], courses["waiting"], unqueued["waiting"]),
+            queued_teaching=counts["instruction"], queued_teaching_pairs=teaching["queued"],
+            unqueued_teaching=teaching["unqueued"])
+        dues = [date for date in (availability.next_due_utc, counts.get("next_due_at_utc"),
+                                 unqueued["next_due"], courses["next_due"]) if date]
+        moment = min(app_clock.localize(datetime.fromisoformat(d)) for d in dues) if dues else None
+        return moment if show_next_review(summary.ready_total + summary.instruction, summary.waiting, moment) else None
+
     @staticmethod
     def _extra_entry(arrangement) -> bool:
         """加练… (design 12 E9): some learned state exists (ExtraSession.learned: the pool reader stops at the first

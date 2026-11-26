@@ -154,8 +154,8 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
 
     def show_retention_check_result(self,context):
         from .answer_feedback import build_answer_feedback
-        from .answer_result_ui import answer_furigana_block, asked_text, entered_answer_row, distinct_explanation, shown_answer, shown_explanation
-        from .card_quote_readings import drop_kana_echo
+        from .answer_result_ui import answer_furigana_block, asked_text, entered_answer_row, shown_answer, shown_explanation
+        from .result_explanations import course_explanation, shown_course_explanation
         from .answer_autoplay import autoplay_answer
         row=context['row'];q=row['question'];result=row['result']
         # After the answer every Japanese word of the result carries its kana (design 11 section 7, rule 9);
@@ -167,14 +167,15 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         near = near_miss_block(self, q, result, text_role=learning_text_role(q, 'answer'))
         if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer'] and near is None:
             children.append(entered_answer_row(u, shown_answer(q, result['answered_text']), text_role=learning_text_role(q, 'answer')))
-        explanation = drop_kana_echo(distinct_explanation(q.get('feedback'), q['answer']))
+        explanation = course_explanation(q)  # the course result page's text (result_explanations)
         asked = asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
         from .answer_result_ui import known_wrong_note
         note = known_wrong_note(q, result)
         if note: children.append(u.label(shown_explanation(q, note), size=15))
         if near is not None: children.append(near)
-        if explanation: children.append(u.label(shown_explanation(q, explanation), size=15))
+        shown = shown_course_explanation(q, explanation)
+        if shown: children.append(u.label(shown, size=15))
         children.append(u.label('本次只作检查，不调整复习。' if not result['assisted'] else '这次使用了帮助，只记录练习。',size=12,color=u.MUTED))
         def advance(widget=None,**kwargs):
             if self.page!='retention_feedback' or self._retention_context is not context:return

@@ -740,7 +740,7 @@ class ExampleUIMixin(LexicalExampleUIMixin):
     def _render_example_library(self, query='', offset=0):
         self._example_library_state = (query, offset)
         service = self.example_store()
-        self.example_query = u.toga.TextInput(value=query, placeholder='搜索日文或中文例句', style=u.Pack(margin_bottom=6))
+        self.example_query = u.toga.TextInput(value=query, placeholder='搜索日文、罗马音或中文', style=u.Pack(margin_bottom=6))
         search = lambda w: self._render_example_library(self.example_query.value or '')
         self.example_query.on_confirm = search
         page = service.examples_page(query, offset=offset, limit=10)
