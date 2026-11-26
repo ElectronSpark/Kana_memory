@@ -102,7 +102,7 @@ def _refused_page(app, name, library, version):
     text = text_of(app.body)
     assert app.page == "content_library_precheck"
     assert f"{library} · 版本 {version}" in text and f"文件名：{name}" in text and "不能安装" in text
-    for line in ("新增内容", "替换已安装", "重启应用生效", "预检结果", "与已安装库相同", "冲突", "导入时间"):
+    for line in ("新增内容", "替换已安装", "重启应用生效", "预检结果", "与其他已安装库相同", "与被替换的版本相同", "冲突", "导入时间"):
         assert line not in text, line
     assert _buttons(app) == {"返回"}
     return text
@@ -349,3 +349,77 @@ def test_when_the_app_does_not_restart_itself_the_page_offers_its_actions_again(
     app.platform.restart_app.assert_not_called()
     assert "添加内容库" in _buttons(app) and "立即重启" in _buttons(app)
     assert not library_activity.of(app).working
+
+
+# ------------------------------------------------------------------ the "same content" lines (design 08 section 5.5)
+
+
+def _pack_manifest(data):
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return rules.validate_manifest(json.loads(archive.read(rules.MANIFEST_FILE)))
+
+
+def test_a_core_pack_equal_to_the_built_in_content_says_all_of_it_is_the_same_as_the_replaced_version(
+        library_app, tmp_path, monkeypatch):
+    """Device walk of 0.36.25: 与已安装库相同的内容 0 项 read as if nothing were the same although everything was."""
+    app = library_app
+    _stamped(tmp_path, monkeypatch)
+    data = _core_pack_bytes(tmp_path, "20261122")
+    manifest = _pack_manifest(data)
+    provided = manifest["provides"]["items"]
+    assert provided and set(manifest["fingerprints"]) == set(provided)
+    service = app.content_library_service()
+    # The built-in catalogue is the version being replaced, with exactly the pack's content.
+    service._catalogue_ids = lambda: set(provided)
+    service._catalogue_fingerprints = lambda: dict(manifest["fingerprints"])
+    _platform_gives(app, data)
+    _open(app, "picker")
+    texts = _texts(app)
+    assert "不能安装" not in texts and "新增内容 0 项" in texts[3]
+    assert "与其他已安装库相同的内容 0 项" in texts
+    block = texts.index(next(text for text in texts if text.startswith("升级差异（相对已安装版本 ")))
+    assert texts[block + 1] == f"与被替换的版本相同 {len(provided)} 项"   # first in the block
+    assert texts[block + 2].startswith("指纹变化 0 项") and texts[block + 3] == "新版本新增 0 项"
+
+
+def _three_lessons(changed=False, added=False):
+    namespaces = extension_namespaces()
+    lessons = namespaces["lesson"]["_ITEMS"]
+    base = lessons["grammar:ext:masu"]
+    for name in ("a", "b"):
+        lessons[f"grammar:ext:{name}"] = dict(base, id=f"grammar:ext:{name}", title=f"ます{name}")
+    if changed:
+        lessons["grammar:ext:masu"] = dict(base, revision=2, meaning="动词敬体（修订）")
+    if added:
+        lessons["grammar:ext:new"] = dict(base, id="grammar:ext:new", title="ませんでした")
+    return namespaces
+
+
+def test_an_update_with_one_changed_and_one_added_lesson_counts_the_rest_as_the_same(library_app):
+    app = library_app
+    _platform_gives(app, pack_bytes("author.n3", _three_lessons()))
+    _open(app, "picker")
+    click(app, "安装")
+    _platform_gives(app, pack_bytes("author.n3", _three_lessons(changed=True, added=True), version="20260201"))
+    _open(app, "picker")
+    texts = _texts(app)
+    block = texts.index("升级差异（相对已安装版本 20260102）")
+    # The old version had 3 lessons: one changed, so 3 - 1 are the same; the added one is not "the same".
+    assert texts[block + 1] == "与被替换的版本相同 2 项"
+    assert texts[block + 2].startswith("指纹变化 1 项") and texts[block + 3] == "新版本新增 1 项"
+    # The replaced version is not another library: none of its lessons is counted there.
+    assert "与其他已安装库相同的内容 0 项" in texts
+
+
+def test_an_ordinary_library_with_a_lesson_another_library_has_still_counts_it_in_the_reworded_line(library_app):
+    app = library_app
+    _open(app, "picker")
+    click(app, "安装")
+    same = extension_namespaces()
+    _platform_gives(app, pack_bytes("author.other", same, title="另一个扩展库"))
+    _open(app, "picker")
+    texts = _texts(app)
+    assert "与其他已安装库相同的内容 1 项" in texts
+    assert not any(text.startswith(("与被替换的版本相同", "升级差异")) for text in texts)   # nothing is replaced

@@ -565,20 +565,37 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             u.button("单词", lambda w: self.show_learning_library(family="word"), flex=1, compact=True)),
             u.row(u.button("语法", lambda w: self.show_learning_library(family="grammar"), flex=1, compact=True),
                   u.button("读音规则", lambda w: self.show_learning_library(family="pronunciation"), flex=1, compact=True))]
-        all_items = [item for item in self.learning_items_available(family=None if family == "pronunciation" else family,
-                                                                    views=True)
-                     if (item.get("domain") == "pronunciation" if family == "pronunciation" else
-                         item["family"] == family and item.get("domain") != "pronunciation")]
-        states = {item["id"]: availability.state_of(item["id"], {"dictionary_only": item.get("dictionary_only") is True})
-                  for item in all_items}
-        # Library tags/filter appear once more than one library is involved.
-        multiple = len(titles) > 1 or any(state != AVAILABLE for state in states.values())
-        labels = {item["id"]: library_label(item) for item in all_items} if multiple else {}
-        library_names = [ALL_LIBRARIES, *dict.fromkeys(labels.values())]
-        library = library if library in library_names else ALL_LIBRARIES
-        tracks = [EXAM_COMMON_CATEGORY] if any(item.get("curriculum_track") == EXAM_COMMON_TRACK for item in all_items) else []
-        categories = ["全部主题", *tracks, *dict.fromkeys(item.get("category", "基础") for item in all_items)]
-        category = category if category in categories else "全部主题"
+        # The search (library_search.LessonQuery): form, reading, Chinese meaning, topic, and the romaji of the readings.
+        from .library_search import LIBRARY_TABS, LessonQuery, items_by_tab
+        search = LessonQuery(query)
+        # With a query the other tabs are counted too (design 02, 学习库): their lessons come from the same single
+        # read, all families at once, instead of a second read per tab.
+        loaded = self.learning_items_available(family=None if family == "pronunciation" or search else family,
+                                               views=True)
+        tabs = items_by_tab(loaded)
+        all_items = tabs[family] if family in tabs else [item for item in loaded if item.get("family") == family]
+
+        def selection(tab_items, category, library):
+            """What a tab shows for these filters; a filter the tab does not offer falls back as on its own page."""
+            states = {item["id"]: availability.state_of(item["id"], {"dictionary_only": item.get("dictionary_only") is True})
+                      for item in tab_items}
+            # Library tags/filter appear once more than one library is involved.
+            multiple = len(titles) > 1 or any(state != AVAILABLE for state in states.values())
+            labels = {item["id"]: library_label(item) for item in tab_items} if multiple else {}
+            library_names = [ALL_LIBRARIES, *dict.fromkeys(labels.values())]
+            library = library if library in library_names else ALL_LIBRARIES
+            tracks = [EXAM_COMMON_CATEGORY] if any(item.get("curriculum_track") == EXAM_COMMON_TRACK for item in tab_items) else []
+            categories = ["全部主题", *tracks, *dict.fromkeys(item.get("category", "基础") for item in tab_items)]
+            category = category if category in categories else "全部主题"
+            found = [item for item in tab_items if (category == "全部主题" or item.get("category", "基础") == category
+                     or category == EXAM_COMMON_CATEGORY and item.get("curriculum_track") == EXAM_COMMON_TRACK)
+                     and search.matches(item) and (library == ALL_LIBRARIES or labels.get(item["id"]) == library)]
+            return dict(states=states, multiple=multiple, labels=labels, library_names=library_names, library=library,
+                        categories=categories, category=category, found=found)
+        shown = selection(all_items, category, library)
+        states, multiple, labels = shown["states"], shown["multiple"], shown["labels"]
+        library_names, library = shown["library_names"], shown["library"]
+        categories, category = shown["categories"], shown["category"]
         self.learning_library_query = u.toga.TextInput(value=query, placeholder="搜索形式、读法、罗马音或中文", style=u.Pack(margin_bottom=6))
         self.learning_library_category = u.selection(items=categories, value=category, style=u.Pack(margin_bottom=8))
         self.learning_library_owner = (u.selection(items=library_names, value=library, style=u.Pack(margin_bottom=8))
@@ -600,15 +617,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             children.append(u.button("查找全部词库", self.show_words))
         children.append(u.button("例句库", self.show_example_library, compact=True))
         children.append(u.button("AI 学习助手", self.show_ai_center, compact=True))
-        needle = query.strip().casefold()
-        # Romaji too (library_search): the item's reading and its accepted and alternative readings.
-        from .library_search import readings_of, romaji_matches, romaji_needle
-        romaji = romaji_needle(query)
-        items = [item for item in all_items if (category == "全部主题" or item.get("category", "基础") == category
-                 or category == EXAM_COMMON_CATEGORY and item.get("curriculum_track") == EXAM_COMMON_TRACK)
-                 and (not needle or needle in " ".join(str(item.get(k, "")) for k in ("title", "reading", "meaning", "category")).casefold()
-                      or romaji_matches(romaji, readings_of(item)))
-                 and (library == ALL_LIBRARIES or labels.get(item["id"]) == library)]
+        items = shown["found"]
         # Unavailable content is listed after the joinable items, never mixed in.
         unavailable = [item for item in items if states[item["id"]] != AVAILABLE]
         items = [item for item in items if states[item["id"]] == AVAILABLE]
@@ -617,13 +626,24 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             # only orders the library; saved queues and FSRS dates stay intact.
             items.sort(key=lambda item: item.get("priority", 3))
         enrolled_ids = {item["id"] for item in self.learning_store.list_items()}
-        children.append(u.label(f"共 {len(items)} 项 · 已加入 {sum(item['id'] in enrolled_ids for item in items)} 项"
-                                + (f" · 不可用 {len(unavailable)} 项" if unavailable else ""), size=13, color=u.MUTED))
+        count_line = u.label(f"共 {len(items)} 项 · 已加入 {sum(item['id'] in enrolled_ids for item in items)} 项"
+                             + (f" · 不可用 {len(unavailable)} 项" if unavailable else ""), size=13, color=u.MUTED)
+        children.append(count_line)
+        # The same query in the other tabs (design 02, 学习库): N is what that tab's own 共 N 项 will say, with this
+        # page's topic and library filters where that tab offers them; the tap keeps the query and the filters.
+        for other in (tab for tab in LIBRARY_TABS if search and tab != family):
+            chosen = selection(tabs[other], category, library)
+            found = sum(chosen["states"][item["id"]] == AVAILABLE for item in chosen["found"])
+            if found:
+                children.append(u.button(f"{LIBRARY_TABS[other]}里有 {found} 项",
+                                         lambda w, other=other: self.show_learning_library(
+                                             family=other, query=query, category=category, library=library),
+                                         compact=True))
         next_item = next((item for item in items if item["id"] not in enrolled_ids), None)
         if next_item:
             children.append(u.button("学习下一项", lambda w: self.enroll_learning(deepcopy(next_item)), primary=True))
         offset = max(0, min(offset, ((len(items) - 1) // 12) * 12)) if items else 0
-        children[-1]._feedback_fragment = {"kind": "learning_library_page", "family": family,
+        (children[-1] if next_item else count_line)._feedback_fragment = {"kind": "learning_library_page", "family": family,
             "query": query, "category": category, "offset": offset,
             "ordered_ids": [item["id"] for item in items[offset:offset + 12]]}
         for item in items[offset:offset + 12]:

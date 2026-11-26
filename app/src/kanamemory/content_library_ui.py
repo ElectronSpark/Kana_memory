@@ -623,7 +623,7 @@ class ContentLibraryUIMixin:
         if check.replaces_core:
             children.append(self.note("这是核心库文件：安装后其教学数据与词典将替换内置内容；移除即恢复内置库。"))
         children += [self.heading("预检结果"),
-                     u.label(f"与已安装库相同的内容 {len(check.same_fingerprint_ids)} 项", size=14),
+                     u.label(f"与其他已安装库相同的内容 {len(check.same_fingerprint_ids)} 项", size=14),
                      u.label(f"同 ID 但内容不同（冲突） {len(check.conflicting_ids)} 项 · 默认保留已安装库的版本", size=14),
                      u.label(f"未满足的必需引用 {len(check.missing_required_references)} 项", size=14),
                      u.label(f"可选引用缺失 {len(check.missing_optional_references)} 项", size=14),

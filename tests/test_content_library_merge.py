@@ -274,9 +274,12 @@ def test_precheck_rule_c_blocks_and_upgrade_precheck_counts_each_category():
     assert upgrade.retired_learned == (("grammar:ext:retired", "grammar:ext:masu"),)
     assert upgrade.aliased_learned == (("grammar:ext:old", "grammar:ext:masu"),)
     assert upgrade.overrides == ("grammar:demo:desu",)
+    # grammar:demo:desu is provided by both with the same fingerprint; masu changed; nothing else was there before.
+    assert upgrade.unchanged_ids == ("grammar:demo:desu",)
     lines = upgrade.lines()
-    assert lines[0].startswith("指纹变化 1 项（其中已学 1 项") and "不再提供 1 项（其中已学 1 项" in lines[2]
-    assert "retires 的项 1 项（其中已学 1 项）" in lines[3] and "别名 1 条" in lines[4]
+    assert lines[0] == "与被替换的版本相同 1 项"
+    assert lines[1].startswith("指纹变化 1 项（其中已学 1 项") and "不再提供 1 项（其中已学 1 项" in lines[3]
+    assert "retires 的项 1 项（其中已学 1 项）" in lines[4] and "别名 1 条" in lines[5]
 
 
 def test_alias_relations_route_new_enrolment_without_cycles():

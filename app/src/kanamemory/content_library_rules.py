@@ -1360,10 +1360,14 @@ class UpgradePrecheck:
     aliased_learned: tuple              # (old, new) whose old id has progress
     overrides: tuple                    # ids declared as intentional overrides of other libraries
     unknown_fingerprint_count: int = 0
+    # provided by both versions with the same fingerprint. Not total - changed - added: an item without a
+    # fingerprint on either side is neither changed nor the same.
+    unchanged_ids: tuple = ()
 
     def lines(self):
-        """One display line per difference category."""
-        return (f"指纹变化 {len(self.fingerprint_changed_ids)} 项（其中已学 {len(self.fingerprint_changed_learned)} 项，"
+        """One display line per difference category; first what stays as it was."""
+        return (f"与被替换的版本相同 {len(self.unchanged_ids)} 项",
+                f"指纹变化 {len(self.fingerprint_changed_ids)} 项（其中已学 {len(self.fingerprint_changed_learned)} 项，"
                 "已学项沿用保存的教案快照与原路线）",
                 f"新版本新增 {len(self.added_ids)} 项",
                 f"新版本不再提供 {len(self.removed_ids)} 项（其中已学 {len(self.removed_learned)} 项将变为孤儿，进度保留）",
@@ -1381,7 +1385,7 @@ def upgrade_precheck(manifest, *, previous_fingerprints, learned_ids, previous_v
     """
     previous, learned = dict(previous_fingerprints), set(learned_ids)
     provided, fingerprints = manifest["provides"]["items"], manifest["fingerprints"]
-    changed, unknown = [], 0
+    changed, unchanged, unknown = [], [], 0
     for cid in provided:
         if cid in previous:
             ours = fingerprints.get(cid)
@@ -1389,6 +1393,8 @@ def upgrade_precheck(manifest, *, previous_fingerprints, learned_ids, previous_v
                 unknown += 1
             elif previous[cid] and ours != previous[cid]:
                 changed.append(cid)
+            elif previous[cid]:
+                unchanged.append(cid)
     retired = tuple((row["id"], row.get("replaced_by")) for row in manifest["retires"])
     retired_ids = {cid for cid, _ in retired}
     aliases = tuple(sorted(manifest["aliases"].items()))
@@ -1404,7 +1410,8 @@ def upgrade_precheck(manifest, *, previous_fingerprints, learned_ids, previous_v
         removed_learned=tuple(cid for cid in removed if cid in learned), retired_ids=retired,
         retired_learned=tuple(row for row in retired if row[0] in learned), aliases=aliases,
         aliased_learned=tuple(row for row in aliases if row[0] in learned),
-        overrides=tuple(row["id"] for row in manifest["overrides"]), unknown_fingerprint_count=unknown)
+        overrides=tuple(row["id"] for row in manifest["overrides"]), unknown_fingerprint_count=unknown,
+        unchanged_ids=tuple(unchanged))
 
 
 # ---------------------------------------------------------------- merge
