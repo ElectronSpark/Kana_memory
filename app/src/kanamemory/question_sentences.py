@@ -19,6 +19,11 @@ _SPLIT = re.compile(r"[。！？!?]")
 _DROP = re.compile(r"[\s　、。，．,.!！?？「」『』（）()【】…・〜~―ー—\-：:；;\"'“”‘’]|\[[^\]]*\]")
 
 
+def without_speaker_labels(text) -> str:
+    """text line after line, each line stripped and without its leading speaker label (A：, 店员：)."""
+    return "\n".join(_LABEL.sub("", line.strip()) for line in str(text).split("\n"))
+
+
 def question_sentences(kind, question) -> frozenset[str]:
     """The sentence units of ``question`` (a template or snapshot with prompt and answer) of ``kind``."""
     prompt, answer = str(question.get("prompt") or ""), str(question.get("answer") or "")

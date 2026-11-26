@@ -34,6 +34,7 @@ CACHES = {
     "result_readings.py::_TITLES": REGISTERED,
     "learning_questions.py::_word_pool": REGISTERED,
     "learning_questions.py::_READING_FORMS": REGISTERED,
+    "learning_questions.py::_source_task": REGISTERED,
     "question_support.py::_background_word_senses": REGISTERED,
     "learning_conditions.py::_reviewed_index": REGISTERED,
     "learning_dependencies.py::_bundled_dependency_signature": REGISTERED,

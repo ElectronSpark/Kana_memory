@@ -3,6 +3,8 @@
 The snapshot below is copied literally from learning_questions.py before the
 kind tables were derived from question_kinds (WP2). It must not be edited to
 follow a code change: a difference means the refactor changed behaviour.
+The one exception is a new kind, added by its own decision: grammar_audio_meaning
+(0.36.26, preference version 3) is the only kind added since the snapshot.
 """
 import pytest
 
@@ -19,8 +21,9 @@ FROZEN_CONTEXT_CHOICE_KIND = "vocab_context_choice"
 FROZEN_PRACTICE_ONLY_KINDS = ("vocab_audio_word", "vocab_reading_choice", "vocab_context_choice")
 FROZEN_WORD_KINDS = (*FROZEN_AUTHORED_WORD_KINDS, "vocab_audio_word", "vocab_reading_choice",
                      "vocab_context_choice")
-FROZEN_GRAMMAR_KINDS = ("grammar_meaning", "grammar_cloze", "grammar_transform",
-                        "grammar_reorder", "targeted_correction", "controlled_sentence_production")
+FROZEN_LEGACY_GRAMMAR_KINDS = ("grammar_meaning", "grammar_cloze", "grammar_transform",
+                               "grammar_reorder", "targeted_correction", "controlled_sentence_production")
+FROZEN_GRAMMAR_KINDS = (*FROZEN_LEGACY_GRAMMAR_KINDS, "grammar_audio_meaning")
 FROZEN_PRONUNCIATION_KINDS = ("pronunciation_rule", "pronunciation_application")
 FROZEN_KIND_LABELS = {
     "vocab_meaning": "看词辨义", "vocab_audio_meaning": "听词辨义",
@@ -33,12 +36,13 @@ FROZEN_KIND_LABELS = {
     "controlled_sentence_production": "按要求造句",
     "pronunciation_rule": "读音规则辨析", "pronunciation_application": "读音规则应用",
     "vocab_audio_word": "听词选词", "vocab_reading_choice": "看词选读音",
-    "vocab_context_choice": "读句选词",
+    "vocab_context_choice": "读句选词", "grammar_audio_meaning": "听句辨义",
 }
 FROZEN_EXPERIMENTAL_KINDS = ("free_writing_translation", "situational_dialogue",
                              "pitch_discrimination", "shadowing_read_aloud", "spoken_recall")
-FROZEN_OPT_IN_LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension"}
-FROZEN_LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension", "vocab_audio_word"}
+FROZEN_OPT_IN_LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension", "grammar_audio_meaning"}
+FROZEN_LISTENING_KINDS = {"vocab_audio_meaning", "listening_comprehension", "vocab_audio_word",
+                          "grammar_audio_meaning"}
 FROZEN_TEXT_KINDS = {"vocab_reading", "vocab_recall", "grammar_transform",
                      "targeted_correction", "controlled_sentence_production"}
 FROZEN_DEFAULT_KINDS = (
@@ -48,8 +52,9 @@ FROZEN_DEFAULT_KINDS = (
     "grammar_reorder", "targeted_correction", "controlled_sentence_production",
     "pronunciation_rule", "pronunciation_application")
 FROZEN_SOUND_PREFERENCE_VERSION = "sound_kinds_version"
-FROZEN_KINDS_ADDED_AT = {1: ("vocab_audio_word", "vocab_reading_choice"), 2: ("vocab_context_choice",)}
-FROZEN_PREFERENCE_VERSION = 2
+FROZEN_KINDS_ADDED_AT = {1: ("vocab_audio_word", "vocab_reading_choice"), 2: ("vocab_context_choice",),
+                         3: ("grammar_audio_meaning",)}
+FROZEN_PREFERENCE_VERSION = 3
 FROZEN_KIND_ABILITIES = {
     "vocab_meaning": "understanding", "vocab_audio_meaning": "listening",
     "vocab_reading": "reading", "vocab_recall": "use", "vocab_orthography": "use",
@@ -60,7 +65,7 @@ FROZEN_KIND_ABILITIES = {
     "targeted_correction": "application", "controlled_sentence_production": "application",
     "pronunciation_rule": "understanding", "pronunciation_application": "application",
     "vocab_audio_word": "listening", "vocab_reading_choice": "reading",
-    "vocab_context_choice": "use",
+    "vocab_context_choice": "use", "grammar_audio_meaning": "understanding",
 }
 
 
@@ -179,9 +184,12 @@ def _provider_item():
 def test_generated_and_context_kinds_have_their_family_providers():
     from kanamemory.question_kinds import vocab_context, vocab_sound
     providers = {spec.kind: spec.template_provider for spec in REGISTRY.with_template_provider()}
+    from kanamemory.question_kinds import grammar_audio_meaning
     assert providers == {"vocab_audio_word": vocab_sound.templates,
                          "vocab_reading_choice": vocab_sound.templates,
-                         "vocab_context_choice": vocab_context.templates}
+                         "vocab_context_choice": vocab_context.templates,
+                         "grammar_audio_meaning": grammar_audio_meaning.templates}
+    assert REGISTRY.derived() == {"grammar_audio_meaning": "grammar_meaning"}
     assert REGISTRY.generated() == FROZEN_SOUND_KINDS
     assert REGISTRY.get(FROZEN_CONTEXT_CHOICE_KIND).template_source == vocab_context.NAMESPACE
     for kind in REGISTRY.kinds(include_experimental=True):
@@ -208,6 +216,10 @@ def test_providers_return_exactly_what_practice_templates_appends(monkeypatch):
     templates = lq.practice_templates(item)
     for spec in REGISTRY.with_template_provider():
         variants = spec.template_provider(item, spec, lq._TEMPLATE_ENV)
+        if spec.derived_from is not None:
+            # A heard twin exists only for an expression lesson (test_grammar_audio_meaning).
+            assert variants == [] and spec.kind not in templates
+            continue
         assert variants, spec.kind
         assert templates[spec.kind] == variants
     assert list(templates)[-3:] == list(FROZEN_PRACTICE_ONLY_KINDS)
@@ -339,6 +351,7 @@ FROZEN_HOOKS = {
     "vocab_audio_word": {"template_provider", "presenter"},
     "vocab_reading_choice": {"template_provider", "presenter"},
     "vocab_context_choice": {"template_provider", "presenter"},
+    "grammar_audio_meaning": {"template_provider", "presenter"},
 }
 # Literal values of the former learning_questions / question_presentation /
 # answer_input tables (before WP4 round 3). Do not edit to follow a change.
@@ -399,9 +412,14 @@ def test_presentation_and_input_tables_equal_their_former_literals():
 def test_grammar_and_pronunciation_kinds_have_their_family_hooks():
     from kanamemory.question_kinds import (grammar_cloze, grammar_meaning, grammar_production,
                                            pronunciation)
-    assert (*grammar_meaning.KINDS, *grammar_cloze.KINDS, *grammar_production.KINDS) == FROZEN_GRAMMAR_KINDS
+    from kanamemory.question_kinds import grammar_audio_meaning
+    assert (*grammar_meaning.KINDS, *grammar_cloze.KINDS, *grammar_production.KINDS,
+            *grammar_audio_meaning.KINDS) == FROZEN_GRAMMAR_KINDS
     assert pronunciation.KINDS == FROZEN_PRONUNCIATION_KINDS
-    for kind in FROZEN_GRAMMAR_KINDS:
+    heard = REGISTRY.get("grammar_audio_meaning")
+    assert (heard.builder, heard.grader, heard.input_mode_policy, heard.snapshot_finisher) == (None,) * 4
+    assert heard.presenter is grammar_meaning.PRESENTATION
+    for kind in FROZEN_LEGACY_GRAMMAR_KINDS:
         spec = REGISTRY.get(kind)
         assert spec.builder is grammar_meaning.build and spec.grader is None
         assert spec.snapshot_finisher is None

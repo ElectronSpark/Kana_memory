@@ -33,7 +33,7 @@ def snapshot(source):
     from kanamemory.example_catalogue import bundled_example_pack
     from kanamemory.structured_lessons import lesson_view
     from kanamemory.lesson_diagrams import diagram_for
-    from kanamemory.learning_questions import question_kinds, build_learning_question
+    from kanamemory.learning_questions import DERIVED_KINDS, question_kinds, build_learning_question
     from kanamemory.study_path_catalog import build_study_path
     from kanamemory.content import ContentRepository
     items = learning_items()
@@ -45,6 +45,8 @@ def snapshot(source):
         observed["lesson/" + identity] = fingerprint(lesson_view(item))
         observed["diagram/" + identity] = fingerprint(diagram_for(identity))
         for kind in question_kinds(identity):
+            if kind in DERIVED_KINDS:
+                continue  # Derived from the source kind's templates, which are compared themselves.
             for variant in range(3):
                 for guided in (False, True):
                     key = f"question/{identity}/{kind}/{variant}/{guided}"

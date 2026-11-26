@@ -61,7 +61,7 @@ def test_each_task_has_only_its_legal_actions_and_bounded_instructions(route, ac
     assert "memory_updates" not in instructions
     assert len(instructions) < limit
     assert "complete JSON object" in instructions
-    assert len(payload["question_capabilities"]) == 29
+    assert len(payload["question_capabilities"]) == 30
     if route in {"ask", "explain"}:
         assert schema["properties"]["candidate_id"]["enum"] == [""]
         assert schema["properties"]["question"] == {"type": "null"}

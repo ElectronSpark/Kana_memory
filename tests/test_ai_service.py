@@ -57,7 +57,7 @@ def test_content_authoring_keeps_its_own_schema_with_no_practice_scope(mode):
               "target": {"id": "grammar:x", "family": "grammar", "title": "は", "revision": "1"},
               "source_text": "私は学生です。"}
     instructions, payload, schema = generation_spec(source)
-    assert len(payload["question_capabilities"]) == 29
+    assert len(payload["question_capabilities"]) == 30
     assert "separate item-template schema" in instructions
     assert "example_pack" in schema["properties"]
     assert "scope" not in payload

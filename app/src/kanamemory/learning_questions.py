@@ -57,6 +57,9 @@ SOUND_KINDS = KIND_REGISTRY.by_template_source("sound")
 # Kinds whose templates a provider derives from lesson fields alone, so they
 # also exist for lessons without reviewed templates (today: SOUND_KINDS).
 _GENERATED_KINDS = KIND_REGISTRY.generated()
+# {derived kind: source kind}: a variant is its source variant plus audio_text (question_kinds/
+# grammar_audio_meaning). Content tools leave these kinds out: their texts and facts are the source's.
+DERIVED_KINDS = KIND_REGISTRY.derived()
 CONTEXT_CHOICE_KIND = KIND_REGISTRY.by_template_source("context_choice")[0]
 # Practice and Tutor only: a retention check prefers choices, so these would
 # silently replace what a check measures.
@@ -92,7 +95,10 @@ def stored_enabled_kinds(raw):
 
     A list saved before a kind existed gains it once: leaving it out then was
     not a choice. Saving the settings page records the current version, so
-    switching a kind off afterwards stays off. An empty list was a choice to
+    switching a kind off afterwards stays off. An opt-in listening kind starts
+    off, so it joins only a list that already holds another opt-in listening
+    kind (the settings page switches them as one group, 听力理解): nothing is
+    switched on that the learner left off. An empty list was a choice to
     practise nothing, and a malformed value stays malformed for its caller to
     refuse. Reading never writes the setting.
     """
@@ -105,7 +111,9 @@ def stored_enabled_kinds(raw):
     saved = saved if type(saved) is int else 0
     if not isinstance(enabled, list) or not enabled or saved >= PREFERENCE_VERSION:
         return enabled
-    added = [kind for version, kinds in sorted(KINDS_ADDED_AT.items()) if version > saved for kind in kinds]
+    listening = any(kind in OPT_IN_LISTENING_KINDS for kind in enabled if isinstance(kind, str))
+    added = [kind for version, kinds in sorted(KINDS_ADDED_AT.items()) if version > saved for kind in kinds
+             if listening or kind not in OPT_IN_LISTENING_KINDS]
     return list(dict.fromkeys([*enabled, *added]))
 
 
@@ -309,6 +317,9 @@ _NO_FACTS = frozenset()
 def template_facts(item, kind, raw):
     """TemplateFacts of one raw template: its dependency entry is found and validated once for both."""
     content_id = item.get("id") if isinstance(item, dict) else None
+    if kind in DERIVED_KINDS and isinstance(raw, dict):
+        # A heard twin's facts are its source template's: the dependency entry is keyed by the stored source.
+        return template_facts(item, DERIVED_KINDS[kind], _derived_source(raw))
     if kind in SOUND_KINDS:
         # Generated sound tasks need only their target: the options are other
         # written forms or kana, and with a known set they are drawn from known
@@ -385,7 +396,7 @@ def retired_practice_variants(item, templates):
     result = set(_cognate_mapping_variants(item, templates))
     entries = _PRACTICE.get('template_retirements', {}).get(item.get('id'), {})
     if not entries:
-        return frozenset(result)
+        return _with_retired_twins(result, templates)
     retired = entries.get(item_fingerprint(item), {})
     if not isinstance(retired, dict):
         raise ValueError('Invalid exact template retirement')
@@ -396,6 +407,74 @@ def retired_practice_variants(item, templates):
         fingerprints = set(hashes)
         for variant, raw in enumerate(templates.get(kind, [])):
             if _template_fingerprint(raw) in fingerprints:
+                result.add((kind, variant))
+    return _with_retired_twins(result, templates)
+
+
+def _derived_source(raw):
+    """The source template of a derived variant: without its audio_text, with its source's own task back.
+
+    The variant carries that task as source_task (None: the source had no task) only in the template; a
+    built question shows the fixed heard task (question_kinds/grammar_audio_meaning).
+    """
+    source = {key: value for key, value in raw.items() if key not in {"audio_text", "task", "source_task"}}
+    task = raw.get("source_task", raw.get("task"))
+    if task is not None:
+        source["task"] = task
+    return source
+
+
+def derived_stimulus(question):
+    """The stimulus fields its source has, for a template or a built question of a derived kind; else None.
+
+    {kind, input_mode, prompt, task, answer, choices}: what learning_practice_policy._fingerprint reads, so
+    that a heard twin and its source are one stimulus. A template carries the source's task; a built
+    question finds it in the lesson's current templates by its target, revision and variant (and the same
+    prompt and answer). None when the source cannot be found (another revision, a removed template).
+    """
+    source_kind = DERIVED_KINDS.get(question.get("kind")) if isinstance(question, dict) else None
+    if source_kind is None:
+        return None
+    if "source_task" in question:
+        task = question["source_task"]
+    else:
+        task = _source_task(question.get("target_id"), str(question.get("revision")), question.get("variant"),
+                            source_kind, question.get("prompt"), question.get("answer"))
+        if task is _NO_SOURCE:
+            return None
+    return {"kind": source_kind, "input_mode": question.get("input_mode", "choice"),
+            "prompt": question.get("prompt"), "task": task or "", "answer": question.get("answer"),
+            "choices": question.get("choices", [])}
+
+
+_NO_SOURCE = object()
+
+
+@content_cache
+@lru_cache(maxsize=512)
+def _source_task(target_id, revision, variant, source_kind, prompt, answer):
+    """The task of a stored derived question's source template, or _NO_SOURCE."""
+    if not isinstance(target_id, str) or type(variant) is not int or variant < 0:
+        return _NO_SOURCE
+    from .material_review import reviewed_item
+    item = get_learning_item(target_id)
+    if not item:
+        return _NO_SOURCE
+    item = reviewed_item(item)
+    if str(item.get("revision")) != revision:
+        return _NO_SOURCE
+    variants = (practice_templates(item) or {}).get(source_kind) or []
+    raw = variants[variant] if variant < len(variants) else None
+    if not isinstance(raw, dict) or raw.get("prompt") != prompt or raw.get("answer") != answer:
+        return _NO_SOURCE
+    return raw.get("task")
+
+
+def _with_retired_twins(result, templates):
+    """A derived variant is retired with its source, and so is one whose source cannot be heard (no audio_text)."""
+    for kind, source in DERIVED_KINDS.items():
+        for variant, raw in enumerate(templates.get(kind, ())):
+            if (source, variant) in result or not (isinstance(raw, dict) and raw.get("audio_text")):
                 result.add((kind, variant))
     return frozenset(result)
 
@@ -555,8 +634,39 @@ class _TemplateEnv:
     def legacy_grammar_variants(item, kind):
         return deepcopy(_CONTENT.get("GRAMMAR_QUESTIONS", {}).get(item["id"], {}).get(kind, []))
 
+    @staticmethod
+    def source_templates(item, kind):
+        templates = _reviewed_templates(item)
+        variants = templates.get(kind) if isinstance(templates, dict) else None
+        return variants if isinstance(variants, list) else []
+
+    @staticmethod
+    def spoken_prompt(item, kind, raw):
+        return _spoken_prompt(item, kind, raw)
+
 
 _TEMPLATE_ENV = _TemplateEnv()
+
+
+def _spoken_prompt(item, kind, raw):
+    """What the question page would speak (朗读题干) for raw's prompt asked as kind, or None.
+
+    The prompt support is made exactly as build_learning_question makes it for a new, unguided question and
+    handed to question_support.prompt_audio_text; nothing else is built (no identity, variant or review overlay).
+    """
+    prompt, mode = raw.get("prompt"), raw.get("input_mode", "choice")
+    if (not isinstance(prompt, str) or not prompt or kind not in KIND_ABILITIES
+            or pitch_practice.is_pitch_question(raw) or multi_cloze.is_cloze_question(raw)):
+        return None
+    safe = bool(raw.get("safe") and mode == "choice" and kind in SAFE_SUPPORT_KINDS)
+    readings = raw.get("readings", {}) if (item.get("question_templates") is not None
+                                           or raw.get("practice") is not None) else None
+    question = {"id": "spoken-prompt", "question_id": "spoken-prompt", "kind": kind, "prompt": prompt,
+                "input_mode": mode, "response": mode, "support": _support(prompt, item, safe, readings),
+                "revision": item["revision"], "content_revision": item["revision"], "family": item["family"],
+                "ability": KIND_ABILITIES[kind], "target_id": item["id"], "content_id": item["id"]}
+    from .question_support import prompt_audio_text
+    return prompt_audio_text(question)
 
 
 def _practice_source(item, kind, raw):
@@ -1088,6 +1198,8 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
         raise ValueError(f"Question kind {kind!r} is not available for {target['id']}")
     if templates is not None:
         raw = deepcopy(variant_template(target, kind, variant, templates))
+        if kind in DERIVED_KINDS and not raw.get("audio_text"):
+            raise ValueError("This meaning question cannot be heard as a whole")
         if _practice_template is not None:
             if _practice_source(target, kind, _practice_template) is None:
                 raise ValueError("Unregistered frozen practice template")

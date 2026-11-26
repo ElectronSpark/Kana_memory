@@ -75,6 +75,7 @@ KIND_LABELS = {
     "reading_comprehension": "短篇理解", "listening_comprehension": "短句听力", "controlled_sentence_production": "受控造句",
     "pronunciation_rule": "读音规则辨析", "pronunciation_application": "读音规则应用",
     AUDIO_WORD_KIND: "听词选词", READING_CHOICE_KIND: "看词选读音", CONTEXT_CHOICE_KIND: "读句选词",
+    "grammar_audio_meaning": "听句辨义",
 }
 KIND_GROUPS = {
     "理解与辨析": {"vocab_meaning", "vocab_zh_ja_contrast", "grammar_meaning", "reading_comprehension"},
@@ -104,9 +105,10 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         """
         from .question_support import learning_question_display
         from .learning_dependencies import independent_ready_ids
+        from .question_kinds.grammar_audio_meaning import shown_before_answer
         display = learning_question_display(question)
         children = []
-        if display.get("context_hint"):
+        if display.get("context_hint") and shown_before_answer(question, display["context_hint"]):
             children.append(u.label(display["context_hint"], size=13, color=u.MUTED))
         hints, ready = [], None
         if display.get("background_glosses"):
@@ -130,6 +132,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             hints = sorted([*hints, *unmet], key=lambda hint: hint.get("start", 0))
         if probe:
             hints = [hint for hint in hints if hint.get("target_id") != question.get("target_id")]
+        # A heard question never prints its sentence before the answer: no gloss of one of its words.
+        hints = [hint for hint in hints if shown_before_answer(question, hint["surface"], hint["meaning"])]
         if hints:
             parts, ranges, offset = [], [], 0
             for surface, meaning in dict.fromkeys((hint["surface"], hint["meaning"]) for hint in hints):
@@ -150,7 +154,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         and it is not counted as help on the target.
         """
         from .question_support import unmet_rule_hints
-        return [self._unmet_rule_hint_row(hint) for hint in unmet_rule_hints(question, known, requires=requires)]
+        from .question_kinds.grammar_audio_meaning import shown_before_answer
+        return [self._unmet_rule_hint_row(hint) for hint in unmet_rule_hints(question, known, requires=requires)
+                if shown_before_answer(question, hint.get("title"), *hint.get("lines", ()))]
 
     @staticmethod
     def _unmet_rule_hint_row(hint):
@@ -2585,7 +2591,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         from .multi_cloze import is_cloze_question
         kind = question.get("kind")
         answer = str(question.get("answer") or "").strip()
-        if kind in {"listening_comprehension", "vocab_audio_meaning", AUDIO_WORD_KIND}:
+        if kind in LISTENING_KINDS:  # the heard stimulus is the Japanese of the question
             return clean_utterance(question.get("audio_text") or "")
         if kind in {"vocab_reading", READING_CHOICE_KIND}:
             return clean_utterance(answer)

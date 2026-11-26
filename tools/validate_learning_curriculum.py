@@ -15,7 +15,8 @@ sys.path.insert(0, str(ROOT / 'app/src'))
 
 from kanamemory.learning_content import learning_items, learning_sources
 from kanamemory.learning_dependencies import validate_catalog
-from kanamemory.learning_questions import build_learning_question, grade_learning_answer, question_kinds, practice_templates
+from kanamemory.learning_questions import (DERIVED_KINDS, build_learning_question, grade_learning_answer,
+                                           question_kinds, practice_templates)
 from kanamemory.question_support import prompt_audio_text, prompt_support
 
 
@@ -51,6 +52,8 @@ def inspect():
             assert guide['input_mode'] in {'choice', 'text', 'reorder', 'pitch_fill', 'pitch_identify'}
             assert not prompt_audio_text(guide)
             for kind in available:
+                if kind in DERIVED_KINDS:
+                    continue  # A heard twin is its source plus the spoken prompt (tests/test_grammar_audio_meaning*).
                 variants = len((templates or {}).get(kind, [])) or 2
                 for variant in range(variants):
                     q = build_learning_question(item, kind, variant=variant)

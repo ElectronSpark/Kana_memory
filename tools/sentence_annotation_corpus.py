@@ -33,7 +33,8 @@ def public_prompt_parts(question):
 
 def lesson_text_records(items):
     """Yield explicit example fields and each local public prompt variant."""
-    from kanamemory.learning_questions import build_learning_question, question_kinds, practice_templates
+    from kanamemory.learning_questions import (DERIVED_KINDS, build_learning_question, question_kinds,
+                                               practice_templates)
     for item in items:
         identity = item["id"]
         instruction = item.get("instruction", {})
@@ -53,6 +54,8 @@ def lesson_text_records(items):
             continue
         templates = practice_templates(item)
         for kind in question_kinds(item):
+            if kind in DERIVED_KINDS:
+                continue  # A heard twin hides its prompt, which is its source's anyway.
             # The original grammar builder has two authored variants; expanded
             # curricula enumerate their own templates. Repeated prompts dedupe.
             count = len(templates[kind]) if templates is not None else 2

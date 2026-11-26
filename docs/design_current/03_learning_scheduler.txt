@@ -42,7 +42,7 @@ I＝当前代码已实现；V＝有既有验证报告，必须连同其版本/�
   vocab_reading、vocab_reading_choice → reading
   vocab_recall、vocab_orthography、vocab_usage → use
   vocab_audio_meaning、listening_comprehension、vocab_audio_word → listening
-  grammar_meaning、pronunciation_rule → understanding
+  grammar_meaning、grammar_audio_meaning、pronunciation_rule → understanding
   grammar_cloze、grammar_transform、grammar_reorder、targeted_correction、
   controlled_sentence_production、pronunciation_application → application
 同一内容同一能力的上述题型共用该能力状态；不同能力不因一题答对而全部更新。
@@ -51,6 +51,17 @@ I＝当前代码已实现；V＝有既有验证报告，必须连同其版本/�
 LearningStore.admit_word_listening每天最多追加8个单位（仅限至少复习过一次的词），先走追加教学，
 不进复习队列、不动其他能力的到期时间。词典条目加入时也带listening，仍没有use。
 听词选词默认开启，设备没有日语语音时不出题，也不算失败；听词辨义、短句听力仍需用户启用。
+[I] 听句辨义grammar_audio_meaning（0.36.26，偏好版本3）同样需用户启用（设置页“听力理解”一组），只给表达课
+（domain为expression的语法项）：该课每道现行grammar_meaning模板，若题干整句可朗读（question_support.prompt_audio_text
+有值，朗读文字不含中文指令、也没有拉丁字母），就有一道编号相同的听题，答案、选项、说明与practice元数据相同，任务行固定为
+“听句子，选出它的意思。”（来源的任务行常引用本课表达，只留在派生模板里），audio_text为那句朗读文字去掉行首说话人标记
+（A：、B：，同question_sentences的规则）；模板不存储，由注册表的template_provider按derived_from从来源模板派生。
+来源退役或不能整句朗读的编号随之退役。
+它是该课理解能力的正式题，与grammar_meaning共用同一FSRS单位；依赖条目、按复习放开（opens_after_reviews）与作答方式
+可用性都取来源模板的。选题时它与来源是同一个刺激（learning_practice_policy._fingerprint取来源的指纹，候选与历史都如此），
+所以刚出过其中一道，另一道就按“最近三个刺激”排在别的不近期的题之后；与来源同属一句（question_sentences）。
+作答前页面上引用这句话的提示行（词语注释、规则提示等）在听题上不显示；选项照旧。
+引导、探测题与替换题不用它（与其他听辨题型相同）。
 与中文同形同义的162个词（config/cognate_words_20261106.json）只从未来选题中减少映射题：
 vocab_meaning每词留2条无前置依赖的题，vocab_recall只留从句子还原基本形的题。
 （2026-11-26起S类词的vocab_recall收窄：只有题面（prompt、task及其提示行、选项）以原写法或简体中文写法含该词写法时才退出，

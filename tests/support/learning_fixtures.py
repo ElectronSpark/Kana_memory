@@ -14,7 +14,7 @@ from support.fake_ui import View, descendants
 from kanamemory.app import KanaMemory
 from kanamemory.domain import StudyStore
 from kanamemory.learning_content import get_learning_item
-from kanamemory.learning_questions import AUDIO_WORD_KIND, PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION, WORD_KINDS, build_learning_question
+from kanamemory.learning_questions import AUDIO_WORD_KIND, DERIVED_KINDS, PREFERENCE_VERSION, SOUND_PREFERENCE_VERSION, WORD_KINDS, build_learning_question
 from kanamemory.learning_store import LearningStore
 from kanamemory.learning_ui import LearningUIMixin, LEARNING_PREFS
 from kanamemory import learning_store as store_module
@@ -174,7 +174,9 @@ def legacy_lesson_snapshot(item_id):
     return item
 
 def ready(app, kind, *, item_id=None):
-    item_id = item_id or ("word:tegami:letter" if kind in WORD_KINDS else "grammar:te_iru:progressive")
+    # A heard expression twin exists only for an expression lesson.
+    item_id = item_id or ("word:tegami:letter" if kind in WORD_KINDS else "grammar:expression:oyasumi"
+                          if kind in DERIVED_KINDS else "grammar:te_iru:progressive")
     item = legacy_lesson_snapshot(item_id)
     # An explicit choice of one kind on a device that can actually present it.
     app.store.set_setting(LEARNING_PREFS, {"enabled": [kind], SOUND_PREFERENCE_VERSION: PREFERENCE_VERSION})

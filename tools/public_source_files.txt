@@ -334,6 +334,7 @@ app/src/kanamemory/question_instruction_ui.py
 app/src/kanamemory/question_kind_registry.py
 app/src/kanamemory/question_kinds/__init__.py
 app/src/kanamemory/question_kinds/builtin.py
+app/src/kanamemory/question_kinds/grammar_audio_meaning.py
 app/src/kanamemory/question_kinds/grammar_cloze.py
 app/src/kanamemory/question_kinds/grammar_meaning.py
 app/src/kanamemory/question_kinds/grammar_production.py
@@ -992,6 +993,7 @@ tests/test_word_romaji_lanes.py
 tests/test_word_romaji_unit_state.py
 tests/test_word_spelling_analysis.py
 tests/test_question_kind_registry.py
+tests/test_grammar_audio_meaning.py
 tests/test_draft_debounce.py
 tests/test_content_pack_shards.py
 app/src/kanamemory/content_library_merge.py

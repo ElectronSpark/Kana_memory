@@ -24,7 +24,7 @@ Display rules
 2. Reading-sensitive questions test a reading, pitch or pronunciation, listening, kana or the
    written form of their target: READING_SENSITIVE_KINDS (vocab_reading, vocab_reading_choice,
    vocab_audio_meaning, listening_comprehension, vocab_audio_word, vocab_recall,
-   vocab_orthography, pronunciation_rule, pronunciation_application; derived from the kind
+   vocab_orthography, pronunciation_rule, pronunciation_application, grammar_audio_meaning; derived from the kind
    registry), any question flagged tests_reading / tests_pitch / requires_audio / audio_only /
    has_hidden_transcript or carrying audio_text, pitch_practice or prosody_cue, any reading or
    listening ability or pronunciation domain, and a word question answered by typing. They get
@@ -87,6 +87,8 @@ _READING = re.compile(r"[ぁ-ゖー]{1,40}")
 # The gap and placeholder shapes of question_support._GAP (this module may not import it).
 _GAP = re.compile(r"[_＿□■◯○]|[（(\[【]\s*[）)\]】]|（[①-⑥1-6]）|［[1-6]］|\{[^}]*\}|<[^>]*>|\.\.\.|…")
 _MAX_IDS = 60
+# A derived variant (a heard twin) has the prompt, answer and variant number of its source: its source's entry.
+_ENTRY_KINDS = REGISTRY.derived()
 _SOUND_ABILITIES = frozenset({"reading", "listening"})
 # Rule 4: abilities whose kinds offer Japanese options (understanding kinds offer Chinese meanings).
 _JAPANESE_OPTION_ABILITIES = frozenset({"use", "application"})
@@ -327,6 +329,7 @@ def question_entry(question):
     target_id, kind = question.get("target_id"), question.get("kind")
     if not isinstance(target_id, str) or not isinstance(kind, str):
         return None
+    kind = _ENTRY_KINDS.get(kind, kind)
     namespace = _READINGS
     try:
         if namespace.get("schema_version") != 1:

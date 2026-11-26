@@ -6,7 +6,8 @@ from it. Migrated families set their hooks from question_kinds/<family>.py
 (vocab_sound, vocab_context: template_provider and cues; vocab_choice,
 vocab_text, grammar_meaning, grammar_cloze, grammar_production: builder,
 grader, presenter, input_mode_policy as each kind needs; pronunciation:
-snapshot_finisher); a None hook means the generic path handles it. The
+snapshot_finisher; grammar_audio_meaning: template_provider over its
+derived_from source); a None hook means the generic path handles it. The
 cross-family flags (safe_support, background_support,
 order_translation_source, dictionary_lesson, reads_written_form) restate the
 former learning_questions sets, pinned by test_question_kind_registry.
@@ -14,8 +15,8 @@ former learning_questions sets, pinned by test_question_kind_registry.
 from __future__ import annotations
 
 from ..question_kind_registry import QuestionKindSpec, Registry
-from . import (grammar_cloze, grammar_meaning, grammar_production, pronunciation, vocab_choice,
-               vocab_context, vocab_sound, vocab_text)
+from . import (grammar_audio_meaning, grammar_cloze, grammar_meaning, grammar_production, pronunciation,
+               vocab_choice, vocab_context, vocab_sound, vocab_text)
 from ..word_sound_questions import AUDIO_WORD, READING_CHOICE
 
 CONTEXT_CHOICE = vocab_context.KIND
@@ -101,6 +102,12 @@ _add(READING_CHOICE, "看词选读音", "word", "reading", practice_only=True, r
 _add(CONTEXT_CHOICE, "读句选词", "word", "use", practice_only=True,
      added_at_version=2, template_source=vocab_context.NAMESPACE, order_translation_source="gap",
      template_provider=vocab_context.templates, presenter=vocab_context.PRESENTATION, **_BACKGROUND)
+# Heard twin of an expression lesson's meaning questions (question_kinds/grammar_audio_meaning):
+# opt-in like the heard word kinds, a formal question of the lesson's understanding ability.
+_add(grammar_audio_meaning.KIND, "听句辨义", "grammar", "understanding", added_at_version=3,
+     template_source="derived", derived_from=grammar_audio_meaning.SOURCE_KIND,
+     template_provider=grammar_audio_meaning.templates, presenter=grammar_meaning.PRESENTATION,
+     **_OPT_IN_LISTENING)
 # Experimental kinds: named only, never issued, no ability or label yet.
 # Families are descriptive; no derived table includes experimental kinds.
 for _kind, _family in (("free_writing_translation", "word"), ("situational_dialogue", "word"),

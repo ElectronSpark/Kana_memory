@@ -43,6 +43,14 @@ class TemplateEnv(Protocol):
         """The item_fingerprint-bound entry for item in a named template
         namespace (current or exact history), or None when unbound/unknown."""
 
+    def source_templates(self, item: Mapping, kind: str) -> list:
+        """Fresh copies of the lesson's own reviewed templates of kind, in
+        variant order ([] when it has none); derived kinds read their source."""
+
+    def spoken_prompt(self, item: Mapping, kind: str, raw: Mapping) -> str | None:
+        """What the app would speak for raw's prompt as a question of kind
+        (question_support.prompt_audio_text), or None when nothing."""
+
 
 class BuildEnv(TemplateEnv, Protocol):
     """What the question builder lends a legacy ``builder`` at call time."""
@@ -173,6 +181,11 @@ class QuestionKindSpec:
     snapshot_finisher: Callable[..., Any] | None = None
     feedback_renderer_id: str | None = None
     ai_capability: str | None = None
+    # derived_from: the kind whose live templates of the same lesson this
+    # kind's provider turns into variants with the same numbers (a heard twin
+    # of each). A variant's dependency facts, release and input availability
+    # are its source's; a library never supplies such templates.
+    derived_from: str | None = None
 
 
 class Registry:
@@ -215,6 +228,10 @@ class Registry:
             raise ValueError(f"Invalid order translation source for {spec.kind!r}")
         if spec.experimental and spec.default_enabled:
             raise ValueError(f"Experimental kind {spec.kind!r} cannot be enabled by default")
+        if spec.derived_from is not None and (spec.template_provider is None
+                                              or spec.derived_from not in self._specs
+                                              or self._specs[spec.derived_from].derived_from is not None):
+            raise ValueError(f"Derived kind {spec.kind!r} needs a provider and a registered source kind")
         self._specs[spec.kind] = spec
         return spec
 
@@ -248,6 +265,10 @@ class Registry:
     def with_template_provider(self) -> tuple[QuestionKindSpec, ...]:
         """Live specs with a template_provider, in registration order."""
         return tuple(spec for spec in self._live() if spec.template_provider is not None)
+
+    def derived(self) -> dict[str, str]:
+        """{derived kind: its source kind} (QuestionKindSpec.derived_from)."""
+        return {spec.kind: spec.derived_from for spec in self._live() if spec.derived_from is not None}
 
     def abilities(self) -> dict[str, str]:
         return {spec.kind: spec.ability for spec in self._live()}
@@ -311,7 +332,7 @@ class Registry:
     def validate_templates(self, kind: str, payload: Any) -> tuple[bool, str]:
         """Structural check for library-supplied templates of one kind.
 
-        Unknown, experimental and generated kinds are ignorable: the reason
+        Unknown, experimental, generated and derived kinds are ignorable: the reason
         starts with IGNORED and the caller skips that payload. Semantic review
         and exact item binding stay with the existing template loaders.
         """
@@ -322,6 +343,8 @@ class Registry:
             return False, IGNORED + "experimental_kind"
         if spec.template_source in GENERATED_SOURCES:
             return False, IGNORED + "generated_kind"
+        if spec.derived_from is not None:
+            return False, IGNORED + "derived_kind"
         if not isinstance(payload, list) or not payload:
             return False, "templates_not_a_list"
         for raw in payload:

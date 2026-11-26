@@ -51,6 +51,9 @@ def question_scaffold(question):
 def _fingerprint(question):
     def normalized(value):
         return "".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    # A heard twin (a derived kind) shows its source's sentence, options and answer: one stimulus with its
+    # source, for a template and a stored question alike (learning_questions.derived_stimulus).
+    question = _stimulus_question(question)
     kind = question.get("kind")
     fields = (kind, question.get("input_mode", "choice"),
               normalized(question.get("prompt")), normalized(question.get("task")),
@@ -64,6 +67,17 @@ def _fingerprint(question):
         # (history matching depends on it).
         fields = (*fields, normalized(question["audio_text"]))
     return sha256(json.dumps(fields, ensure_ascii=False).encode()).hexdigest()
+
+
+def _stimulus_question(question):
+    """The source's stimulus fields of a question of a derived kind; any other question (or an unknown twin)
+    unchanged."""
+    from .learning_questions import DERIVED_KINDS, derived_stimulus
+    if question.get("kind") in DERIVED_KINDS:
+        source = derived_stimulus(question)
+        if source is not None:
+            return source
+    return question
 
 
 def _heard_stimulus_kinds():
@@ -312,9 +326,9 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
             if early or gloss:
                 (early_gated if early else gloss_gated).append(entry)
                 continue
-            if descriptor["fingerprint"] in seen[declared]:
+            if (descriptor["fingerprint"], kind) in seen[declared]:
                 continue
-            seen[declared].add(descriptor["fingerprint"])
+            seen[declared].add((descriptor["fingerprint"], kind))
             (gated if declared else fallback).append(entry)
     # Opening allowance: purely additive. The passes below are computed from the fully met
     # templates exactly as without it; a task that shows a not yet taught rule (with its
@@ -323,8 +337,8 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     # tier (Q6) is additive in the same way and comes after the early tasks.
     early_extra, early_seen = [], seen[True] | seen[False]
     for entry in (*early_gated, *gloss_gated):
-        if entry["fingerprint"] not in early_seen:
-            early_seen = early_seen | {entry["fingerprint"]}
+        if (entry["fingerprint"], entry["kind"]) not in early_seen:
+            early_seen = early_seen | {(entry["fingerprint"], entry["kind"])}
             early_extra.append(entry)
     if gated or fallback:
         yield from gated
@@ -360,8 +374,8 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     least = min(candidate["relaxed"] for candidate in relaxed)
     tier = set()
     for candidate in relaxed:
-        if candidate["relaxed"] == least and candidate["fingerprint"] not in tier:
-            tier.add(candidate["fingerprint"])
+        if candidate["relaxed"] == least and (candidate["fingerprint"], candidate["kind"]) not in tier:
+            tier.add((candidate["fingerprint"], candidate["kind"]))
             yield candidate
 
 
