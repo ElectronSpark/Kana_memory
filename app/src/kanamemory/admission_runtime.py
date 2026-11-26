@@ -17,8 +17,10 @@ def current_admission(app, current: StoreAdmission | None) -> StoreAdmission:
     store, learning_store = app.store, app.learning_store
     if current is not None and current.serves(store, learning_store):
         return current
+    from .study_path_runtime import StudyPathRuntimeMixin
     return StoreAdmission.for_store(store, learning_store, paths=lambda: app.study_path_service(),
-                                    repository=lambda: app.repo, inputs=lambda pending: admission_inputs(app, pending))
+                                    repository=lambda: app.repo, inputs=lambda pending: admission_inputs(app, pending),
+                                    arrangement=lambda: StudyPathRuntimeMixin.study_arrangement(app))
 
 
 def admission_inputs(app, pending) -> AddInputs:

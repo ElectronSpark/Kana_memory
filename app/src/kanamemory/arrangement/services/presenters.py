@@ -43,6 +43,7 @@ from ..display import (ANSWERED_TODAY_TEXT, RECENT_UNITS_NOTE, BREADTH_TEXT, CHA
 from ..model import (KANA_DIRECTION_KINDS, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, RouteFacts, Tilt,
                      Unit)
 from ..rules.clock import charges
+from ..rules.lines import period_usage
 from ..rules.depth import GROUP_TITLES, LEVELS, KanaDepth, switched_groups
 from ..rules.review_filter import Apart
 from ..rules.shares import KANA_WEIGHTS, TILT_WEIGHTS
@@ -538,6 +539,10 @@ class ArrangementPresenter:
         day_rows = tuple(_day_minutes(day, *(minutes(spent[day][unit]) for unit in (Unit.NEW, Unit.COURSE, Unit.KANA)))
                          for day in days)
         lessons, kana = len(activity.learned.lessons), len(activity.learned.kana)
+        # Design 12 LS9: the course time of each study line on the 7 days (new content and course review).
+        line_usage = period_usage(activity.events, days)
+        word, grammar = minutes(line_usage.word), minutes(line_usage.grammar)
+        lines_line = f"课程用时 · 近 {len(days)} 天：词汇 {word} 分 · 语法 {grammar} 分" if word or grammar else ""
         # The course answers the clock charges to 课程复习 (the events of the home page's 课程复习 minutes): today's
         # count for the course review line, and whether the period holds any at all.
         course = [event.day for event in activity.events if event.unit is Unit.COURSE]
@@ -547,7 +552,7 @@ class ArrangementPresenter:
             route_position=route.position, route_total=route.total, route_line=self._route_part(route),
             learned_line=f"近 {DAYS} 天新学 {lessons} 课 · 新假名 {kana} 个",
             reviews=(self._course_figures(now, course_due, course_exclude, answered), *self._kana_figures(now)),
-            days_heading=f"近 {len(days)} 天每天用时（分钟）")
+            days_heading=f"近 {len(days)} 天每天用时（分钟）", lines_line=lines_line)
 
     def _course_figures(self, now: datetime, due: int, exclude: Iterable[str],
                         answered: tuple[int, bool] = (0, False)) -> ReviewFigures:

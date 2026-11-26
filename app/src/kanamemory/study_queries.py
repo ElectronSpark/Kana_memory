@@ -446,6 +446,18 @@ class StudyQueries:
             json_extract(content_json,'$.depends_on') AS depends_on
             FROM learning_content ORDER BY rowid""").fetchall()
 
+    def enrolled_lessons_key(self) -> tuple[int, int | None, str | None]:
+        """(count, greatest rowid, content_id of that row) of the enrolled lessons: a cheap key of the set.
+
+        The study clock's line map (design 12 LS3) is re-read only when it
+        changes. Enrolling appends a row (a greater rowid); removing one lowers
+        the count; a removed last row whose rowid is reused by the next
+        enrolment shows in its content_id.
+        """
+        row = self._connection.execute("""SELECT (SELECT COUNT(*) FROM learning_content),rowid,content_id
+            FROM learning_content ORDER BY rowid DESC LIMIT 1""").fetchone()
+        return (0, None, None) if row is None else (int(row[0]), int(row[1]), str(row[2]))
+
     def course_content_json(self, content_id: str) -> sqlite3.Row | None:
         return self._connection.execute(
             'SELECT content_json FROM learning_content WHERE content_id=?', (content_id,)).fetchone()

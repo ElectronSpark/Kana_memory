@@ -12,9 +12,12 @@ says whether a section's lessons have enough gated questions with what is known
 (learned, added and ticked): a hint, nothing is blocked. route_lines puts them
 together for one overview (StudyPathService.overview()); while the route's next
 section is on neither line (the kana stage) the lines wait behind it and the
-suggestion is that section, as today. No share of time, no
-setting and nothing stored: every fact is derived from the overview and the
-readiness table it is given (route_mix.readiness.Readiness).
+suggestion is that section, as today. The second part (design 12 LS8):
+when both lines are open the suggestion may follow the line behind its share
+of the new-content time, which the caller measures (arrangement rules/lines)
+and passes as ``behind``. No setting and nothing stored: every fact is derived
+from the overview, the readiness table it is given
+(route_mix.readiness.Readiness) and ``behind``.
 """
 from __future__ import annotations
 
@@ -197,13 +200,15 @@ class Suggestion:
 
 def suggest(nexts: Mapping[str, Mapping | None], unlearned: Collection[str], *, breadth: bool,
             route_next: Mapping | None, positions: Mapping[str, int], grammar_verdict: Verdict | None = None,
-            lines: Mapping[str, str | None] | None = None) -> Suggestion | None:
+            lines: Mapping[str, str | None] | None = None, behind: str | None = None) -> Suggestion | None:
     """The line to add first.
 
     Not ``breadth`` (深度优先, or no orientation chosen): the route's next
     section, as today. Breadth: of the lines with a next section, (a) the only
     line without added-but-unlearned content (``unlearned``) when exactly one
-    such line is left, (b) otherwise the line whose next section comes first in
+    such line is left, (b) otherwise, when two lines are open and ``behind``
+    (the line behind its share of the new-content time, design 12 LS8) names
+    one of them, that line, else the line whose next section comes first in
     route order (``positions``: section id -> route position); (c) when that is
     the grammar line and its next section is not ready (``grammar_verdict``), the
     word section (``lines``: section id -> line) of the first lesson it misses,
@@ -219,6 +224,8 @@ def suggest(nexts: Mapping[str, Mapping | None], unlearned: Collection[str], *, 
     free = [line for line in open_lines if line not in unlearned]
     if len(open_lines) > 1 and len(free) == 1:
         chosen = free[0]
+    elif len(open_lines) > 1 and behind in open_lines:
+        chosen = behind
     else:
         chosen = min(open_lines, key=lambda line: positions.get(str(nexts[line]["id"]), len(positions)))
     section = nexts[chosen]
@@ -269,10 +276,11 @@ def readiness_ids(overview: Mapping) -> tuple[str, ...]:
 
 
 def route_lines(overview: Mapping, *, readiness=None, ticked: Iterable[str] = (), breadth: bool = False,
-                floor: int = READY_FLOOR) -> RouteLines:
+                floor: int = READY_FLOOR, behind: str | None = None) -> RouteLines:
     """The two lines of ``overview``; ``readiness``: a Readiness holding readiness_ids(overview), or None
     (no verdicts); ``ticked``: entry ids counted as known besides the learned and added ones (the add
-    page's selection and the prerequisites it brings); ``breadth``: the learner's orientation is 广度优先."""
+    page's selection and the prerequisites it brings); ``breadth``: the learner's orientation is 广度优先;
+    ``behind``: the line behind its share of the new-content time, or None (suggest's rule (b))."""
     sections = list(route_sections(overview))
     positions = {str(section["id"]): index for index, section in enumerate(sections)}
     lines = {str(section["id"]): section_line(section) for section in sections}
@@ -312,7 +320,7 @@ def route_lines(overview: Mapping, *, readiness=None, ticked: Iterable[str] = ()
     shown = tuple(LineNext(line, str(section["id"]), str(section.get("title", "")), verdicts.get(line))
                   for line, section in nexts.items() if section is not None)
     suggestion = suggest(nexts, unlearned_lines(overview), breadth=breadth, route_next=route_next,
-                         positions=positions, grammar_verdict=verdicts.get(GRAMMAR), lines=lines)
+                         positions=positions, grammar_verdict=verdicts.get(GRAMMAR), lines=lines, behind=behind)
     return RouteLines(shown, suggestion)
 
 

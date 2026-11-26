@@ -140,7 +140,10 @@ class HomeOverviewService:
             scope_done = False
         # The first part of the two-line design: each line's next section (a next section the filter does not
         # allow is not offered) and the suggestion B10's note names; the note exists under breadth only.
-        lines = self._lines(service, path)
+        from ..domain import _utc
+        # Design 12 LS8: rule (b) of the suggestion follows the line behind its share (the note is breadth only).
+        behind = None if arrangement is None else arrangement.dispatcher.line_behind(_utc(None), breadth=True)
+        lines = self._lines(service, path, behind)
         listed_lines = [(item.line_title, item.section_id, item.title) for item in lines.lines
                         if serve is None or arrangement.review_filter.offers_section(serve, current, item.section_id)]
         suggestion = lines.suggestion if lines.suggestion is not None and lines.suggestion.line is not None else None
@@ -168,12 +171,14 @@ class HomeOverviewService:
             extra_entry=self._extra_entry(arrangement), line_sections=listed_lines)
 
     @staticmethod
-    def _lines(service, path) -> RouteLines:
+    def _lines(service, path, behind: str | None = None) -> RouteLines:
         """study_lines.route_lines of the current route under breadth (B10's note, the only place the home shows
-        the suggestion, exists under breadth only), with the readiness the path service holds in memory."""
+        the suggestion, exists under breadth only), with the readiness the path service holds in memory;
+        ``behind``: the line behind its share of the new-content time (ShareDispatcher.line_behind, None
+        unless the orientation is breadth first), design 12 LS8."""
         known = getattr(service, "line_readiness", None)
         readiness = known(readiness_ids(path)) if callable(known) else None
-        return route_lines(path, readiness=readiness, breadth=True)
+        return route_lines(path, readiness=readiness, breadth=True, behind=behind)
 
     def next_review_at(self, inputs: HomeInputs) -> datetime | None:
         """The moment of the home's 下次复习 line for a page that ends a round, or None (design 02, round end).

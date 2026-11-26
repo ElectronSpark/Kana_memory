@@ -161,12 +161,18 @@ class FirstRatings:
 
 @dataclass(frozen=True)
 class ClockEvent:
-    """A timed study action attributed to a unit; ``teaching`` selects the long gap cap."""
+    """A timed study action attributed to a unit; ``teaching`` selects the long gap cap.
+
+    ``line``: the study line of a course-lane action's lesson ("word" or
+    "grammar", study_lines.line_of); None for a kana-lane action (design 12
+    LS3). It rides beside the unit and never changes it.
+    """
 
     at: datetime
     day: str
     unit: Unit
     teaching: bool = False
+    line: str | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +193,35 @@ class Usage:
 
     def of(self, unit: Unit) -> float:
         return {Unit.NEW: self.new, Unit.COURSE: self.course, Unit.KANA: self.kana}[unit]
+
+
+@dataclass(frozen=True)
+class LineUsage:
+    """Charged seconds of course actions per (unit, study line) (design 12 LS3).
+
+    Only new content and course review carry a line; kana practice has none,
+    so ``of`` gives 0.0 for Unit.KANA or a line that is neither "word" nor "grammar".
+    """
+
+    new_word: float = 0.0
+    new_grammar: float = 0.0
+    course_word: float = 0.0
+    course_grammar: float = 0.0
+
+    def of(self, unit: Unit, line: str | None) -> float:
+        return {(Unit.NEW, "word"): self.new_word, (Unit.NEW, "grammar"): self.new_grammar,
+                (Unit.COURSE, "word"): self.course_word,
+                (Unit.COURSE, "grammar"): self.course_grammar}.get((unit, line), 0.0)
+
+    @property
+    def word(self) -> float:
+        """New content and course review of the word line together."""
+        return self.new_word + self.course_word
+
+    @property
+    def grammar(self) -> float:
+        """New content and course review of the grammar line together."""
+        return self.new_grammar + self.course_grammar
 
 
 @dataclass(frozen=True)

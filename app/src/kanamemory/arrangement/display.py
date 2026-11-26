@@ -437,6 +437,9 @@ class ProgressModel:
     ``route_position`` / ``route_total``: N and M of 第 N／M 小节 (RouteFacts).
     ``route_line``: "路线：第 N／M 小节" ("路线：没有小节" for an empty route);
     ``learned_line``: "近 7 天新学 L 课 · 新假名 K 个".
+    ``lines_line``: "课程用时 · 近 7 天：词汇 N 分 · 语法 M 分" (design 12 LS9), the
+    minutes the clock charged to course actions of each study line on the 7
+    days; "" when both are 0 (the page leaves the line out).
     ``reviews``: course review, then 识读, 拼写, 手写. ``note``: the fixed sentence.
     ``heading``, ``days_heading`` ("近 7 天每天用时（分钟）") and
     ``reviews_heading``: the block's headings. Every shown text is composed
@@ -452,6 +455,7 @@ class ProgressModel:
     learned_line: str
     reviews: tuple[ReviewFigures, ...]
     days_heading: str = ""
+    lines_line: str = ""
     heading: str = PROGRESS_HEADING
     reviews_heading: str = REVIEWS_HEADING
     note: str = PROGRESS_NOTE

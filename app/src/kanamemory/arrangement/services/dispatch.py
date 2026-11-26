@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..model import Decision, Orientation, Usage
+from ..model import Decision, LineUsage, Orientation, Unit, Usage
 from ..ports import CandidateSource, EventSource
-from ..rules import clock, shares
+from ..rules import clock, lines, shares
 from .preferences import ArrangementPreferences
 
 
@@ -34,6 +34,21 @@ class ShareDispatcher:
     def usage(self, now: datetime) -> Usage:
         """Charged seconds per unit over the sliding window that ends at ``now``."""
         return clock.window_usage(self._events.clock_events(now), now)
+
+    def line_usage(self, now: datetime) -> LineUsage:
+        """Charged seconds per (unit, study line) over the line window that ends at ``now`` (design 12 LS3)."""
+        return lines.line_usage(self._events.clock_events(now), now)
+
+    def line_behind(self, now: datetime, *, breadth: bool | None = None) -> str | None:
+        """The line behind inside new content by the default weights (design 12 LS8), or None.
+
+        None unless the orientation is breadth first, and when both lines
+        have used the same time per weight (also both none). ``breadth``: the
+        caller already knows the orientation (no settings read); None reads it.
+        """
+        if not (self.active() if breadth is None else breadth):
+            return None
+        return lines.behind(self.line_usage(now), Unit.NEW)
 
     def today(self, now: datetime, day: str) -> Usage:
         """Charged seconds per unit on one study day, for display."""

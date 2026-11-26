@@ -29,9 +29,12 @@ class StoreAdmission:
     @classmethod
     def for_store(cls, store, learning_store, *, paths: Callable[[], Any] | None = None,
                   repository: Callable[[], Any] | None = None,
-                  inputs: Callable[[Any], AddInputs] | None = None) -> StoreAdmission:
+                  inputs: Callable[[Any], AddInputs] | None = None,
+                  arrangement: Callable[[], Any] | None = None) -> StoreAdmission:
         """``paths``: the app's current StudyPathService; ``repository``: its content repository;
-        ``inputs(pending)``: the device abilities and settings, read at every workload count.
+        ``inputs(pending)``: the device abilities and settings, read at every workload count;
+        ``arrangement()``: the store's StoreArrangement (its dispatcher measures the line behind its share,
+        design 12 LS8), None: the suggestion keeps the route order.
 
         Without them only what needs none of them works (the caches, the
         course and kana dues); asking a missing one raises LookupError.
@@ -40,7 +43,8 @@ class StoreAdmission:
         workload = WorkloadContext(store, learning_store, costs, paths or _missing("paths"),
                                    repository or _missing("repository"), inputs or _missing("inputs"))
         service = AddContentService(paths=workload.paths, workload=workload,
-                                    restart=lambda: _restart_main_round(store), breadth=lambda: _breadth(store))
+                                    restart=lambda: _restart_main_round(store), breadth=lambda: _breadth(store),
+                                    behind=None if arrangement is None else lambda: _behind(arrangement))
         return cls(store, learning_store, costs, workload, service)
 
     def serves(self, store, learning_store) -> bool:
@@ -64,6 +68,13 @@ def _breadth(store) -> bool:
         return ArrangementPreferences(store).orientation() is Orientation.BREADTH
     except ValueError:
         return False
+
+
+def _behind(arrangement: Callable[[], Any]) -> str | None:
+    """The line behind its share of the new-content time now (ShareDispatcher.line_behind), or None; asked only
+    when the orientation is 广度优先."""
+    from ..domain import _utc
+    return arrangement().dispatcher.line_behind(_utc(None), breadth=True)
 
 
 def _restart_main_round(store) -> None:

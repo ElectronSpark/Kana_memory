@@ -60,15 +60,24 @@ old). window_cut() says whether the window is complete: None, or the instant
 at or before which a source's row limit cut it. period() reads a period in
 full, without the row limit, cut or caching, for the records page; and
 has_history() tells whether the store has any answer or teaching mark at all.
+
+Lines (design 12 LS2, LS3): every course action and course teaching mark
+carries its lesson's study line (study_lines.line_of of the enrolled lesson;
+the word line when the lesson is no longer enrolled); kana actions carry
+none. The lesson comes from the cached unit lookup, the line from _LineMap,
+which is re-read only when the set of enrolled lessons changed. A kept action
+keeps its line; when the map changed, every kept action gets its line again,
+so the kept events still equal a fresh read's.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import json
 
 from ...domain import WORD_SKILLS
+from ...study_lines import WORD, line_of
 from ..model import ClockEvent, FirstRatings, NewLearning, PeriodActivity, RawEvent, Unit
 from ..rules.clock import LOOKBACK, attribute
 
@@ -77,7 +86,9 @@ from ..rules.clock import LOOKBACK, attribute
 # gap to the previous action, which for a real answer is a few seconds at
 # least, and an action opening a sitting is charged 20 s or more. 2,000 rows of
 # one source therefore reach past the window unless that source averaged under
-# 0.9 s per row; only then is the oldest part cut (see _AnswerLogs._take).
+# 0.9 s per row; only then is the oldest part cut (see _AnswerLogs._take). The
+# line window (rules/lines.LINE_WINDOW, 2 hours) is reached unless a source
+# averaged under 3.6 s per row; otherwise it covers what the kept events reach.
 ROW_LIMIT = 2000
 
 # A state learned before the log gets a first rating just before its earliest
@@ -101,7 +112,53 @@ def _instant(value: str) -> datetime:
 def _sort_key(event: ClockEvent):
     # Ties are ordered by content, never by row order, so an imported or
     # reopened store gives the same sequence.
-    return event.at, event.unit.value, event.teaching
+    return event.at, event.unit.value, event.teaching, event.line or ""
+
+
+def _lined(event: ClockEvent, line: str | None) -> ClockEvent:
+    return event if event.line == line else replace(event, line=line)
+
+
+def _state_lines(states: Iterable[str], keys: Mapping[str, tuple[str, str]], lines: Mapping[str, str],
+                 contents: Callable[..., Mapping[str, str]]) -> dict[str, str | None]:
+    """{state: line} (design 12 LS2): a course state has its unit's lesson's line, the word line when the
+    lesson is not enrolled (any more); a kana state none."""
+    states = list(states)
+    units = sorted({keys[state][1] for state in states if keys[state][0] == "course"})
+    lessons = contents(units) if units else {}
+    return {state: (lines.get(lessons.get(keys[state][1]), WORD) if keys[state][0] == "course" else None)
+            for state in states}
+
+
+class _LineMap:
+    """{content id: study line} of every enrolled lesson (design 12 LS2, LS3), kept in memory.
+
+    Re-read (StudyQueries.course_scope_rows) only when the set of enrolled
+    lessons changed, by the key StudyQueries.enrolled_lessons_key; ``version``
+    grows with every re-read, so a window knows when to give its kept events
+    their lines again. A map read inside an open transaction is used once and
+    kept nowhere (a rollback could take its rows back).
+    """
+
+    def __init__(self, store):
+        self._store = store
+        self._key: object = None
+        self._lines: dict[str, str] = {}
+        self.version = 0
+
+    def current(self, course: bool) -> tuple[int, Mapping[str, str]]:
+        """(version, {content id: line}); without the course tables the map is empty."""
+        queries = self._store.queries
+        key = queries.enrolled_lessons_key() if course else ("none",)
+        if key == self._key:
+            return self.version, self._lines
+        lines = ({row["content_id"]: line_of(row["family"], row["domain"]) or WORD
+                  for row in queries.course_scope_rows()} if course else {})
+        if self._store.in_transaction:
+            return -1, lines
+        self._key, self._lines = key, lines
+        self.version += 1
+        return self.version, lines
 
 
 class _Reread(Exception):
@@ -341,9 +398,15 @@ class _TeachingMarks:
         return marks
 
     @staticmethod
-    def events(entries, day: Callable[[datetime], str]) -> list[ClockEvent]:
+    def events(entries, day: Callable[[datetime], str], lines: Mapping[str, str] | None = None) -> list[ClockEvent]:
+        """The marks as clock events; ``lines`` ({content id: line}): a course mark carries its lesson's line
+        (the word line when the lesson is not enrolled), a kana mark none."""
         # A mark is new content whatever state it names; the state only says what was taught.
-        return attribute([RawEvent(at, day(at), lane, state, teaching_mark=True) for at, lane, state, _ in entries], {})
+        events = attribute([RawEvent(at, day(at), lane, state, teaching_mark=True) for at, lane, state, _ in entries], {})
+        if lines is None:
+            return events
+        return [_lined(event, lines.get(identity, WORD) if lane == "course" else None)
+                for event, (_, _, _, (lane, identity)) in zip(events, entries)]
 
     def earliest(self, items: Iterable[tuple]) -> dict[tuple, datetime]:
         """{item: its earliest teaching mark, whenever made} for these items (("course", id) / ("kana", (id, script))).
@@ -536,12 +599,16 @@ class _Window:
     """The attributed events of one store kept in memory and brought up to date by appended rows."""
 
     def __init__(self, store, logs: _AnswerLogs, marks: _TeachingMarks,
-                 later: Callable[..., set] = lambda keys, slots, known, appended=(): set()):
+                 later: Callable[..., set] = lambda keys, slots, known, appended=(): set(),
+                 line_map: _LineMap | None = None, contents: Callable[..., Mapping[str, str]] = lambda units: {}):
         self._store = store
         self._logs = logs
         self._marks = marks
         self._later = later   # (keys, slots, known, appended) -> the states not their item's first state
         self._later_states: set = set()   # the later states of the last read
+        self._line_map = line_map or _LineMap(store)
+        self._contents = contents   # unit ids -> {unit id: content id} (the source's cached lookup)
+        self._lines_version: int | None = None   # the line map's version the kept events carry
         self._firsts = _FirstRatingsCache(logs)
         self._revision = None
         self._read_at: datetime | None = None
@@ -577,10 +644,24 @@ class _Window:
         later = self._later(self._keys, self._slots, known, [raw for _, raw in batch.raw])
         changed = changed | (later ^ self._later_states)
         self._later_states = later
+        version, lines = self._line_map.current(course)
+        # A kept action keeps its line (a lesson's line never changes); all get theirs again when the set of
+        # enrolled lessons changed (a lesson no longer enrolled is on the word line).
+        relined = version != self._lines_version
         pairs = [(source, raw, attribute([raw], known, later)[0] if raw.state in changed else event)
                  for source, raw, event in self._pairs]
+        kept_count = len(pairs)
         pairs += [(source, raw, event) for (source, raw), event
                   in zip(batch.raw, attribute([raw for _, raw in batch.raw], known, later))]
+        # Lines for the appended and the re-attributed actions (every action when the map changed).
+        todo = [index for index, pair in enumerate(pairs)
+                if relined or index >= kept_count or pair[1].state in changed]
+        if todo:
+            state_lines = _state_lines({pairs[index][1].state for index in todo}, self._keys, lines, self._contents)
+            for index in todo:
+                source, raw, event = pairs[index]
+                pairs[index] = (source, raw, _lined(event, state_lines[raw.state]))
+        self._lines_version = version
         direct = self._direct + batch.direct
         self._cuts.update(since, [(source, raw.at) for source, raw, _ in pairs] + [(s, e.at) for s, e in direct])
 
@@ -594,7 +675,7 @@ class _Window:
         self._direct = [(source, event) for source, event in direct if kept(source, event.at)]
         self.marks = tuple(self._marks.entries(since, course))
         events = sorted([event for _, _, event in self._pairs] + [event for _, event in self._direct]
-                        + self._marks.events(self.marks, self._logs.day), key=_sort_key)
+                        + self._marks.events(self.marks, self._logs.day, lines), key=_sort_key)
         # Drop what may be incomplete: everything at or before the cut of a source that hit its limit.
         cutoff = self._cuts.latest
         self.events = tuple(events if cutoff is None else (event for event in events if event.at > cutoff))
@@ -664,9 +745,10 @@ class StoreEventSource:
         self._unit_contents: dict[str, str] = {}   # a unit id is a hash of its content and ability: never changes
         self._item_firsts: dict[tuple, datetime] = {}   # item -> its earliest formal answer (kept once found)
         self._origins = _ItemOrigins(store, self._marks, self._logs.day)
+        self._line_map = _LineMap(store)   # {content id: line} of the enrolled lessons (design 12 LS3)
 
     def _new_window(self) -> _Window:
-        return _Window(self._store, self._logs, self._marks, self._later_states)
+        return _Window(self._store, self._logs, self._marks, self._later_states, self._line_map, self._contents)
 
     def _fresh_window(self) -> _Window:
         """A window for a full re-read; what is kept of items' origins goes with the old one (an import, a reset)."""
@@ -820,8 +902,12 @@ class StoreEventSource:
         not_first = {state for state, (_, flag) in firsts.items() if flag}
         marks = self._marks.entries(since, course)
         later = self._later_states(batch.keys, batch.slots, known)
-        events = sorted(attribute([raw for _, raw in batch.raw], known, later) + [event for _, event in batch.direct]
-                        + self._marks.events(marks, self._logs.day), key=_sort_key)
+        _, lines = self._line_map.current(course)
+        raws = [raw for _, raw in batch.raw]
+        state_lines = _state_lines({raw.state for raw in raws}, batch.keys, lines, self._contents)
+        attributed = [_lined(event, state_lines[raw.state]) for raw, event in zip(raws, attribute(raws, known, later))]
+        events = sorted(attributed + [event for _, event in batch.direct]
+                        + self._marks.events(marks, self._logs.day, lines), key=_sort_key)
         learned = _new_learning(known, not_first, batch.keys, batch.slots, marks, now, frozenset(days),
                                 self._contents, self._logs.day, self._first_days)
         return PeriodActivity(tuple(event for event in events if since <= event.at <= now), learned)

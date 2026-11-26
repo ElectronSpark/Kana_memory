@@ -17,7 +17,9 @@ The first part of the two-line design: each plan also draws the route's two
 lines (study_lines.route_lines over the overview the session holds, with the
 readiness the path service has in memory and the selection counted as known);
 the quick choices take a line; 一并加入 ticks the lessons a line's next section
-misses. The orientation is read once per opening or rebase (``breadth``).
+misses. The orientation is read once per opening or rebase (``breadth``), and
+with it the line behind its share of the new-content time (``behind``, design
+12 LS8: the suggestion's rule (b) follows it).
 """
 from __future__ import annotations
 
@@ -60,6 +62,7 @@ class AddSession:
         self.plan: dict | None = None
         self.saving_route = False
         self.breadth = False   # the learner's orientation is 广度优先 (read at opening and at each rebase)
+        self.behind: str | None = None   # the line behind its share of new content (read with ``breadth``)
         self._shown: dict[NodeKey, NodeModel] = {}   # the rows last drawn; a delta reports on these
 
     @property
@@ -96,15 +99,19 @@ class AddContentService:
     store; ``restart``: one new pass of the main round (practice_round.restart
     of this store, an owner call); ``breadth()``: whether the learner's
     orientation is 广度优先 (one settings read; None: never, the suggestion
-    is the route's next section).
+    is the route's next section); ``behind()``: the line behind its share of
+    the new-content time (the arrangement's ShareDispatcher.line_behind; None:
+    no arrangement, the suggestion's rule (b) keeps the route order).
     """
 
     def __init__(self, *, paths: Callable[[], Any], workload: admission_workload.WorkloadContext,
-                 restart: Callable[[], object], breadth: Callable[[], bool] | None = None):
+                 restart: Callable[[], object], breadth: Callable[[], bool] | None = None,
+                 behind: Callable[[], str | None] | None = None):
         self._paths = paths
         self._workload = workload
         self._restart = restart
         self._breadth = breadth
+        self._behind = behind
 
     # ------------------------------------------------------------ opening and rebasing
     def open(self, *, route_id: str | None = None,
@@ -119,7 +126,7 @@ class AddContentService:
         with service.read_operation() as read:
             overview = read.overview(**route)
             session = AddSession(StudyPathSelection(overview, route_id=route_key(shown)))
-            session.breadth = self._orientation()
+            self._orient(session)
             if selection_key is None and overview.get("next_section"):
                 selection_key = ("section", overview["next_section"]["id"])
             expanded = _choose(session.selection, overview, selection_key)
@@ -138,7 +145,7 @@ class AddContentService:
         with self._paths().read_operation() as read:
             route = route_kwargs(session.route_id)
             session.selection.refresh(read.overview(**route))
-            session.breadth = self._orientation()
+            self._orient(session)
             nodes = session.rows(expanded)
             preview = None if preview_text is None else self._preview(session, preview_text, read)
             plan = self._plan(session, read)
@@ -286,10 +293,16 @@ class AddContentService:
         known = getattr(service, "line_readiness", None)
         readiness = known(readiness_ids(overview)) if callable(known) else None
         ticked = (*session.selection.selected_entry_ids, *plan.get("prerequisite_entry_ids", ()))
-        return LinesModel.of(route_lines(overview, readiness=readiness, ticked=ticked, breadth=session.breadth))
+        return LinesModel.of(route_lines(overview, readiness=readiness, ticked=ticked, breadth=session.breadth,
+                                         behind=session.behind))
 
     def _orientation(self) -> bool:
         return bool(self._breadth()) if self._breadth is not None else False
+
+    def _orient(self, session: AddSession) -> None:
+        """The orientation and, under breadth, the line behind its share (one clock read)."""
+        session.breadth = self._orientation()
+        session.behind = self._behind() if session.breadth and self._behind is not None else None
 
     def _preview(self, session: AddSession, count_text: str, read) -> ShortcutPreview:
         try:

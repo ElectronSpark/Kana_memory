@@ -65,6 +65,7 @@ tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
 tests/test_near_miss_answers.py
 tests/test_probe_first.py
+tests/test_arrangement_lines.py
 tests/test_arrangement_recent.py
 tests/test_arrangement_review_filter.py
 tests/test_probe_form_and_guide_pick.py
@@ -157,6 +158,7 @@ app/src/kanamemory/arrangement/rules/__init__.py
 app/src/kanamemory/arrangement/rules/clock.py
 app/src/kanamemory/arrangement/rules/focus.py
 app/src/kanamemory/arrangement/rules/shares.py
+app/src/kanamemory/arrangement/rules/lines.py
 app/src/kanamemory/arrangement/rules/credit.py
 app/src/kanamemory/arrangement/rules/extra.py
 app/src/kanamemory/arrangement/rules/gates.py

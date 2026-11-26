@@ -378,3 +378,40 @@ def test_route_facts_carry_the_suggestion_for_the_note():
     assert (facts.next_section_id, facts.suggested_section_id, facts.suggested_mark, facts.suggested_reason) == (
         "g1", "w2", "建议先加 · 词汇", "因为")
     assert RouteFacts.from_overview({}).suggested_section_id is None
+
+
+# ------------------------------------------------------------------ the second part: 建议先加 follows the share (design 12 LS8)
+
+def test_the_add_page_suggestion_follows_the_line_behind_its_share(monkeypatch):
+    paths = LinePaths()
+    service = service_of(paths, breadth=True, monkeypatch=monkeypatch)
+    asked = []
+    service._behind = lambda: asked.append(1) or GRAMMAR
+    session, model = service.open()
+    # Nothing unlearned on either line: rule (b) names the line behind its share, not the route order.
+    assert session.behind == GRAMMAR and asked == [1]
+    assert [row.suggested for row in model.plan.lines.rows] == [False, True]
+    service._behind = lambda: WORD
+    refreshed = service.refresh(session, expanded=())
+    assert session.behind == WORD and [row.suggested for row in refreshed.plan.lines.rows] == [True, False]
+    # 深度优先: the share is not asked for and the route's next section stays the suggestion.
+    thorough = service_of(paths, breadth=False, monkeypatch=monkeypatch)
+    thorough._behind = lambda: asked.append(2) or GRAMMAR
+    session, model = thorough.open()
+    assert session.behind is None and 2 not in asked
+    assert [row.suggested for row in model.plan.lines.rows] == [True, False]
+
+
+def test_an_admission_without_an_arrangement_passes_no_line(monkeypatch):
+    service = service_of(LinePaths(), breadth=True, monkeypatch=monkeypatch)
+    session, model = service.open()
+    assert session.behind is None and [row.suggested for row in model.plan.lines.rows] == [True, False]
+
+
+def test_the_admission_asks_the_arrangement_s_dispatcher_with_breadth_known():
+    from kanamemory.admission import assembly
+    calls = []
+    dispatcher = SimpleNamespace(line_behind=lambda now, breadth=None: calls.append((now.tzinfo is not None, breadth))
+                                 or GRAMMAR)
+    assert assembly._behind(lambda: SimpleNamespace(dispatcher=dispatcher)) == GRAMMAR
+    assert calls == [(True, True)]
