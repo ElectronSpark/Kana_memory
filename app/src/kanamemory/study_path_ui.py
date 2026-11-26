@@ -455,10 +455,34 @@ class StudyPathUIMixin:
                        alert=lambda message: self.alert(message))
         self._study_add = AddShowing(operations, page)
         self.screen("study_path_add", add_text.PAGE_TITLE, *page.widgets())
+        self._read_add_readiness(self._study_add)
 
     def _rebase_study_selection(self):
         """Back (app.go_back), and a failed continue after 加入并继续: the page re-reads and redraws."""
         self._study_add.page.rebase()
+        self._read_add_readiness(self._study_add)
+
+    def _read_add_readiness(self, showing):
+        """The two-line design's readiness hint: when the lines of this showing lack their readiness, read it
+        on a worker thread (started app only, as the other warm-ups) and rebase the page if it is still the
+        one on screen; without it the page stays as drawn."""
+        if not getattr(self, "_background_assembly", False) or getattr(self, "_backup_closing", False):
+            return
+        job = showing.operations.readiness_job()
+        if job is None:
+            return
+        import asyncio
+        from .draft_debounce import create_task_awake
+
+        async def read():
+            try:
+                if not await asyncio.to_thread(job):
+                    return
+            except Exception:  # noqa: BLE001 - an optional hint: the page stays as drawn
+                return
+            if self.page == "study_path_add" and getattr(self, "_study_add", None) is showing:
+                showing.page.rebase()
+        create_task_awake(self.loop, read())
 
     def _submit_study_selection(self, shown):
         """加入并继续 (``shown``: the page's display state); the shared _study_path_adding guards re-entry."""

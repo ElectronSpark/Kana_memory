@@ -514,12 +514,19 @@ class RouteFacts:
     overview()["required_completed_sections"] and ["required_total_sections"].
     ``next_section_id`` / ``next_section_title`` are overview()["next_section"]
     ["id"] / ["title"], None when the route has no section left to add.
+    The ``suggested_*`` fields (the first part of the two-line design): the
+    section to add first, its mark (建议先加 · <line>) and the reason, when the
+    caller computed a suggestion (study_lines.suggest); B10's note names it.
     """
 
     completed: int = 0
     total: int = 0
     next_section_id: str | None = None
     next_section_title: str | None = None
+    suggested_section_id: str | None = None
+    suggested_section_title: str | None = None
+    suggested_mark: str = ""
+    suggested_reason: str = ""
 
     @property
     def position(self) -> int:
@@ -530,11 +537,16 @@ class RouteFacts:
         return 0 if self.total <= 0 else min(max(self.completed, 0) + 1, self.total)
 
     @classmethod
-    def from_overview(cls, overview) -> RouteFacts:
-        """From the dict StudyPathService.overview() returns; reads four keys, nothing else."""
+    def from_overview(cls, overview, suggestion=None, mark: str = "") -> RouteFacts:
+        """From the dict StudyPathService.overview() returns; reads four keys, nothing else. ``suggestion``: a
+        study_lines.Suggestion (section_id, title, reason) or None; ``mark``: the words that mark it."""
         section = overview.get("next_section")
+        extra = {} if suggestion is None else dict(
+            suggested_section_id=str(suggestion.section_id), suggested_section_title=str(suggestion.title),
+            suggested_mark=mark, suggested_reason=str(suggestion.reason or ""))
         return cls(int(overview.get("required_completed_sections", 0)), int(overview.get("required_total_sections", 0)),
-                   None if not section else str(section["id"]), None if not section else str(section["title"]))
+                   None if not section else str(section["id"]), None if not section else str(section["title"]),
+                   **extra)
 
 
 class Part(str, Enum):

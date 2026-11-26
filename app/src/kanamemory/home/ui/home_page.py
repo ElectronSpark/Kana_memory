@@ -51,6 +51,8 @@ def draw_home(model: HomeModel, *, action_slot, secondary_slot, stats_label, on_
         column.append(u.label(model.backlog_line, size=12, color=u.MUTED))
     if model.add_next is not None:
         column.append(u.button(model.add_next.caption, press(model.add_next.action), multiline=True))
+    for line in model.line_next:
+        column.append(u.button(line.caption, press(line.action), multiline=True))
     for other in model.other_routes:
         column.append(u.button(other.caption, press(other.action), multiline=True))
     column.append(u.row(u.button(model.route_page.caption, press(model.route_page.action), flex=1, margin_right=8),

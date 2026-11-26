@@ -12,6 +12,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 
+from ..study_lines import SUGGEST_MARK, RouteLines, counts_text
 from ..study_path_display import SECTION_STATES, path_display_snapshot
 from ..study_path_selection import NodeKey, NodeSelectionStatus
 
@@ -34,6 +35,17 @@ ROUTE_EMPTY = "请先选择要放进路线的学习项。"
 UNTITLED = "学习内容"
 OUTSIDE_ROUTE = "（路线外）"
 PREVIEW_VISIBLE = 5   # section titles the shortcut preview names before "另有 N 节"
+# The first part of the two-line design: the quick choices by line, each line's next section, the mark, the
+# readiness line and the lessons it misses.
+ADD_LINE = {"word": "只勾选词汇", "grammar": "只勾选语法"}   # beside 加入勾选: the next N sections of one line
+LINE_NEXT = "下一节{line}：{title}"
+SUGGESTED = " · " + SUGGEST_MARK
+SUGGEST_OTHER = SUGGEST_MARK + "：{title}"
+MISSING = "还缺：{items}"
+MISSING_ITEM = "{title}（{section}）"
+MISSING_VISIBLE = 6   # missing lessons named before "等 N 项"
+MISSING_MORE = " 等 {count} 项"
+ADD_MISSING = "一并加入"
 
 
 @dataclass(frozen=True)
@@ -159,6 +171,61 @@ def selection_feedback(plan: Mapping) -> dict:
 
 
 @dataclass(frozen=True)
+class LineRow:
+    """One line's next section on the add page (the first part of the two-line design).
+
+    ``text``: 下一节词汇：<title>, with · 建议先加 when it is the suggestion;
+    ``readiness``: 现在能出：理解 6／应用 5, "" without a readiness table;
+    ``missing``: 还缺：<lesson>（<section>）、…, "" while the section is ready;
+    ``missing_ids``: the entries 一并加入 ticks.
+    """
+
+    line: str
+    section_id: str
+    text: str
+    suggested: bool = False
+    readiness: str = ""
+    missing: str = ""
+    missing_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LinesModel:
+    """Both lines' rows, and the suggestion when it is no line's next section (with its reason)."""
+
+    rows: tuple[LineRow, ...] = ()
+    suggestion: str = ""
+    reason: str = ""
+
+    @classmethod
+    def of(cls, lines: RouteLines) -> LinesModel:
+        suggestion = lines.suggestion
+        rows = []
+        marked = False
+        for item in lines.lines:
+            suggested = (suggestion is not None and suggestion.line is not None
+                         and suggestion.section_id == item.section_id)
+            marked = marked or suggested
+            readiness = missing = ""
+            missing_ids: tuple[str, ...] = ()
+            if item.verdict is not None:
+                readiness = counts_text(item.verdict.counts) if item.verdict.counts else ""
+                if not item.verdict.ready and item.verdict.missing:
+                    named = [MISSING_ITEM.format(title=m.title, section=m.section_title)
+                             for m in item.verdict.missing[:MISSING_VISIBLE]]
+                    more = len(item.verdict.missing) - MISSING_VISIBLE
+                    missing = MISSING.format(items="、".join(named)) + (MISSING_MORE.format(count=more) if more > 0 else "")
+                    missing_ids = tuple(m.entry_id for m in item.verdict.missing)
+            rows.append(LineRow(item.line, item.section_id,
+                                LINE_NEXT.format(line=item.line_title, title=item.title) + (SUGGESTED if suggested else ""),
+                                suggested, readiness, missing, missing_ids))
+        other = ""
+        if suggestion is not None and suggestion.line is not None and not marked:
+            other = SUGGEST_OTHER.format(title=suggestion.title)
+        return cls(tuple(rows), other, suggestion.reason if suggestion is not None else "")
+
+
+@dataclass(frozen=True)
 class PlanModel:
     """What the page shows about planning the current selection.
 
@@ -176,13 +243,14 @@ class PlanModel:
     workload_text: str = ""
     workload: Mapping | None = None    # admission_workload.admission_snapshot
     prerequisite_count: int = 0
+    lines: LinesModel | None = None    # the two lines (two-line design); None: not shown (a failed plan)
 
     @classmethod
     def planned(cls, plan: Mapping, workload: Mapping, workload_text: str, *, routes_line: str | None,
-                can_save_route: bool) -> PlanModel:
+                can_save_route: bool, lines: LinesModel | None = None) -> PlanModel:
         return cls(plan["summary"], bool(plan["total_count"]), can_save_route, selection_feedback(plan),
                    routes_line=routes_line, workload_text=workload_text, workload=workload,
-                   prerequisite_count=plan["prerequisite_count"])
+                   prerequisite_count=plan["prerequisite_count"], lines=lines)
 
     @classmethod
     def failed(cls, error: str, selected: Sequence[str], *, can_save_route: bool) -> PlanModel:

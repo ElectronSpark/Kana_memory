@@ -12,7 +12,10 @@ page) guards exactly the actions that were guarded before the page moved
 here; expanding, the two toggles, typing, the detail and the route switch
 have no guard, and a 清空选择 of a page that was left still empties its choice.
 The page sees no app object, store or service, and decides nothing the
-model does not carry.
+model does not carry. The two lines (the first part of the two-line design)
+are drawn from the plan's LinesModel under the main button: each line's next
+section, the mark 建议先加, the readiness line and 一并加入 (a tick, guarded
+like one); 只勾选词汇 / 只勾选语法 sit beside 加入勾选.
 """
 from __future__ import annotations
 
@@ -21,9 +24,9 @@ from typing import Protocol
 
 import kanamemory.ui_components as u
 from kanamemory.tree_checkbox import tree_checkbox, update_tree_checkbox
-from ..display import (ADD_PREVIEWED, CANCEL, CLEAR, CREATE_ROUTE, ROUTE_SAVE_NOTE, ROUTE_TITLE_PLACEHOLDER,
-                       SAVE_ROUTE, SECTION_COUNT_PLACEHOLDER, SHORTCUT, SUBMIT, AddDelta, AddPageModel, NodeModel,
-                       PlanModel, Prerequisites, ShortcutPreview)
+from ..display import (ADD_LINE, ADD_MISSING, ADD_PREVIEWED, CANCEL, CLEAR, CREATE_ROUTE, ROUTE_SAVE_NOTE,
+                       ROUTE_TITLE_PLACEHOLDER, SAVE_ROUTE, SECTION_COUNT_PLACEHOLDER, SHORTCUT, SUBMIT, AddDelta,
+                       AddPageModel, LinesModel, NodeModel, PlanModel, Prerequisites, ShortcutPreview)
 
 Key = tuple[str, str]
 _ASK = object()   # draw a plan without a prerequisites line: ask the operations for it
@@ -35,7 +38,8 @@ class Operations(Protocol):
     def rows(self, expanded: Collection[Key]) -> tuple[NodeModel, ...]: ...
     def toggle(self, key: Key) -> AddDelta: ...
     def clear(self, *, replan: bool = True) -> AddDelta | None: ...
-    def select_next(self, count_text: str) -> AddDelta: ...
+    def select_next(self, count_text: str, line: str | None = None) -> AddDelta: ...
+    def select_entries(self, entry_ids) -> AddDelta: ...
     def preview_sections(self, count_text: str) -> ShortcutPreview: ...
     def prerequisites(self, *, open: bool) -> Prerequisites | None: ...
     def selection_feedback(self) -> dict | None: ...
@@ -66,6 +70,7 @@ class AddPage:
         self.routes = u.label("", size=13, color=u.MUTED)   # the closure line, mounted on a non-core route only
         self.action = u.button(SUBMIT, self.submit, primary=True)
         self.tree = u.col()
+        self.lines = u.col()     # each line's next section (two-line design)
         self.dependencies = u.col()
         self.shortcut = u.col()
         self.section_count = u.toga.TextInput(value="1", placeholder=SECTION_COUNT_PLACEHOLDER,
@@ -83,7 +88,7 @@ class AddPage:
     def widgets(self) -> list:
         switch = self._switch_widgets()
         routes = [self.routes] if self._on_route else []
-        return [*switch, self.summary, *routes, self.workload, self.action,
+        return [*switch, self.summary, *routes, self.workload, self.action, self.lines,
                 u.row(u.button(CLEAR, self.clear, flex=1, compact=True),
                       u.button(SHORTCUT, self.toggle_shortcut, flex=1, compact=True, multiline=True)),
                 self.shortcut, self.dependencies, self.tree, self.route_save, self.route_save_form]
@@ -118,6 +123,9 @@ class AddPage:
         self.shortcut.clear()
         if self.shortcut_open:
             self.shortcut.add(self.section_count, u.button(ADD_PREVIEWED, self.add_previewed_sections, compact=True),
+                              u.row(*(u.button(ADD_LINE[line], lambda w, l=line: self.add_line_sections(l), flex=1,
+                                               compact=True, margin_right=8 if line == "word" else 0)
+                                      for line in ADD_LINE)),
                               self.section_preview)
             self.preview_sections()
         self._draw_feedback()
@@ -134,6 +142,22 @@ class AddPage:
             self._alert(delta.rejection)
             return
         self._draw_delta(delta)
+
+    def add_line_sections(self, line: str) -> None:
+        """只勾选词汇 / 只勾选语法: the next N sections of one line (N: the section count field)."""
+        if not self._live():
+            return
+        delta = self._ops.select_next(self._count_text(), line)
+        if delta.rejection:
+            self._alert(delta.rejection)
+            return
+        self._draw_delta(delta)
+
+    def add_missing(self, entry_ids) -> None:
+        """一并加入: tick the lessons a line's next section misses."""
+        if not self._live():
+            return
+        self._draw_delta(self._ops.select_entries(tuple(entry_ids)))
 
     def toggle_prerequisites(self, widget=None) -> None:
         self.prerequisites_open = not self.prerequisites_open
@@ -246,6 +270,7 @@ class AddPage:
             self.summary.text = plan.summary
             self.workload.text = ""
             self.dependencies.clear()
+            self.lines.clear()
             self.tree._feedback_fragment = dict(plan.feedback)
             self._draw_feedback()
             return
@@ -255,8 +280,26 @@ class AddPage:
         self.workload.text = plan.workload_text
         self.workload._feedback_fragment = plan.workload_feedback
         self.action.enabled = plan.can_submit
+        self._draw_lines(plan.lines)
         self._draw_prerequisites(prerequisites)
         self._draw_feedback()
+
+    def _draw_lines(self, lines: LinesModel | None) -> None:
+        blocks = []
+        for row in (lines.rows if lines is not None else ()):
+            blocks.append(u.label(row.text, size=14, bold=row.suggested, color=u.GREEN if row.suggested else u.INK))
+            if row.readiness:
+                blocks.append(u.label(row.readiness, size=12, color=u.MUTED))
+            if row.missing:
+                blocks.append(u.label(row.missing, size=12, color=u.MUTED))
+                blocks.append(u.button(ADD_MISSING, lambda w, ids=row.missing_ids: self.add_missing(ids), compact=True))
+        if lines is not None and lines.suggestion:
+            blocks.append(u.label(lines.suggestion, size=14, bold=True, color=u.GREEN))
+        if lines is not None and lines.reason:
+            blocks.append(u.label(lines.reason, size=12, color=u.MUTED))
+        self.lines.clear()
+        if blocks:
+            self.lines.add(*blocks)
 
     def _draw_prerequisites(self, prerequisites=_ASK) -> None:
         if prerequisites is _ASK:

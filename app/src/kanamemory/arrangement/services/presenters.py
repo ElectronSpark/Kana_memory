@@ -486,6 +486,10 @@ class ArrangementPresenter:
         scoped = self._scope_section()
         if scoped is not None:
             return SectionNote(scoped.section_id, scoped.title, route_id=scoped.route_id)
+        if route.suggested_section_id is not None:
+            # The first part of the two-line design: the suggested line's section, marked (study_lines.suggest).
+            return SectionNote(route.suggested_section_id, route.suggested_section_title or "",
+                               mark=route.suggested_mark, reason=route.suggested_reason)
         if route.next_section_id is None:
             return None
         return SectionNote(route.next_section_id, route.next_section_title or "")

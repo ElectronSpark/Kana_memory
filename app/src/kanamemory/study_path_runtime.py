@@ -219,6 +219,30 @@ def registry_service_key(registry):
                         for row in rows if isinstance(row, dict)))
 
 
+async def read_line_readiness(source, overview=None) -> bool:
+    """The readiness of the lessons of each line's next section on the current route (``overview``: that
+    route's, read here when None), read on a worker thread when this process has not read it yet
+    (StudyPathService.line_readiness_job); True when something was read. Any failure leaves the readiness
+    hint out (the add page and the home are drawn as without it)."""
+    import asyncio
+    from .study_lines import readiness_ids
+    service = None
+    try:
+        service = source() if callable(source) else source
+        if overview is None:
+            overview = current_route_next(service)[0]
+        make = getattr(service, "line_readiness_job", None)
+        job = make(readiness_ids(overview)) if callable(make) else None
+        if job is None:
+            return False
+        return bool(await asyncio.to_thread(job))
+    except Exception as error:  # noqa: BLE001 - an optional hint: the pages stay as without it
+        mix = getattr(service, "route_mix", None)
+        if mix is not None:
+            mix.last_error = type(error).__name__   # as the plan's warm-up keeps it
+        return False
+
+
 def current_route_next(service):
     """Positional _path_next_controls arguments for the current route.
 
@@ -365,7 +389,10 @@ class StudyPathRuntimeMixin:
             return False
         from .route_mix.service import prepare_in_background
         saved = await prepare_in_background(self.study_path_service)
-        if saved and self.page == "home" and not getattr(self, "_backup_closing", False):
+        # The two-line design: the readiness of each line's next section, for the add page's hint and the
+        # suggestion of B10's note (memory only; without it both are drawn as before).
+        read = await read_line_readiness(self.study_path_service)
+        if (saved or read) and self.page == "home" and not getattr(self, "_backup_closing", False):
             self.refresh_home_actions()
         return saved
 

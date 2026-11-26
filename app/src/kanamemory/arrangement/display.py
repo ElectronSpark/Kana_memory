@@ -169,6 +169,10 @@ class SectionNote:
     # The route of the section: None for the current route (as before WP-H); a route id when the
     # section is the next one inside the learner's focus scope (B10 with a scope, H6).
     route_id: str | None = None
+    # The first part of the two-line design: "建议先加 · <line>" when the section is the suggestion, and why
+    # (only when the suggestion changed the line); "" otherwise.
+    mark: str = ""
+    reason: str = ""
 
     @property
     def add_next(self) -> str:

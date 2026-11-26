@@ -42,6 +42,7 @@ OTHER_ROUTE = "其他路线："       # followed by the route title, a space and
 OTHER_IN_PROGRESS = "进行中 {count} 节"
 OTHER_NEXT = "下一小节 "        # followed by the next section's title
 OTHER_JOINER = " / "
+LINE_NEXT = "下一节{line}："   # the first part of the two-line design: followed by the line's next section title
 ROUTE_PAGE = "学习路线"
 ADD_CONTENT = "添加内容"
 ORPHANS = "{count} 项所属内容库已停用"
@@ -115,6 +116,8 @@ class HomeModel:
     cancel_focus: HomeAction = CANCEL_FOCUS
     paused_line: str | None = None       # design 12 H10: 暂不复习 N 个部分，其中到期 M 题
     extra_entry: HomeButton | None = None   # design 12 E9: 加练… while a learned state exists
+    # The first part of the two-line design: 下一节词汇：… / 下一节语法：…, drawn where add_next is.
+    line_next: tuple[HomeButton, ...] = ()
 
 
 def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFacts, no_new_content: bool,
@@ -123,7 +126,7 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
             blocked_kana: int, next_section: tuple[str, str] | None, others: Sequence[OtherRoute], orphans: int,
             libraries_page: bool, word_count: int, completed: int, total: int, added: int, partial: int | None,
             next_change_at: datetime | None, scope_done: bool = False, paused_line: str | None = None,
-            extra_entry: bool = False) -> HomeModel:
+            extra_entry: bool = False, line_sections: Sequence[tuple[str, str, str]] = ()) -> HomeModel:
     """The home page from the numbers one refresh read (HomeOverviewService.overview).
 
     ``route_id``: the current route (CORE_ROUTE_ID for the core route), ``core``
@@ -135,6 +138,9 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
     ``scope_done``: 只做范围内 acts and nothing inside is left (design 12 H8, H10): the primary button says
     范围内的都做完了 and goes to 继续学习's page of that name instead of offering work it will not serve.
     ``paused_line``: H10's 暂不复习 line; ``extra_entry``: a learned state exists (加练…, E9).
+    ``line_sections``: (line title, section id, title) of each line's next section (the first part of the
+    two-line design): a button each, except for a section the card already offers (B10's note, or the primary
+    button without work); while one of them is the route's next section they take the place of 加入下一小节 · ….
     """
     lines = []
     if ready:
@@ -165,9 +171,17 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
     beside_work = next_section if has_work else None
     # With work in progress the section is enrolled and queued behind due reviews, not taught at once (review
     # 2026-11-08 2.4); B10's note may already offer the same section first in the card: not twice.
+    by_line = beside_work is not None and any(section_id == beside_work[0] for _, section_id, _ in line_sections)
     add_next = (HomeButton(ADD_NEXT + beside_work[1], HomeAction(HomeActionKind.ADD_SECTIONS, section_id=beside_work[0],
                                                                  route_id=route_id))
-                if beside_work and (rows.note is None or rows.note.section_id != beside_work[0]) else None)
+                if beside_work and not by_line and (rows.note is None or rows.note.section_id != beside_work[0])
+                else None)
+    offered = {rows.note.section_id} if rows.note is not None else set()
+    if then.kind is HomeActionKind.ADD_SECTIONS:
+        offered.add(then.section_id)
+    line_next = tuple(HomeButton(LINE_NEXT.format(line=line) + title,
+                                 HomeAction(HomeActionKind.ADD_SECTIONS, section_id=section_id, route_id=route_id))
+                      for line, section_id, title in line_sections if section_id not in offered)
     listed = []
     for other in others:
         parts = (([OTHER_IN_PROGRESS.format(count=other.in_progress)] if other.in_progress else [])
@@ -195,4 +209,5 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
         # B10's note names the focus scope's route when its section lies there (H6), else none: the current route.
         note_add=(HomeAction(HomeActionKind.ADD_SECTIONS, section_id=note.section_id, route_id=note.route_id or route_id)
                   if note is not None else None),
-        paused_line=paused_line, extra_entry=HomeButton(EXTRA_ENTRY, OPEN_EXTRA) if extra_entry else None)
+        paused_line=paused_line, extra_entry=HomeButton(EXTRA_ENTRY, OPEN_EXTRA) if extra_entry else None,
+        line_next=line_next)

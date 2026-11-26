@@ -368,6 +368,7 @@ app/src/kanamemory/extra_practice_runtime.py
 app/src/kanamemory/study_path_catalog.py
 app/src/kanamemory/main_route_order.py
 app/src/kanamemory/study_path_display.py
+app/src/kanamemory/study_lines.py
 app/src/kanamemory/study_path_runtime.py
 app/src/kanamemory/study_path_selection.py
 app/src/kanamemory/study_path_ui.py
@@ -455,6 +456,8 @@ environment/requirements-quality.txt
 tools/check_python.py
 tests/test_app_clock.py
 tests/test_study_path_selection.py
+tests/test_study_lines.py
+tests/test_study_lines_pages.py
 tools/check_architecture.py
 tools/check_main_route_order.py
 tools/arrange_main_route_order.py

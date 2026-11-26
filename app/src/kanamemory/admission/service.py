@@ -12,6 +12,12 @@ C5: an operation does no more than the page did before: opening, a tick,
 清空选择 and 加入勾选 each open one read operation, plan once and count the
 workload once; a rebase also re-reads the route; the section-count preview
 asks the path service for the next sections, as each keystroke did.
+
+The first part of the two-line design: each plan also draws the route's two
+lines (study_lines.route_lines over the overview the session holds, with the
+readiness the path service has in memory and the selection counted as known);
+the quick choices take a line; 一并加入 ticks the lessons a line's next section
+misses. The orientation is read once per opening or rebase (``breadth``).
 """
 from __future__ import annotations
 
@@ -20,12 +26,13 @@ import sqlite3
 from typing import Any
 
 from .. import admission_workload
+from ..study_lines import readiness_ids, route_lines
 from ..study_path_display import active_route, closure_text, has_other_routes, route_key, route_kwargs, route_title
 from ..study_path_selection import NodeKey, StudyPathSelection
 from ..study_routes import CORE_ROUTE_ID, CORE_ROUTE_TITLE
 from .display import (OUTSIDE_ROUTE, PREVIEW_VISIBLE, ROUTE_EMPTY, ROUTE_SAVE_FAILED, SELECTION_SAVE_FAILED,
-                      UNTITLED, AddDelta, AddPageModel, NodeModel, PlanModel, Prerequisites, ShortcutPreview,
-                      route_switch, selection_feedback, tree_nodes, visible_rows)
+                      UNTITLED, AddDelta, AddPageModel, LinesModel, NodeModel, PlanModel, Prerequisites,
+                      ShortcutPreview, route_switch, selection_feedback, tree_nodes, visible_rows)
 from .model import AddResult, section_count
 
 # What 加入并继续 turns into a message (the enrollment, the round restart and what the outer layer does next).
@@ -52,6 +59,7 @@ class AddSession:
         self.selection = selection
         self.plan: dict | None = None
         self.saving_route = False
+        self.breadth = False   # the learner's orientation is 广度优先 (read at opening and at each rebase)
         self._shown: dict[NodeKey, NodeModel] = {}   # the rows last drawn; a delta reports on these
 
     @property
@@ -86,14 +94,17 @@ class AddContentService:
     ``paths``: the current StudyPathService (asked at each operation, as the
     page did); ``workload``: the admission_workload.WorkloadContext of this
     store; ``restart``: one new pass of the main round (practice_round.restart
-    of this store, an owner call).
+    of this store, an owner call); ``breadth()``: whether the learner's
+    orientation is 广度优先 (one settings read; None: never, the suggestion
+    is the route's next section).
     """
 
     def __init__(self, *, paths: Callable[[], Any], workload: admission_workload.WorkloadContext,
-                 restart: Callable[[], object]):
+                 restart: Callable[[], object], breadth: Callable[[], bool] | None = None):
         self._paths = paths
         self._workload = workload
         self._restart = restart
+        self._breadth = breadth
 
     # ------------------------------------------------------------ opening and rebasing
     def open(self, *, route_id: str | None = None,
@@ -108,6 +119,7 @@ class AddContentService:
         with service.read_operation() as read:
             overview = read.overview(**route)
             session = AddSession(StudyPathSelection(overview, route_id=route_key(shown)))
+            session.breadth = self._orientation()
             if selection_key is None and overview.get("next_section"):
                 selection_key = ("section", overview["next_section"]["id"])
             expanded = _choose(session.selection, overview, selection_key)
@@ -126,6 +138,7 @@ class AddContentService:
         with self._paths().read_operation() as read:
             route = route_kwargs(session.route_id)
             session.selection.refresh(read.overview(**route))
+            session.breadth = self._orientation()
             nodes = session.rows(expanded)
             preview = None if preview_text is None else self._preview(session, preview_text, read)
             plan = self._plan(session, read)
@@ -144,17 +157,31 @@ class AddContentService:
         session.selection.clear()
         return self._replan(session) if replan else None
 
-    def select_next(self, session: AddSession, count_text: str) -> AddDelta:
-        """加入勾选: add the route's next ``count_text`` sections to the selection (nothing is enrolled)."""
+    def select_next(self, session: AddSession, count_text: str, line: str | None = None) -> AddDelta:
+        """加入勾选: add the route's next ``count_text`` sections to the selection (nothing is enrolled);
+        ``line`` (study_lines.WORD / GRAMMAR, 只勾选词汇 / 只勾选语法): the next sections of that line."""
         try:
             count = section_count(count_text)
         except ValueError as exc:
             return AddDelta(rejection=str(exc))
         route = route_kwargs(session.route_id)
         with self._paths().read_operation() as read:
-            for section in read.plan_next(count, **route):
+            sections = read.plan_next(count, **route) if line is None else read.plan_next(count, line=line, **route)
+            for section in sections:
                 session.selection.select(("section", section if isinstance(section, str) else section["id"]))
             return self._replan(session, read)
+
+    def select_entries(self, session: AddSession, entry_ids) -> AddDelta:
+        """一并加入: tick these entries (the lessons a line's next section misses; nothing is enrolled)."""
+        for entry_id in entry_ids:
+            session.selection.select(("entry", entry_id))
+        return self._replan(session)
+
+    def readiness_job(self, session: AddSession):
+        """A worker-thread callable that reads the readiness the session's lines lack (the outer layer runs it
+        and then rebases the page), or None when nothing is missing or the path service keeps none."""
+        make = getattr(self._paths(), "line_readiness_job", None)
+        return make(readiness_ids(session.selection.overview)) if callable(make) else None
 
     def preview_sections(self, session: AddSession, count_text: str) -> ShortcutPreview:
         """What 加入勾选 would select for ``count_text`` (the shortcut opening and every keystroke)."""
@@ -250,7 +277,19 @@ class AddContentService:
         workload = admission_workload.admission_snapshot(
             self._workload, plan, overview=read.overview() if route else selection.overview, read=read)
         return PlanModel.planned(plan, workload, admission_workload.admission_text(workload),
-                                 routes_line=routes_line, can_save_route=can_save_route)
+                                 routes_line=routes_line, can_save_route=can_save_route,
+                                 lines=self._lines(session, plan, getattr(read, "service", None)))
+
+    def _lines(self, session: AddSession, plan, service) -> LinesModel:
+        """The two lines of the shown route: the selection and its prerequisites count as known."""
+        overview = session.selection.overview
+        known = getattr(service, "line_readiness", None)
+        readiness = known(readiness_ids(overview)) if callable(known) else None
+        ticked = (*session.selection.selected_entry_ids, *plan.get("prerequisite_entry_ids", ()))
+        return LinesModel.of(route_lines(overview, readiness=readiness, ticked=ticked, breadth=session.breadth))
+
+    def _orientation(self) -> bool:
+        return bool(self._breadth()) if self._breadth is not None else False
 
     def _preview(self, session: AddSession, count_text: str, read) -> ShortcutPreview:
         try:
@@ -290,8 +329,14 @@ class AddOperations:
     def clear(self, *, replan: bool = True) -> AddDelta | None:
         return self._service.clear(self.session, replan=replan)
 
-    def select_next(self, count_text: str) -> AddDelta:
-        return self._service.select_next(self.session, count_text)
+    def select_next(self, count_text: str, line: str | None = None) -> AddDelta:
+        return self._service.select_next(self.session, count_text, line)
+
+    def select_entries(self, entry_ids) -> AddDelta:
+        return self._service.select_entries(self.session, entry_ids)
+
+    def readiness_job(self):
+        return self._service.readiness_job(self.session)
 
     def preview_sections(self, count_text: str) -> ShortcutPreview:
         return self._service.preview_sections(self.session, count_text)

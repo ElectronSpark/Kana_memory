@@ -17,6 +17,7 @@ from types import MappingProxyType
 from .domain import WORD_SKILLS, HANDWRITING_SKILLS, LISTENING_SKILLS, _utc, question_identities
 from .learning_content import learning_item_views
 from .kana_question_policy import direction_allowed, question_allowed
+from .study_lines import next_sections, section_line
 from .study_routes import CORE_LIBRARY_ID, CORE_ROUTE_ID, CORE_ROUTE_TITLE, ROUTES_SETTING
 
 PATH_SETTING = "study_path_v1"
@@ -203,11 +204,11 @@ class _StudyPathRead:
         states = self.states if rid == CORE_ROUTE_ID else {**self.states, **self.route_states(rid)}
         return self.service._entry_plan(entry_ids, states=states, route_id=route_id)[0]
 
-    def plan_next(self, count=1, route_id=None):
+    def plan_next(self, count=1, route_id=None, line=None):
         self.check_active()
         if type(count) is not int or count < 1:
             raise ValueError("请输入大于零的小节数量。")
-        return self.service._plan_next(count, self.overview(route_id))
+        return self.service._plan_next(count, self.overview(route_id), line)
 
 
 def validate_path_state(value):
@@ -852,6 +853,8 @@ class StudyPathService:
                     section["progress"] = self._progress(states[e["id"]] for e in section["entries"])
                     section["state"] = self._summary_state(section["progress"])
                     section["new_count"] = section["progress"]["total"] - section["progress"]["added"]
+                    # The first part of the two-line design: the section's line, derived (study_lines).
+                    section["line"] = section_line(section)
                 unit["progress"] = self._section_progress(unit["sections"])
                 stage_sections.extend(unit["sections"])
             stage["progress"] = self._section_progress(stage_sections)
@@ -884,17 +887,33 @@ class StudyPathService:
                         return section
         raise KeyError(section_id)
 
-    def plan_next(self, count=1, route_id=None):
+    def plan_next(self, count=1, route_id=None, line=None):
         if type(count) is not int or count < 1:
             raise ValueError("请输入大于零的小节数量。")
-        return self._plan_next(count, self.overview(route_id))
+        return self._plan_next(count, self.overview(route_id), line)
 
     @staticmethod
-    def _plan_next(count, overview):
+    def _plan_next(count, overview, line=None):
+        """The next ``count`` sections in route order; ``line`` (study_lines.WORD / GRAMMAR): of that line only."""
         if type(count) is not int or count < 1:
             raise ValueError("请输入大于零的小节数量。")
-        sections = [s for stage in overview["stages"] for u in stage["units"] for s in u["sections"]]
-        return [s for s in sections if s["new_count"] and not s.get("optional")][:count]
+        return next_sections(overview, count, line)
+
+    def line_readiness(self, content_ids):
+        """The readiness of these lessons (route_mix.readiness.Readiness) when this process has read it
+        (the two-line design's readiness hint), else None; never reads content here."""
+        mix = getattr(self, "route_mix", None)
+        if mix is None or not getattr(self, "_route_inputs", None):
+            return None
+        return mix.lesson_readiness(content_ids, self._route_inputs[1])
+
+    def line_readiness_job(self, content_ids):
+        """A callable for a worker thread that reads the readiness of these lessons for line_readiness
+        (True when it read something), or None when nothing is missing or there is no route_mix."""
+        mix = getattr(self, "route_mix", None)
+        if mix is None or not getattr(self, "_route_inputs", None):
+            return None
+        return mix.lesson_readiness_job(content_ids, self._route_inputs[1])
 
     def add_sections(self, section_ids, *, start_learning=False, action_id=None, route_id=None):
         """Enroll whole sections of one route (default: the core route).

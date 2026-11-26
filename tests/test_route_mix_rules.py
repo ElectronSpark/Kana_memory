@@ -818,7 +818,7 @@ ROUTE_MIX_IMPORTS = {
              ".readiness"},
     "store": {"__future__", "json", "os", "pathlib", "threading"},
     "service": {"__future__", "asyncio", "functools", "pathlib", "threading", "time", ".params", ".placement",
-                ".plan", ".store", ".sources", "."},
+                ".plan", ".store", ".sources", ".", ".readiness"},   # .readiness: the two-line design's lesson readiness
     "sources": {"__future__", "collections.abc", "contextlib", "pathlib", "re", "sqlite3", ".placement",
                 ".readiness", "..study_path_catalog", "..content_availability", "..", "..material_review",
                 "..build_info"},

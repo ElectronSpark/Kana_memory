@@ -40,7 +40,7 @@ class StoreAdmission:
         workload = WorkloadContext(store, learning_store, costs, paths or _missing("paths"),
                                    repository or _missing("repository"), inputs or _missing("inputs"))
         service = AddContentService(paths=workload.paths, workload=workload,
-                                    restart=lambda: _restart_main_round(store))
+                                    restart=lambda: _restart_main_round(store), breadth=lambda: _breadth(store))
         return cls(store, learning_store, costs, workload, service)
 
     def serves(self, store, learning_store) -> bool:
@@ -51,6 +51,19 @@ def _missing(name: str) -> Callable[..., Any]:
     def ask(*args):
         raise LookupError(f"StoreAdmission was built without {name}")
     return ask
+
+
+def _breadth(store) -> bool:
+    """Whether the learner's orientation is 广度优先 (the arrangement's preferences, one settings read); a stored
+    value of a bad shape counts as not chosen (深度优先), as the suggestion then follows the route order."""
+    from ..arrangement.model import Orientation
+    from ..arrangement.services.preferences import ArrangementPreferences
+    if not callable(getattr(store, "get_setting", None)):
+        return False   # a store without settings (tests): no orientation was chosen
+    try:
+        return ArrangementPreferences(store).orientation() is Orientation.BREADTH
+    except ValueError:
+        return False
 
 
 def _restart_main_round(store) -> None:

@@ -13,9 +13,15 @@ from ..display import SectionNote
 
 
 def section_note_rows(note: SectionNote, *, on_add_next: Callable[[str], object]) -> list:
-    """The note and the button that adds the route's next section, to stand first on the home and end pages."""
-    return [u.label(note.text, size=15, bold=True, margin_bottom=4),
-            u.button(note.add_next, lambda widget: on_add_next(note.section_id), multiline=True)]
+    """The note and the button that adds the route's next section, to stand first on the home and end pages;
+    with the two-line design's mark (建议先加 · <line>) and its reason between them when the note has them."""
+    rows = [u.label(note.text, size=15, bold=True, margin_bottom=4)]
+    if note.mark:
+        rows.append(u.label(note.mark, size=13, bold=True, color=u.GREEN, margin_bottom=2))
+    if note.reason:
+        rows.append(u.label(note.reason, size=12, color=u.MUTED, margin_bottom=2))
+    rows.append(u.button(note.add_next, lambda widget: on_add_next(note.section_id), multiline=True))
+    return rows
 
 
 def section_prompt(note: SectionNote, *, on_add_and_start: Callable[[], object],

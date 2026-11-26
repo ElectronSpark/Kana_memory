@@ -12,6 +12,11 @@ gets detached inputs (plan.snapshot of the tree, the catalogue items, the
 library of each entry) and never touches a learner database. cancel() (app
 exit) stops a computation at its next check (between readiness chunks and
 between stages); a cancelled computation saves nothing.
+
+lesson_readiness / lesson_readiness_job serve the two-line design's readiness
+hint: the readiness of a few lessons (each line's next section), read on a
+worker thread and kept in memory for this process only (nothing is stored), each
+lesson's rows valid while the catalogue hands out the same question templates.
 """
 from __future__ import annotations
 
@@ -47,6 +52,7 @@ class MainRouteMix:
         self.generation = 0
         self.last_error = None   # why the last computation or save failed (an error type name, or REFUSED)
         self.last_timings = None
+        self._lessons = {}       # content id -> (its question templates object, its readiness rows)
 
     def cancel(self) -> None:
         """App exit: a running computation stops at its next check and saves nothing; none starts."""
@@ -124,6 +130,61 @@ class MainRouteMix:
         plan = self.stored()
         key = self.key_for(tree) if plan is not None else None
         return key is not None and dict(plan.key) == key
+
+    # ------------------------------------------------------------------ lesson readiness (two-line design)
+
+    LESSON_LIMIT = 512   # lessons kept; more empties the memory first (the hint reads a few sections' lessons)
+
+    @staticmethod
+    def _wanted(content_ids, items) -> dict:
+        """content id -> catalogue item of the asked lessons (``items``: the catalogue's items, a sequence)."""
+        wanted = dict.fromkeys(content_ids)
+        found = {}
+        for item in items:
+            if item.get("id") in wanted:
+                found[item["id"]] = item
+        return found
+
+    def _held(self, cid, item) -> bool:
+        held = self._lessons.get(cid)
+        return held is not None and held[0] is item.get("question_templates")
+
+    def lesson_readiness(self, content_ids, items):
+        """A Readiness of these lessons when every catalogue lesson among them was read in this process (the
+        lessons not in the catalogue are left out), else None; UI thread, reads nothing."""
+        from .readiness import Readiness
+        found = self._wanted(content_ids, items)
+        with self._lock:
+            if not all(self._held(cid, item) for cid, item in found.items()):
+                return None
+            return Readiness({cid: self._lessons[cid][1] for cid in found})
+
+    def lesson_readiness_job(self, content_ids, items):
+        """A callable for a worker thread reading the lessons lesson_readiness lacks (True when it read
+        some), made on the calling thread; None when none is missing or the app is closing."""
+        if self._cancel.is_set():
+            return None
+        found = self._wanted(content_ids, items)
+        with self._lock:
+            missing = {cid: item for cid, item in found.items() if not self._held(cid, item)}
+        if not missing:
+            return None
+        return partial(self._read_lessons, missing)
+
+    def _read_lessons(self, missing) -> bool:
+        from .sources import read_readiness
+        if self._cancel.is_set():
+            return False
+        try:
+            table = read_readiness(missing, missing, cancelled=self._cancel.is_set, kinds=self.params.kinds)
+        except MixCancelled:
+            return False
+        with self._lock:
+            if len(self._lessons) + len(missing) > self.LESSON_LIMIT:
+                self._lessons.clear()
+            for cid, item in missing.items():
+                self._lessons[cid] = (item.get("question_templates"), dict(table.abilities(cid)))
+        return True
 
     # ------------------------------------------------------------------ computation (worker thread)
 

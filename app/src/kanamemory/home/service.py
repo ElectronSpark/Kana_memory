@@ -28,10 +28,16 @@ from ..arrangement.rules.review_filter import ends_in_scope_done, waits_within
 from ..arrangement.services.presenters import no_new_content
 from ..home_counts import home_counts
 from ..practice_availability import summarize_queue_availability
+from ..study_lines import LINE_TITLES, SUGGEST_MARK, RouteLines, readiness_ids, route_lines
 from ..study_path_display import active_route, other_route_rows, route_kwargs, route_title
 from .display import HomeModel, OtherRoute, compose
 from .model import HomeInputs
 from .previews import UNREAD, course_preview, kana_preview
+
+
+def suggestion_mark(suggestion) -> str:
+    """建议先加 · 词汇 / 建议先加 · 语法 of a study_lines.Suggestion; "" without one."""
+    return "" if suggestion is None else SUGGEST_MARK + " · " + LINE_TITLES[suggestion.line]
 
 
 class HomeOverviewService:
@@ -132,8 +138,14 @@ class HomeOverviewService:
                                             next_section=offer is not None)
         else:
             scope_done = False
+        # The first part of the two-line design: each line's next section (a next section the filter does not
+        # allow is not offered) and the suggestion B10's note names; the note exists under breadth only.
+        lines = self._lines(service, path)
+        listed_lines = [(item.line_title, item.section_id, item.title) for item in lines.lines
+                        if serve is None or arrangement.review_filter.offers_section(serve, current, item.section_id)]
+        suggestion = lines.suggestion if lines.suggestion is not None and lines.suggestion.line is not None else None
         # Design 12 UI2, UI3 (B10), UI5: the arrangement's rows, from its presenter.
-        facts = RouteFacts.from_overview(path)
+        facts = RouteFacts.from_overview(path, suggestion, suggestion_mark(suggestion))
         nothing_new = no_new_content(has_work=has_work, teaching_ready=summary.instruction, overview=path,
                                      others_in_progress=others_in_progress)
         from ..domain import _utc
@@ -153,7 +165,15 @@ class HomeOverviewService:
             added=path['required_added_sections'], partial=path.get("required_partial_sections"),
             next_change_at=next_change_at, scope_done=scope_done,
             paused_line=presenter.paused_line(apart) if apart is not None else None,
-            extra_entry=self._extra_entry(arrangement))
+            extra_entry=self._extra_entry(arrangement), line_sections=listed_lines)
+
+    @staticmethod
+    def _lines(service, path) -> RouteLines:
+        """study_lines.route_lines of the current route under breadth (B10's note, the only place the home shows
+        the suggestion, exists under breadth only), with the readiness the path service holds in memory."""
+        known = getattr(service, "line_readiness", None)
+        readiness = known(readiness_ids(path)) if callable(known) else None
+        return route_lines(path, readiness=readiness, breadth=True)
 
     def next_review_at(self, inputs: HomeInputs) -> datetime | None:
         """The moment of the home's 下次复习 line for a page that ends a round, or None (design 02, round end).
