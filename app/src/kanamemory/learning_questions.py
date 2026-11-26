@@ -944,12 +944,25 @@ def practice_templates(item):
 
 # Facts of the templates of the shared tables, computed once: {id(object): [object, facts]} for every raw
 # template (facts: its fingerprint, None until asked) and every practice metadata (facts: {(prompt, control,
-# target): verdict}). The entry holds its object, so an id is never another object's while it is listed;
-# a table that leaves the cache takes its entries with it.
+# target): verdict}), and the table itself (facts: {name: value} of table_fact). The entry holds its object,
+# so an id is never another object's while it is listed; a table that leaves the cache takes its entries with it.
 _SHARED_FACTS = {}
 
 
+def table_fact(table, name, compute):
+    """``compute(table)`` of a template table, computed once while the table is shared (practice_templates' cache):
+    a fact of the table's own contents, which never change. Any other table is computed at each call."""
+    facts = _SHARED_FACTS.get(id(table))
+    if facts is None or facts[0] is not table:
+        return compute(table)
+    if name not in facts[1]:
+        facts[1][name] = compute(table)
+    return facts[1][name]
+
+
 def _table_objects(table):
+    if isinstance(table, dict):
+        yield table, {}
     for variants in (table or {}).values() if isinstance(table, dict) else ():
         for raw in variants if isinstance(variants, list) else ():
             if isinstance(raw, dict):

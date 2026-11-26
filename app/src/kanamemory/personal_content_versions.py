@@ -447,6 +447,23 @@ def question_blocked(store, item, question):
     return question_review(store, item, question)['blocked']
 
 
+def question_block_possible(store, item):
+    """Whether question_blocked can be true for some question of ``item``.
+
+    question_review answers "clear" for every question of a lesson that is not held (personal_content_compensation),
+    has no active personal version (its head setting) and no personal question rows (personal_question.rows_for),
+    unless the question itself carries a personal rubric, which only such rows give it. The same three facts,
+    read without a question (from the read projection's setting index when one is open)."""
+    if store is None or not item:
+        return False
+    identity = item.get('id', '')
+    from .personal_content_compensation import held
+    if held(store, identity) or setting(store, head_key(identity)) is not None:
+        return True
+    from .personal_question import rows_for
+    return bool(rows_for(store, identity))
+
+
 def question_review(store, item, question, *, for_history=False):
     """Reconstruct exact factory contracts; unknown old tasks remain pending.
 

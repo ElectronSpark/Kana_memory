@@ -152,6 +152,21 @@ def apply_in_transaction(store, parent_key, previous):
     retire_material_in_transaction(store, change)
 
 
+def model_material(item, templates=None):
+    """Whether blocked_question can be true for a question of ``item``: the lesson, or one of the raw templates
+    its questions are built from (``templates``, its practice_templates table when the caller has it), is of
+    model origin (assessment_policy._ai_origin, the test blocked_question makes first). The templates' answer is a
+    fact of a shared table, read once (learning_questions.table_fact)."""
+    from .assessment_policy import _ai_origin
+    if _ai_origin(item, {}):
+        return True
+    if not isinstance(templates, dict):
+        return False
+    from .learning_questions import table_fact
+    return table_fact(templates, "model_origin", lambda table: any(
+        isinstance(raw, dict) and _ai_origin({}, raw) for variants in table.values() for raw in variants or ()))
+
+
 def blocked_question(store, item, question):
     from .assessment_policy import _ai_origin
     if not _ai_origin(item, question): return False

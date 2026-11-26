@@ -46,6 +46,8 @@ PROGRESS_HEADING = "时间与进度"
 RECENT_UNITS_NOTE = "刚学的内容当天的巩固算在新内容里；最近 14 天新学的，到期复习排在最前。"
 REVIEWS_HEADING = "复习"
 NO_REVIEWS_TEXT = "还没有复习记录"
+# The course review line's count of today (design 12 UI4): the answers the home page's 课程复习 minutes are made of.
+ANSWERED_TODAY_TEXT = "今日已答 {count} 题"
 # D2 when a depth level rewrites the mixed switches but the kinds in force stay the same (a single-kind plan).
 SINGLE_KIND_UNCHANGED_TEXT = "只改综合练习的题型开关；现在用的单一题型练习不受影响。"
 PLAN_UNCHANGED_TEXT = "只改综合练习的题型开关；现在用的练习不受影响。"
@@ -403,7 +405,9 @@ class ReviewFigures:
     the latest PASS_RATE_REVIEWS formal reviews, None when there is none;
     ``reviews`` is how many it is based on; ``basis`` is that number when
     fewer than PASS_RATE_REVIEWS (to show beside the rate), else None.
-    ``line`` is the shown line with all of these already in it.
+    ``answered_today`` (course review only, None for kana): today's course
+    answers the study clock charges to 课程复习, the events of the home page's
+    "今日 … 课程复习 N 分". ``line`` is the shown line with all of these already in it.
     """
 
     title: str
@@ -413,6 +417,7 @@ class ReviewFigures:
     pass_percent: int | None
     reviews: int
     line: str = ""
+    answered_today: int | None = None
 
     @property
     def basis(self) -> int | None:
@@ -560,6 +565,13 @@ class DeckEndModel:
 EXTRA_BUTTON = "继续加练"
 EXTRA_HEADER = "加练"
 EXTRA_INTRO_TEXT = "这些题还没到期。24 小时内评过分的只算练习；同一题连着答错两次，它的下次复习会提前一点。"
+# With course questions answerable now (the home page's 现在可答 count of the course), the page says first that the
+# dispatch serves them first, scored as usual; the sentences about practice follow, naming their own questions.
+EXTRA_DUE_FIRST = "现在有 {count} 题到期：先出这些题，照常评分；之后才是加练。"
+EXTRA_INTRO_AFTER_DUE = "加练的题还没到期。24 小时内评过分的只算练习；同一题连着答错两次，它的下次复习会提前一点。"
+# The header of a question extra practice asks before its due (an early kana batch, an early course question):
+# the lane's own header behind 加练, so it is told apart from a due check, which keeps the lane's header.
+EXTRA_EARLY_HEADER = EXTRA_HEADER + " · {title}"
 EXTRA_BACK = "回到今日"
 EXTRA_END = "结束加练"
 EXTRA_DECK_NOTE = "这些题 24 小时内已经评过分：只算练习，不评分。"
@@ -593,9 +605,11 @@ class PartOption:
 
 @dataclass(frozen=True)
 class ExtraPartsModel:
-    """The page 加练 (E9): the explanation, the parts with their counts, 回到今日."""
+    """The page 加练 (E9): the explanation, the parts with their counts, 回到今日; ``due_line`` (EXTRA_DUE_FIRST) above
+    the explanation when course questions can be answered now, else None."""
 
     parts: tuple[PartOption, ...]
     header: str = EXTRA_HEADER
     text: str = EXTRA_INTRO_TEXT
     back_caption: str = EXTRA_BACK
+    due_line: str | None = None

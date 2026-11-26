@@ -566,10 +566,11 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 provider = CORE_LIBRARY_ID
             return titles.get(provider, "不可用的库") if provider else "不可用的库"
         # Two columns remain readable at enlarged system font sizes. The open tab's button is drawn as the current
-        # choice (the primary style, as a selected slot of a multi-blank question); 假名 is its own page.
+        # choice (ui_components' selected look, not the primary action's: 学习下一项 below is the page's action);
+        # 假名 is its own page.
         def tab(caption, tab_family):
             return u.button(caption, lambda w: self.show_learning_library(family=tab_family), flex=1, compact=True,
-                            primary=family == tab_family)
+                            selected=family == tab_family)
         children = [u.row(u.button("假名", self.show_kana, flex=1, compact=True), tab("单词", "word")),
                     u.row(tab("语法", "grammar"), tab("读音规则", "pronunciation"))]
         # The search (library_search.LessonQuery): form, reading, Chinese meaning, topic, and the romaji of the readings.
@@ -2163,7 +2164,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             old = self.learning_store.get_question(q['replacement_of'])
             if old:
                 children.append(self._learning_archive_control(old, old['draft']))
-        self.screen("learning_question", KIND_LABELS.get(q["kind"], "练习"), *children)
+        from .extra_practice_runtime import course_header
+        # A question extra practice asks before its due says 加练 in its header; a due check keeps the kind's name.
+        self.screen("learning_question", course_header(self, q, KIND_LABELS.get(q["kind"], "练习")), *children)
         if self._learning_question_state.get('presented') is not True:
             self.learning_store.save_draft(q['id'], {'presented': True})
             self._learning_question_state['presented'] = True

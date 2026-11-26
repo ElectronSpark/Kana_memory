@@ -242,6 +242,24 @@ class HomeOverviewService:
             courses, _ = self._course_preview(projection=read, round_limited=False)
         return home_counts(course_ready=counts["ready"], unqueued_course_ready=courses["ready"]).course_due
 
+    def course_ready(self) -> int:
+        """The course part of the home's "现在可答 N 题": the overview's own reads (the counts and the unqueued
+        preview in one read operation, under the learner's review filter of this moment, a running planned
+        round limiting the unqueued side as there). The page 加练 says that these come first (design 12 E9)."""
+        arrangement = self._arrangement() if self._arrangement is not None else None
+        if arrangement is None:
+            return self._course_ready()
+        from ..domain import _utc
+        with arrangement.serving(arrangement.review_filter.current(_utc(None))):
+            return self._course_ready()
+
+    def _course_ready(self) -> int:
+        learning = self._learning
+        with learning.read_operation() as read:
+            counts = learning.counts(self._course_kinds(), projection=read)
+            courses, _ = self._course_preview(projection=read)
+        return home_counts(course_ready=counts["ready"], unqueued_course_ready=courses["ready"]).course_due
+
     def unqueued_courses(self, projection=None, *, round_limited: bool = True) -> dict:
         """Course abilities without a queued question: {"ready", "waiting", "instruction", "blocked",
         "blocked_content", "blocked_material", "next_due"} (previews.course_preview)."""

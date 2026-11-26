@@ -3651,8 +3651,10 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.question_notice = ui.label("", size=12, color=MUTED, margin_bottom=2)
         ready_count = (summarize_queue_availability(self.store, prepared).ready_count
                        if isinstance(prepared, dict) else len(self.questions) - self.question_index)
+        from .extra_practice_runtime import kana_header
+        # A question of an early batch of extra practice says 加练 in its header; a due check keeps the round's.
         title = (f"拼写 · 剩 {ready_count} 词" if self.question.metadata.get("word_romaji_drill") else
-                 practice_header(ready_count, self.question_index, len(self.questions)))
+                 kana_header(self.question, practice_header(ready_count, self.question_index, len(self.questions))))
         if self.question.kind in {"kana_handwriting", "romaji_handwriting"}:
             self.show_ink_page(free=False, title=title)
             return

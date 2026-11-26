@@ -18,7 +18,7 @@ from .presentation import wrapped as fixed_wrapped
 from .text_layout import configure_text, font_scale, text_style
 from .typography import font_family, configure_text_role
 from .selection_layout import configure_selection
-from .ui_theme import GREEN, INK, MUTED, PAPER, WHITE, ENTRY_BACKGROUNDS
+from .ui_theme import GREEN, INK, MUTED, PAPER, WHITE, ENTRY_BACKGROUNDS, NEUTRAL, SELECTED_TINT
 from .crash_events import install_app_loop_hook, install_toga_hook
 
 # Every page builds its controls here, so this is where handler errors start
@@ -90,11 +90,19 @@ def label(text: object, size: float = 14, color: str = INK, bold: bool = False, 
     return configure_text(widget)
 
 
-def button(text: str, handler: Callable[..., Any], *, primary: bool = False, compact: bool = False, multiline: bool = False, text_role: str = "ui", start_aligned: bool = False, **style: Any) -> toga.Button:
+def button(text: str, handler: Callable[..., Any], *, primary: bool = False, selected: bool = False, compact: bool = False, multiline: bool = False, text_role: str = "ui", start_aligned: bool = False, **style: Any) -> toga.Button:
     # start_aligned: on Android the caption starts at the leading edge on every wrapped line (tree captions).
+    # selected: the chosen one of a row of choices (a tab row): the neutral shape on a light tint of GREEN, its
+    # caption GREEN and bold; not an action, so never together with primary. Toga's Android button applies the
+    # colour, the background (as a tint of the native shape) and the font weight, as on the desktop.
+    if primary and selected:
+        raise ValueError("A button is either the primary action or the selected choice")
     # The app loop exists once pages build buttons: keep its task errors too.
     install_app_loop_hook()
-    options = dict(font_size=14, height=46, margin_bottom=6, color=WHITE if primary else GREEN, background_color=GREEN if primary else "#E4EEE8")
+    options = dict(font_size=14, height=46, margin_bottom=6, color=WHITE if primary else GREEN,
+                   background_color=GREEN if primary else SELECTED_TINT if selected else NEUTRAL)
+    if selected:
+        options["font_weight"] = "bold"
     options.update(style)
     options["font_family"] = font_family(text_role, options.get("font_family"))
     options["height"] = max(options["height"], 2 * options["font_size"] + 20)

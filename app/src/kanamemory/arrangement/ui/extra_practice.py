@@ -22,9 +22,11 @@ def extra_button_rows(model: ExtraButtonModel | None, *, on_start: Callable[[], 
 
 def extra_parts_page(model: ExtraPartsModel, *, on_start: Callable[[str], object],
                      on_back: Callable[[], object]) -> list:
-    """The page 加练 (design 12 E9): its explanation, each part with what can be practised now (a button when
-    something can, a line when nothing can), 回到今日. on_start(part value) starts the mode with that part."""
-    rows = [u.label(model.text, size=17)]
+    """The page 加练 (design 12 E9): the due line when there is one, its explanation, each part with what can be
+    practised now (a button when something can, a line when nothing can), 回到今日. on_start(part value) starts
+    the mode with that part."""
+    rows = [u.label(model.due_line, size=17)] if model.due_line else []
+    rows.append(u.label(model.text, size=17))
     for option in model.parts:
         if option.startable:
             rows.append(u.button(option.caption, lambda widget, part=option.part: on_start(part), multiline=True))

@@ -2911,6 +2911,18 @@ class LearningStore:
                 or any(guide and (question_blocked(self.store, item, guide) or blocked_question(self.store, item, guide))
                        for guide in guides))
 
+    def content_question_may_block(self, item, templates=None):
+        """Whether content_question_blocked can be true for some question of ``item``, from the facts it reads before
+        any question: a personal content version, hold or personal question of the lesson
+        (personal_content_versions.question_block_possible) or material of model origin, the lesson's or one of
+        its raw ``templates`` (material_validity.model_material: only such material is checked against its
+        references). False: no question of the lesson (nor its frozen guides) is blocked by its material. The
+        home's unqueued preview plans the lessons it is True for instead of counting them from stored columns
+        (design 12 N16)."""
+        from .personal_content_versions import question_block_possible
+        from .material_validity import model_material
+        return question_block_possible(self.store, item) or model_material(item, templates)
+
     def submit(self, question_id, answered_text="", correct=None, *, assisted=False,
                outcome=None, now=None, duration_ms=0, presentation=None, early=False):
         """Freeze the first answer. ``early``: the learner asked to be rated before the unit is due

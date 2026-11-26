@@ -29,6 +29,10 @@ What the pages call (one line each at their sites):
   unit only is queued also inside a sealed round (a sealed round's frozen
   order does not serve it before the next round), so the unit stays among
   the learned states the next full pool read lists.
+- course_header(app, question, title), kana_header(question, title): the
+  header of a question page; a question asked before its due (the early
+  course question, an early kana batch) reads 「加练 · <title>」, a due check
+  keeps its lane's header.
 - end_extra_practice(app): the home page ends the mode and the early batch
   it left; while the mode is off, the first home page of a store ends a
   batch an earlier launch left. end_left_early_batch(app): the same look,
@@ -52,7 +56,7 @@ when the deck is used up or arranged work has come due); Nothing -> the mode
 ends and the page is shown. A failed read when entering or after a deck
 alerts and leaves the page as it is, so pressing again retries.
 """
-from .arrangement.display import EXTRA_NOTHING
+from .arrangement.display import EXTRA_EARLY_HEADER, EXTRA_NOTHING
 from .arrangement.model import Arranged, EarlyCourse, EarlyKana, Part, Practice
 
 # Steps carried out one inside another without a question page in between. The session's own loop guard
@@ -204,13 +208,16 @@ class ExtraPracticeFlow:
         from .arrangement.ui.extra_practice import extra_parts_page
         from .study_path_runtime import StudyPathRuntimeMixin
         arrangement = StudyPathRuntimeMixin.study_arrangement(self.app)
+        from .home_runtime import home_service
         try:
             counts = arrangement.extra_parts.counts(_now())
+            # The course questions the home page counts as answerable now: entering serves them first (E1).
+            course_due = home_service(self.app).course_ready()
         except Exception as exc:   # a busy database: the page stays
             _record(exc)
             self.app.alert(BUSY)
             return
-        model = arrangement.presenter.extra_parts(counts)
+        model = arrangement.presenter.extra_parts(counts, course_due=course_due)
         self.app.screen("extra_intro", model.header, *extra_parts_page(
             model, on_start=lambda part: self.start(Part(part)), on_back=self.app.leave_learning))
 
@@ -424,6 +431,20 @@ def early_queue(app, question):
     """After the early course answer: that unit's next question is queued also inside a sealed round
     (early_ability), so the unit stays among the states the next pool read lists; else {}."""
     return {"early_ability": question["ability"]} if early_submit(app, question["id"]) else {}
+
+
+def course_header(app, question, title):
+    """The header of a course question page: 「加练 · <title>」 for the course question the mode permitted early,
+    else ``title`` (a due check keeps the course's header, design 12 E9)."""
+    return EXTRA_EARLY_HEADER.format(title=title) if early_submit(app, question["id"]) else title
+
+
+def kana_header(question, title):
+    """The header of a kana question page: 「加练 · <title>」 for a question of an early batch (its mark), else
+    ``title`` (a due check keeps the practice header)."""
+    from .kana_early_batch import EXTRA_PRACTICE_MARK
+    marked = bool(getattr(question, "metadata", None) and question.metadata.get(EXTRA_PRACTICE_MARK))
+    return EXTRA_EARLY_HEADER.format(title=title) if marked else title
 
 
 def end_extra_practice(app):

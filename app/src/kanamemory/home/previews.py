@@ -191,6 +191,26 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
                     return True
         return False
 
+    def live_template(item, ability):
+        """Whether the lesson's template table (practice_templates, shared) has, for ``ability``, a template of an
+        enabled kind the planner may ask (question_kinds) that is not retired (retired_practice_variants: the
+        exact retirements, the cognate rule and the derived twins). The retired set is a fact of the shared
+        table, read once (table_fact): the table is keyed by this lesson value and the namespaces the
+        retirements come from. A lesson without a table is built by the legacy builders, which retirements do
+        not reach: live."""
+        from ..learning_questions import practice_templates, question_kinds, retired_practice_variants, table_fact
+        table = practice_templates(item)
+        if not isinstance(table, dict):
+            return True
+        retired = table_fact(table, "retired", lambda value: retired_practice_variants(item, value))
+        for kind in question_kinds(item, ability=ability, templates=table):
+            if kind not in enabled:
+                continue
+            if any(isinstance(raw, dict) and (kind, variant) not in retired
+                   for variant, raw in enumerate(table.get(kind) or ())):
+                return True
+        return False
+
     def bounded(item):
         """The lesson's record from its stored columns when none of its units can be due now, else None.
 
@@ -201,10 +221,16 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
         review filter) each such unit is waiting. One that is due now by the queue's N2 reading is planned
         too, so that "planned" is exact for every unit DueReviews counts; so is a lesson of the batch route
         (its gate closes kinds), and one with a unit in teaching or blocked by its prerequisites (those
-        counts take a unit only with a question).
+        counts take a unit only with a question). So is every lesson for which a bounded unit could differ from
+        its plan (design 12 N16, two cheap and exact tests): one whose questions its material can block
+        (LearningStore.content_question_may_block), and one with an ability that has no live template of an
+        enabled kind (live_template: it gets no question at all).
         """
         if not PLAN_FREE_BOUNDS or item.get('checkpoint', {}).get(ROUTE_KEY) == ROUTE:
             return None
+        from ..learning_questions import practice_templates
+        if learning_store.content_question_may_block(item, practice_templates(item)):
+            return None   # a question of it can be blocked by its material: planned, so blocked_material is exact
         record = _LessonRecord()
         pending = store.queries.pending_abilities(item['id'])
         admitted = item.get("enrolled_abilities", item.get("abilities", []))
@@ -212,6 +238,8 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
             if (not unit or unit['ability'] not in admitted or unit['ability'] in pending
                     or unit['ability'] not in served or unit["suspended"]):
                 continue   # iter_question_plans plans none of these, or the preview skips it (suspended)
+            if not live_template(item, unit['ability']):
+                return None   # its templates of the enabled kinds are all retired: no question, planned as before
             # The probe due counts only for a plan that is a free retrieval (_ability_due): an ability whose
             # enabled templates offer none is planned at its stored due whatever its probe due says.
             probe = unit['probe_due_at_utc'] if may_be_free(item, unit['ability']) else None

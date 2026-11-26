@@ -29,14 +29,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 
-from ..display import (RECENT_UNITS_NOTE, BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
+from ..display import (ANSWERED_TODAY_TEXT, RECENT_UNITS_NOTE, BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
                        DIRECTION_TITLES, FOCUS_SET_TEXT, INVITE_TEXT, UNCHOSEN_TEXT, KANA_TILT_TITLES, KEEP_TEXT, KEEP_TITLE,
                        NO_REVIEWS_TEXT, NO_SCOPE_TITLE, PASS_RATE_REVIEWS, PLAN_UNCHANGED_TEXT, SCOPE_GONE_TEXT,
                        SCOPE_GONE_TITLE, SCOPE_KIND_TITLES, SCOPE_TEXT, SET_FOCUS, SINGLE_KIND_UNCHANGED_TEXT,
                        THOROUGH_TEXT, THOROUGH_TITLE, TILT_TITLES, DayMinutes, DepthOption, FocusButtonModel,
                        FocusModel, FocusRowModel, HomeRowsModel, KanaTiltOption, OrientationModel, OrientationOption,
                        ProgressModel, ReviewFigures, ScopeOption, SectionNote, TiltOption,
-                       EXTRA_HEADER, PART_COUNT, PART_EMPTY, PART_TITLES, PAUSED_LINE, PAUSED_FULL,
+                       EXTRA_DUE_FIRST, EXTRA_HEADER, EXTRA_INTRO_AFTER_DUE, EXTRA_INTRO_TEXT, PART_COUNT, PART_EMPTY,
+                       PART_TITLES, PAUSED_LINE, PAUSED_FULL,
                        SCOPE_DONE_EXTRA, SCOPE_DONE_OUTSIDE, ExtraPartsModel, OnlySwitchModel, PartOption,
                        PauseChooserModel, PausedModel, PausedRow, ScopeDoneModel)
 from ..model import (KANA_DIRECTION_KINDS, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, RouteFacts, Tilt,
@@ -346,15 +347,20 @@ class ArrangementPresenter:
                               SCOPE_DONE_EXTRA if extra_available else None)
 
     @staticmethod
-    def extra_parts(counts) -> ExtraPartsModel:
-        """The page 加练 (E9) from services.extra_parts.ExtraParts.counts."""
+    def extra_parts(counts, *, course_due: int = 0) -> ExtraPartsModel:
+        """The page 加练 (E9) from services.extra_parts.ExtraParts.counts. ``course_due``: the course questions
+        answerable now as the home page counts them (HomeOverviewService.course_ready); entering serves them first
+        through the main dispatch, scored as usual (E1), and the page says so in its first line."""
         options = []
         for item in counts:
             title = PART_TITLES[item.part.value]
             caption = (PART_COUNT.format(title=title, count=item.count) if item.count
                        else PART_EMPTY.format(title=title))
             options.append(PartOption(item.part.value, caption, item.count))
-        return ExtraPartsModel(tuple(options), header=EXTRA_HEADER)
+        if course_due > 0:
+            return ExtraPartsModel(tuple(options), header=EXTRA_HEADER, text=EXTRA_INTRO_AFTER_DUE,
+                                   due_line=EXTRA_DUE_FIRST.format(count=int(course_due)))
+        return ExtraPartsModel(tuple(options), header=EXTRA_HEADER, text=EXTRA_INTRO_TEXT)
 
     def pause_chooser(self) -> PauseChooserModel:
         """添加… under 暂不复习: the focus scope's chooser (its scopes, the stored one first) minus the paused ones."""
@@ -528,14 +534,20 @@ class ArrangementPresenter:
         day_rows = tuple(_day_minutes(day, *(minutes(spent[day][unit]) for unit in (Unit.NEW, Unit.COURSE, Unit.KANA)))
                          for day in days)
         lessons, kana = len(activity.learned.lessons), len(activity.learned.kana)
+        # The course answers the clock charges to 课程复习 (the events of the home page's 课程复习 minutes): today's
+        # count for the course review line, and whether the period holds any at all.
+        course = [event.day for event in activity.events if event.unit is Unit.COURSE]
+        answered = (course.count(days[-1]), bool(course))
         return ProgressModel(
             days=day_rows, new_lessons=lessons, new_kana=kana,
             route_position=route.position, route_total=route.total, route_line=self._route_part(route),
             learned_line=f"近 {DAYS} 天新学 {lessons} 课 · 新假名 {kana} 个",
-            reviews=(self._course_figures(now, course_due, course_exclude), *self._kana_figures(now)),
+            reviews=(self._course_figures(now, course_due, course_exclude, answered), *self._kana_figures(now)),
             days_heading=f"近 {len(days)} 天每天用时（分钟）")
 
-    def _course_figures(self, now: datetime, due: int, exclude: Iterable[str]) -> ReviewFigures:
+    def _course_figures(self, now: datetime, due: int, exclude: Iterable[str],
+                        answered: tuple[int, bool] = (0, False)) -> ReviewFigures:
+        """``answered``: (today's course answers charged to 课程复习, whether the 7 days hold any)."""
         overdue = None
         if due > 0:
             dues = [datetime.fromisoformat(row["due_at_utc"])
@@ -543,7 +555,11 @@ class ArrangementPresenter:
             overdue = _overdue_days(now, [value for value in dues if value <= now])
         rate, reviews = _pass(self._store.queries.latest_review_ratings(True, PASS_RATE_REVIEWS,
                                                                         reach=PASS_RATE_REACH))
-        return _figures(COURSE_REVIEW_TITLE, None, max(0, int(due)), overdue, rate, reviews)
+        today, recent = answered
+        # 还没有复习记录 only when the learner has answered no course check: none the clock charges to 课程复习 in
+        # the period read, and no formal course review among the latest log rows.
+        return _figures(COURSE_REVIEW_TITLE, None, max(0, int(due)), overdue, rate, reviews,
+                        answered_today=today, answered_before=bool(recent or reviews))
 
     def _kana_figures(self, now: datetime) -> list[ReviewFigures]:
         direction_of = {kind: direction for direction, kinds in KANA_DIRECTION_KINDS.items() for kind in kinds}
@@ -593,11 +609,20 @@ def _day_minutes(day: str, new: int, course: int, kana: int) -> DayMinutes:
     return DayMinutes(day, new, course, kana, f"{day[5:]}  新内容 {new} · 课程复习 {course} · 假名练习 {kana}")
 
 
-def review_line(title: str, due: int, overdue: int | None, pass_percent: int | None, reviews: int) -> str:
-    """The UI4 review line: due count, longest overdue, and the pass rate with its basis."""
+def review_line(title: str, due: int, overdue: int | None, pass_percent: int | None, reviews: int, *,
+                answered_today: int | None = None, answered_before: bool = False) -> str:
+    """The UI4 review line: due count, longest overdue, and the pass rate with its basis.
+
+    ``answered_today`` (the course line; None for a kana direction): today's answers the clock charges to 课程复习,
+    shown as 「今日已答 N 题」 whenever the learner has answered a course check (today, or ``answered_before``);
+    还没有复习记录 then stands only for a learner who has answered none."""
     parts = [f"{title}：到期未答 {due} 题"]
     if overdue is not None:
         parts.append(f"最久逾期 {overdue} 天")
+    if answered_today is not None and (answered_today or answered_before):
+        parts.append(ANSWERED_TODAY_TEXT.format(count=answered_today))
+        if pass_percent is None:
+            return " · ".join(parts)
     if pass_percent is None:
         parts.append(NO_REVIEWS_TEXT)
     elif reviews >= PASS_RATE_REVIEWS:
@@ -608,6 +633,9 @@ def review_line(title: str, due: int, overdue: int | None, pass_percent: int | N
 
 
 def _figures(title: str, direction: KanaDirection | None, due: int, overdue: int | None,
-             pass_percent: int | None, reviews: int) -> ReviewFigures:
+             pass_percent: int | None, reviews: int, *, answered_today: int | None = None,
+             answered_before: bool = False) -> ReviewFigures:
     return ReviewFigures(title, direction, due, overdue, pass_percent, reviews,
-                         review_line(title, due, overdue, pass_percent, reviews))
+                         review_line(title, due, overdue, pass_percent, reviews, answered_today=answered_today,
+                                     answered_before=answered_before),
+                         answered_today)
