@@ -29,7 +29,7 @@ import sqlite3
 from typing import Any
 
 from .. import admission_workload
-from ..study_lines import LINES, next_sections, readiness_ids, route_lines
+from ..study_lines import LINES, SectionNames, next_sections, readiness_ids, route_lines
 from ..study_path_display import active_route, closure_text, has_other_routes, route_key, route_kwargs, route_title
 from ..study_path_selection import NodeKey, StudyPathSelection
 from ..study_routes import CORE_ROUTE_ID, CORE_ROUTE_TITLE
@@ -316,6 +316,8 @@ class AddContentService:
         # 加入勾选, 只勾选词汇 and 只勾选语法 ask plan_next(count) and plan_next(count, line=…) of their read, which is
         # study_lines.next_sections over that read's overview: the preview applies the same rule to its overview.
         overview = (read if read is not None else self._paths()).overview(**route)
+        # Sections that share a title are named apart (study_lines.section_name), in both parts of the preview.
+        names = SectionNames(overview)
         sections = next_sections(overview, count)
         visible = sections[:PREVIEW_VISIBLE]
         complete = None
@@ -325,8 +327,8 @@ class AddContentService:
         for line in LINES:
             planned = next_sections(overview, count, line)
             lines.append(LinePreview.of(line, [section["id"] for section in planned],
-                                        [section["title"] for section in planned[:LINE_PREVIEW_VISIBLE]]))
-        return ShortcutPreview.planned(count_text, count, sections, visible, complete, lines)
+                                        [names(section) for section in planned[:LINE_PREVIEW_VISIBLE]]))
+        return ShortcutPreview.planned(count_text, count, sections, visible, complete, lines, names=names)
 
 
 class AddOperations:

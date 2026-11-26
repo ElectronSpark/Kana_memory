@@ -206,6 +206,7 @@ class HomeRowsModel:
     usage_line: str | None = None
     note: SectionNote | None = None
     usage_note: str | None = None   # RECENT_UNITS_NOTE under the usage line (design 12 N3)
+    breadth: bool = False   # the orientation read for these rows is 广度优先 (the home's line mark follows it)
 
 
 @dataclass(frozen=True)

@@ -43,6 +43,7 @@ OTHER_IN_PROGRESS = "进行中 {count} 节"
 OTHER_NEXT = "下一小节 "        # followed by the next section's title
 OTHER_JOINER = " / "
 LINE_NEXT = "加入下一节{line} · "   # a line's add button, in the form of ADD_NEXT: followed by the line's section title
+LINE_MARK = " · {mark}"   # after the section name of the line button the suggestion names (both drawn)
 ROUTE_PAGE = "学习路线"
 ADD_CONTENT = "添加内容"
 ORPHANS = "{count} 项所属内容库已停用"
@@ -126,7 +127,8 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
             blocked_kana: int, next_section: tuple[str, str] | None, others: Sequence[OtherRoute], orphans: int,
             libraries_page: bool, word_count: int, completed: int, total: int, added: int, partial: int | None,
             next_change_at: datetime | None, scope_done: bool = False, paused_line: str | None = None,
-            extra_entry: bool = False, line_sections: Sequence[tuple[str, str, str]] = ()) -> HomeModel:
+            extra_entry: bool = False, line_sections: Sequence[tuple[str, str, str]] = (),
+            suggested_section: tuple[str, str] | None = None) -> HomeModel:
     """The home page from the numbers one refresh read (HomeOverviewService.overview).
 
     ``route_id``: the current route (CORE_ROUTE_ID for the core route), ``core``
@@ -141,6 +143,9 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
     ``line_sections``: (line title, section id, title) of each line's next section (the first part of the
     two-line design): a button each, except for a section the card already offers (B10's note, or the primary
     button without work); while one of them is the route's next section they take the place of 加入下一小节 · ….
+    ``suggested_section``: (id, mark) of the section the add page's suggestion names (study_lines.route_lines
+    under the learner's orientation; the mark study_lines.SUGGEST_MARK): while both line buttons are drawn, the
+    one of that section ends in · <mark> (no reason line); a suggestion that is neither button's section marks none.
     """
     lines = []
     if ready:
@@ -179,9 +184,12 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
     offered = {rows.note.section_id} if rows.note is not None else set()
     if then.kind is HomeActionKind.ADD_SECTIONS:
         offered.add(then.section_id)
-    line_next = tuple(HomeButton(LINE_NEXT.format(line=line) + title,
+    drawn = [(line, section_id, title) for line, section_id, title in line_sections if section_id not in offered]
+    marked, mark = suggested_section if suggested_section is not None and len(drawn) == 2 else (None, "")
+    line_next = tuple(HomeButton(LINE_NEXT.format(line=line) + title
+                                 + (LINE_MARK.format(mark=mark) if section_id == marked else ""),
                                  HomeAction(HomeActionKind.ADD_SECTIONS, section_id=section_id, route_id=route_id))
-                      for line, section_id, title in line_sections if section_id not in offered)
+                      for line, section_id, title in drawn)
     listed = []
     for other in others:
         parts = (([OTHER_IN_PROGRESS.format(count=other.in_progress)] if other.in_progress else [])

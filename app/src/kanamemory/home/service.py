@@ -28,7 +28,7 @@ from ..arrangement.rules.review_filter import ends_in_scope_done, waits_within
 from ..arrangement.services.presenters import no_new_content
 from ..home_counts import home_counts
 from ..practice_availability import summarize_queue_availability
-from ..study_lines import LINE_TITLES, SUGGEST_MARK, RouteLines, readiness_ids, route_lines
+from ..study_lines import LINE_TITLES, SUGGEST_MARK, RouteLines, SectionNames, readiness_ids, route_lines
 from ..study_path_display import active_route, other_route_rows, route_kwargs, route_title
 from .display import HomeModel, OtherRoute, compose
 from .model import HomeInputs
@@ -143,16 +143,22 @@ class HomeOverviewService:
         from ..domain import _utc
         # Design 12 LS8: rule (b) of the suggestion follows the line behind its share (the note is breadth only).
         behind = None if arrangement is None else arrangement.dispatcher.line_behind(_utc(None), breadth=True)
-        lines = self._lines(service, path, behind)
+        # Sections that share a title are named apart wherever the home offers one (study_lines.section_name).
+        names = SectionNames(path)
+        lines = self._lines(service, path, behind, names=names)
         listed_lines = [(item.line_title, item.section_id, item.title) for item in lines.lines
                         if serve is None or arrangement.review_filter.offers_section(serve, current, item.section_id)]
         suggestion = lines.suggestion if lines.suggestion is not None and lines.suggestion.line is not None else None
         # Design 12 UI2, UI3 (B10), UI5: the arrangement's rows, from its presenter.
-        facts = RouteFacts.from_overview(path, suggestion, suggestion_mark(suggestion))
+        facts = RouteFacts.from_overview(path, suggestion, suggestion_mark(suggestion), name=names)
         nothing_new = no_new_content(has_work=has_work, teaching_ready=summary.instruction, overview=path,
                                      others_in_progress=others_in_progress)
         from ..domain import _utc
         rows = presenter.home_model(_utc(None), facts, no_new_content=nothing_new)
+        # The line button the add page's suggestion names carries 建议先加 while both are drawn: under the
+        # orientation home_model read (rows.breadth, no read of its own), as the add page suggests.
+        marked = lines.suggestion if rows.breadth else lines.route_next
+        marked = marked if marked is not None and marked.line is not None else None
         word_count = self._word_count(store.load_session_progress(lane="word_romaji", lazy_questions=True))
         # Every other route with work counts as work above; the column lists two of them.
         listed = [OtherRoute(row["route_id"], row["title"], row["in_progress_sections"],
@@ -162,23 +168,25 @@ class HomeOverviewService:
             core=not route, has_work=has_work, ready=ready, waiting=waiting, instruction=counts["instruction"],
             blocked_content=counts["blocked_content"], blocked_material=counts.get('blocked_material'),
             blocked_input=counts.get('blocked_input'), blocked_kana=availability.blocked_count,
-            next_section=(next_section["id"], next_section["title"]) if next_section else None, others=listed,
+            next_section=(next_section["id"], names(next_section)) if next_section else None, others=listed,
             orphans=orphans, libraries_page=inputs.libraries_page, word_count=word_count,
             completed=path['required_completed_sections'], total=path['required_total_sections'],
             added=path['required_added_sections'], partial=path.get("required_partial_sections"),
             next_change_at=next_change_at, scope_done=scope_done,
             paused_line=presenter.paused_line(apart) if apart is not None else None,
-            extra_entry=self._extra_entry(arrangement), line_sections=listed_lines)
+            extra_entry=self._extra_entry(arrangement), line_sections=listed_lines,
+            suggested_section=(marked.section_id, SUGGEST_MARK) if marked is not None else None)
 
     @staticmethod
-    def _lines(service, path, behind: str | None = None) -> RouteLines:
-        """study_lines.route_lines of the current route under breadth (B10's note, the only place the home shows
-        the suggestion, exists under breadth only), with the readiness the path service holds in memory;
-        ``behind``: the line behind its share of the new-content time (ShareDispatcher.line_behind, None
-        unless the orientation is breadth first), design 12 LS8."""
+    def _lines(service, path, behind: str | None = None, *, names=None) -> RouteLines:
+        """study_lines.route_lines of the current route under breadth (B10's note, breadth only, and the mark on a
+        line button under breadth; RouteLines.route_next is the mark under 深度优先), with the readiness the path
+        service holds in memory (never computed for this); ``behind``: the line behind its share of the
+        new-content time (ShareDispatcher.line_behind, None unless the orientation is breadth first), design 12
+        LS8; ``names``: the refresh's SectionNames of ``path``."""
         known = getattr(service, "line_readiness", None)
         readiness = known(readiness_ids(path)) if callable(known) else None
-        return route_lines(path, readiness=readiness, breadth=True, behind=behind)
+        return route_lines(path, readiness=readiness, breadth=True, behind=behind, names=names)
 
     def next_review_at(self, inputs: HomeInputs) -> datetime | None:
         """The moment of the home's 下次复习 line for a page that ends a round, or None (design 02, round end).

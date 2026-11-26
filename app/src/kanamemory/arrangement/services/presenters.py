@@ -259,7 +259,7 @@ class ArrangementPresenter:
         lessons = len(self._events.learned(now, days).lessons) if held_from is None or held_from < days[0] else None
         return HomeRowsModel(progress_line=self._progress_line(route, lessons), usage_line=usage_line,
                              note=self._note(route, no_new_content),
-                             usage_note=RECENT_UNITS_NOTE if usage_line else None)
+                             usage_note=RECENT_UNITS_NOTE if usage_line else None, breadth=True)
 
     # UI6 -------------------------------------------------------------------
 
@@ -581,8 +581,11 @@ class ArrangementPresenter:
         for direction in KanaDirection:
             rate, reviews = _pass(self._store.queries.latest_review_ratings(
                 False, PASS_RATE_REVIEWS, KANA_DIRECTION_KINDS[direction], reach=PASS_RATE_REACH))
+            # 还没有复习记录 only for a direction without any review: one whose reviews all lie before the latest
+            # rows read shows its due count without a pass rate (as the course line; one more read, only then).
+            before = rate is None and self._store.queries.kana_review_exists(KANA_DIRECTION_KINDS[direction])
             figures.append(_figures(DIRECTION_TITLES[direction], direction, len(dues[direction]),
-                                    _overdue_days(now, dues[direction]), rate, reviews))
+                                    _overdue_days(now, dues[direction]), rate, reviews, answered_before=before))
         return figures
 
 
@@ -624,7 +627,8 @@ def review_line(title: str, due: int, overdue: int | None, pass_percent: int | N
 
     ``answered_today`` (the course line; None for a kana direction): today's answers the clock charges to 课程复习,
     shown as 「今日已答 N 题」 whenever the learner has answered a course check (today, or ``answered_before``);
-    还没有复习记录 then stands only for a learner who has answered none."""
+    还没有复习记录 then stands only for a learner who has answered none. A kana direction: ``answered_before``
+    means it has reviews, all before the latest rows read: no pass rate and no 还没有复习记录."""
     parts = [f"{title}：到期未答 {due} 题"]
     if overdue is not None:
         parts.append(f"最久逾期 {overdue} 天")
@@ -633,7 +637,8 @@ def review_line(title: str, due: int, overdue: int | None, pass_percent: int | N
         if pass_percent is None:
             return " · ".join(parts)
     if pass_percent is None:
-        parts.append(NO_REVIEWS_TEXT)
+        if not answered_before:
+            parts.append(NO_REVIEWS_TEXT)
     elif reviews >= PASS_RATE_REVIEWS:
         parts.append(f"最近 {PASS_RATE_REVIEWS} 次通过 {pass_percent}%")
     else:

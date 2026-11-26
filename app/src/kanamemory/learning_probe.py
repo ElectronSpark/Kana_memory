@@ -165,28 +165,38 @@ class GateReader:
     def __call__(self, row, content_row):
         """None: open as before; "hold": not yet (an earlier probe is open, or teaching comes first);
         an ISO time: waits for the spacing until then at the latest."""
-        if content_row["stage"] != "intro" or row["result_json"] is not None:
+        if row["result_json"] is not None:
+            return None
+        return self.unit(row["content_id"], row["ability"], content_row)
+
+    def unit(self, content_id, ability, content_row):
+        """The same answer for one unit, queued or not (``content_row``: its ability_instruction_row).
+
+        Everything it reads is stored (the lesson's profiles and its answers), so a unit whose question an
+        app start ended waits as its queued question would (design 12 N6); the home's unqueued preview
+        reads it for the units without a question.
+        """
+        if content_row["stage"] != "intro":
             return None
         checkpoint = _load(content_row["checkpoint_json"]) or {}
         if checkpoint.get("initial_familiarity"):
             return None
-        view = self.view(row["content_id"])
+        view = self.view(content_id)
         if view.fresh or view.track is None:
             return None   # the lesson's very first start, or not a course track
         if not view.probing:
             # Taught: later abilities open as ordinary first checks. A failed probe whose teaching
             # has not been opened yet goes first.
             return "hold" if probe_rules.teaching_pending(view.checkpoints) and not view.shown else None
-        ability = row["ability"]
         if probe_rules.earlier_in_flight(view.track, ability, view.abilities()):
             return "hold"
         anchor = view.last_answer
         if anchor is None:
             return None
-        others = self._others.get(row["content_id"])
+        others = self._others.get(content_id)
         if others is None:
-            others = self._others[row["content_id"]] = self._learning.other_answers_since(
-                row["content_id"], anchor, limit=probe_rules.OTHER_ANSWERS)
+            others = self._others[content_id] = self._learning.other_answers_since(
+                content_id, anchor, limit=probe_rules.OTHER_ANSWERS)
         if probe_rules.spacing_ready(anchor, others, self._now):
             return None
         return probe_rules.spacing_until(anchor).isoformat()

@@ -1250,8 +1250,11 @@ class StudyPathRuntimeMixin:
                 current = active_route(service)
                 shown = path if route_key(current) is None else service.overview(route_id=current)
                 others = other_route_rows(service, current) if not shown.get("next_section") else ()
-                # B10 under breadth: the next section first (presenter.end_note is None otherwise).
-                note = StudyPathRuntimeMixin.study_arrangement(self).presenter.end_note(RouteFacts.from_overview(shown))
+                # B10 under breadth: the next section first (presenter.end_note is None otherwise), named apart
+                # from sections of the same title (study_lines.section_name).
+                from .study_lines import SectionNames
+                note = StudyPathRuntimeMixin.study_arrangement(self).presenter.end_note(
+                    RouteFacts.from_overview(shown, name=SectionNames(shown)))
                 if note is not None and not StudyPathRuntimeMixin.offered_section(
                         self, note.route_id or current, {"id": note.section_id}):
                     note = None   # design 12 H12: not a section the learner's filter leaves out

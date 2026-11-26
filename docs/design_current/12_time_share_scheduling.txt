@@ -1294,6 +1294,8 @@ N6 一次一个块，并照试探优先的间隔。试探优先流程里已经�
    在还有别的可出（任一条线的复习、近期复习、巩固组）时一直占着教学的位置；别的都出不了时下一课才可以开始，与现在相同。（原先
    这段等待不占位置，讲解会一个接一个；first_teaching_dispatch 的间隔等待／course_block_continues，DispatchCandidates._goes_on。）
    0.36.15 把“六课一坐”的测试改到了早期版本的记录上，这里给它补一个试探优先时代的孪生测试。
+   试探序列里的一课在启动结束了它的待答题之后（未排题的状态）照样在等：间隔由存着的回答得出，首页的未排题预览对没有题的单位
+   读已排题的同一道门（learning_probe.GateReader.unit），把它算作“待到期”、到期为间隔结束的时刻，不算“可开始初学”（2026-11-26）。
 N7 间隔常数只有一个定义：probe_rules.OTHER_ANSWERS／MAX_WAIT 与 learning_store.RETRIEVAL_OTHER_ANSWERS／
    PROBE_RETRIEVAL_DELAY_SECONDS 合为一处（后两者由前两者得出）。
 N8 加练不变，只是到了时候的巩固组与 N2 的复习是它先出的排定工作，与别的到期工作一样。

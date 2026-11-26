@@ -495,6 +495,19 @@ class StudyQueries:
             AND json_extract(e.state_before_json,'$.last_review') IS NOT NULL
             ORDER BY e.occurred_at_utc DESC,e.row DESC LIMIT ?""", (int(reach), *skills, int(limit)))] if skills else []
 
+    def kana_review_exists(self, skills: Iterable[str]) -> bool:
+        """Whether the whole kana log holds a formal review of these routed skills (latest_review_ratings' kana
+        definition without its reach); one read that stops at the first. Records page, design 12 UI4: asked
+        only for a direction whose latest rows hold none."""
+        skills = sorted(set(skills))
+        if not skills:
+            return False
+        marks = ",".join("?" for _ in skills)
+        return self._connection.execute(f"""SELECT 1 FROM review_event e JOIN study_card c USING(card_id)
+            WHERE c.skill NOT IN ('word_kana','word_meaning_kana','word_romaji')
+            AND COALESCE(json_extract(e.review_log_json,'$.ability_route.skill'),c.skill) IN ({marks})
+            AND json_extract(e.state_before_json,'$.last_review') IS NOT NULL LIMIT 1""", skills).fetchone() is not None
+
     def card_adjustment_moves(self, card_kind: str, card_id: str) -> list[sqlite3.Row]:
         """The card's effective auxiliary adjustments: occurred_at_utc, before_due_at_utc, after_due_at_utc.
 

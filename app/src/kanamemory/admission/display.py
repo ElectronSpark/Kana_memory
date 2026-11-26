@@ -302,9 +302,10 @@ class ShortcutPreview:
 
     @classmethod
     def planned(cls, requested_text: str, count: int, sections: Sequence, visible: Sequence[Mapping],
-                complete_title: str | None = None, lines: Sequence[LinePreview] = ()) -> ShortcutPreview:
+                complete_title: str | None = None, lines: Sequence[LinePreview] = (), names=None) -> ShortcutPreview:
         """``visible``: the first sections as section dicts; ``complete_title``: the route title when none is left;
-        ``lines``: what each quick choice by line would tick for the same count (LinePreview.of)."""
+        ``lines``: what each quick choice by line would tick for the same count (LinePreview.of); ``names``: the
+        route's study_lines.SectionNames (the titles shown are the sections' names), None: the plain titles."""
         feedback = {**_preview_feedback(requested_text), "valid": True,
                     "requested_count": count, "planned_count": len(sections),
                     "selection_rule": "next_new_main_sections_in_catalogue_order",
@@ -315,7 +316,8 @@ class ShortcutPreview:
         remainder = f"另有 {len(sections) - PREVIEW_VISIBLE} 节" if len(sections) > PREVIEW_VISIBLE else ""
         complete = complete_title + "小节都已加入。" if not sections and complete_title is not None else ""
         return cls(feedback, heading=f"将勾选 {len(sections)} 节",
-                   titles=tuple(section["title"] for section in visible), remainder=remainder, complete=complete,
+                   titles=tuple(names(section) if names is not None else section["title"] for section in visible),
+                   remainder=remainder, complete=complete,
                    lines=tuple(lines))
 
 

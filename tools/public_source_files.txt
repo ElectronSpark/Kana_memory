@@ -965,6 +965,7 @@ tests/test_root_back.py
 tests/test_scheduler_audit.py
 tests/test_selection_layout.py
 tests/test_semantic_task_equivalence.py
+tests/test_section_names.py
 tests/test_shared_template_tables.py
 tests/test_sentence_aware_choice.py
 tests/test_sentence_annotation_corpus.py

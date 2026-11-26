@@ -39,6 +39,9 @@ ABILITY_SHORT = {"understanding": "理解", "application": "应用", "reading": 
 # The mark and the reason of the suggestion (decision: one sentence, only when it changes the line).
 SUGGEST_MARK = "建议先加"
 NOT_READY_REASON = "「{grammar}」的题还要用到 {count} 项没加入的内容，先加「{words}」。"
+# A section's display name where its title alone does not tell it apart (section_name).
+NAME_ONE_LESSON = "{title}（{lesson}）"
+NAME_LESSONS = "{title}（{lesson} 等 {count} 课）"
 _UNLEARNED = frozenset({"added", "started"})
 
 
@@ -89,6 +92,44 @@ def next_sections(overview: Mapping, count: int, line: str | None = None) -> lis
             if len(result) >= count:
                 break
     return result
+
+
+def section_name(section: Mapping, shared: Collection[str]) -> str:
+    """The name a page gives a section it offers to add: its title alone when no other section of the route
+    tree has that title (``shared``: the titles several sections have); otherwise the title with its first
+    lesson, 「<title>（<lesson>）」, or 「<title>（<lesson> 等 N 课）」 with N all its lessons. A section without
+    lessons keeps its title. Pages that list the route itself keep the titles (the position tells them apart)."""
+    title = str(section.get("title", ""))
+    if title not in shared:
+        return title
+    lessons = [entry for entry in section.get("entries", ()) if entry.get("kind") == "learning"]
+    if not lessons:
+        return title
+    lesson = str(lessons[0].get("title", ""))
+    if len(lessons) == 1:
+        return NAME_ONE_LESSON.format(title=title, lesson=lesson)
+    return NAME_LESSONS.format(title=title, lesson=lesson, count=len(lessons))
+
+
+class SectionNames:
+    """section_name for the sections of one overview (or route tree); the shared titles are found once, here."""
+
+    def __init__(self, overview: Mapping):
+        self._sections = {str(section["id"]): section for section in route_sections(overview)}
+        seen: set[str] = set()
+        shared: set[str] = set()
+        for section in self._sections.values():
+            title = str(section.get("title", ""))
+            (shared if title in seen else seen).add(title)
+        self._shared = frozenset(shared)
+
+    def __call__(self, section: Mapping) -> str:
+        return section_name(section, self._shared)
+
+    def of(self, section_id, title: str = "") -> str:
+        """The name of the section with this id; ``title`` when the overview has no such section."""
+        section = self._sections.get(str(section_id))
+        return title if section is None else self(section)
 
 
 def unlearned_lines(overview: Mapping) -> frozenset:
@@ -190,7 +231,8 @@ def counts_text(counts: Iterable[tuple[str, int]]) -> str:
 
 @dataclass(frozen=True)
 class Suggestion:
-    """The section to add first and its line (None: a section on neither line, 深度优先's route order)."""
+    """The section to add first (``title``: its section_name when suggest had the names) and its line (None: a
+    section on neither line, 深度优先's route order)."""
 
     line: str | None
     section_id: str
@@ -200,7 +242,8 @@ class Suggestion:
 
 def suggest(nexts: Mapping[str, Mapping | None], unlearned: Collection[str], *, breadth: bool,
             route_next: Mapping | None, positions: Mapping[str, int], grammar_verdict: Verdict | None = None,
-            lines: Mapping[str, str | None] | None = None, behind: str | None = None) -> Suggestion | None:
+            lines: Mapping[str, str | None] | None = None, behind: str | None = None,
+            names: SectionNames | None = None) -> Suggestion | None:
     """The line to add first.
 
     Not ``breadth`` (深度优先, or no orientation chosen): the route's next
@@ -212,12 +255,16 @@ def suggest(nexts: Mapping[str, Mapping | None], unlearned: Collection[str], *, 
     route order (``positions``: section id -> route position); (c) when that is
     the grammar line and its next section is not ready (``grammar_verdict``), the
     word section (``lines``: section id -> line) of the first lesson it misses,
-    with the reason. None when nothing is left.
+    with the reason. None when nothing is left. ``names``: the overview's SectionNames (the suggestion's title
+    and the reason name the sections by it), None: the plain titles.
     """
+    def name(section: Mapping) -> str:
+        return names(section) if names is not None else str(section.get("title", ""))
+
     if not breadth:
         if route_next is None:
             return None
-        return Suggestion(section_line(route_next), str(route_next["id"]), str(route_next.get("title", "")))
+        return Suggestion(section_line(route_next), str(route_next["id"]), name(route_next))
     open_lines = [line for line in LINES if nexts.get(line) is not None]
     if not open_lines:
         return None
@@ -233,16 +280,18 @@ def suggest(nexts: Mapping[str, Mapping | None], unlearned: Collection[str], *, 
         first = grammar_verdict.word_section(lines or {})
         if first is not None:
             count = len(grammar_verdict.missing)
-            reason = NOT_READY_REASON.format(grammar=section.get("title", ""), count=count, words=first.section_title)
-            return Suggestion(WORD, first.section_id, first.section_title, reason)
-    return Suggestion(chosen, str(section["id"]), str(section.get("title", "")))
+            words = names.of(first.section_id, first.section_title) if names is not None else first.section_title
+            reason = NOT_READY_REASON.format(grammar=name(section), count=count, words=words)
+            return Suggestion(WORD, first.section_id, words, reason)
+    return Suggestion(chosen, str(section["id"]), name(section))
 
 
 # ------------------------------------------------------------------ one overview
 
 @dataclass(frozen=True)
 class LineNext:
-    """One line's next section and its verdict (None: no readiness table for its lessons)."""
+    """One line's next section (``title``: its section_name) and its verdict (None: no readiness table for its
+    lessons)."""
 
     line: str
     section_id: str
@@ -256,10 +305,12 @@ class LineNext:
 
 @dataclass(frozen=True)
 class RouteLines:
-    """Both lines of one overview: the lines that still have a next section (word first) and the suggestion."""
+    """Both lines of one overview: the lines that still have a next section (word first) and the suggestion;
+    ``route_next``: the suggestion under 深度优先 (the route's next section), whatever ``breadth`` was."""
 
     lines: tuple[LineNext, ...] = ()
     suggestion: Suggestion | None = None
+    route_next: Suggestion | None = None
 
     def get(self, line: str) -> LineNext | None:
         return next((item for item in self.lines if item.line == line), None)
@@ -276,11 +327,15 @@ def readiness_ids(overview: Mapping) -> tuple[str, ...]:
 
 
 def route_lines(overview: Mapping, *, readiness=None, ticked: Iterable[str] = (), breadth: bool = False,
-                floor: int = READY_FLOOR, behind: str | None = None) -> RouteLines:
+                floor: int = READY_FLOOR, behind: str | None = None, names: SectionNames | None = None) -> RouteLines:
     """The two lines of ``overview``; ``readiness``: a Readiness holding readiness_ids(overview), or None
     (no verdicts); ``ticked``: entry ids counted as known besides the learned and added ones (the add
     page's selection and the prerequisites it brings); ``breadth``: the learner's orientation is 广度优先;
-    ``behind``: the line behind its share of the new-content time, or None (suggest's rule (b))."""
+    ``behind``: the line behind its share of the new-content time, or None (suggest's rule (b)).
+    The lines and the suggestion name their sections by section_name (``names``: the caller's SectionNames of
+    this overview, else built here); Missing keeps the plain section title beside its lesson."""
+    if names is None:
+        names = SectionNames(overview)
     sections = list(route_sections(overview))
     positions = {str(section["id"]): index for index, section in enumerate(sections)}
     lines = {str(section["id"]): section_line(section) for section in sections}
@@ -299,7 +354,8 @@ def route_lines(overview: Mapping, *, readiness=None, ticked: Iterable[str] = ()
     if route_next is not None and lines[str(route_next["id"])] is None:
         # The route still asks for a section on neither line first (the kana stage): the lines wait behind it
         # and the suggestion is that section, as today.
-        return RouteLines((), Suggestion(None, str(route_next["id"]), str(route_next.get("title", ""))))
+        first = Suggestion(None, str(route_next["id"]), names(route_next))
+        return RouteLines((), first, first)
     ticked = set(ticked)
     known, places = set(), {}
     position = 0
@@ -317,11 +373,14 @@ def route_lines(overview: Mapping, *, readiness=None, ticked: Iterable[str] = ()
     else:
         verdicts = {line: verdict(section, readiness, known.__contains__, places=places, floor=floor)
                     for line, section in nexts.items() if section is not None}
-    shown = tuple(LineNext(line, str(section["id"]), str(section.get("title", "")), verdicts.get(line))
+    shown = tuple(LineNext(line, str(section["id"]), names(section), verdicts.get(line))
                   for line, section in nexts.items() if section is not None)
     suggestion = suggest(nexts, unlearned_lines(overview), breadth=breadth, route_next=route_next,
-                         positions=positions, grammar_verdict=verdicts.get(GRAMMAR), lines=lines, behind=behind)
-    return RouteLines(shown, suggestion)
+                         positions=positions, grammar_verdict=verdicts.get(GRAMMAR), lines=lines, behind=behind,
+                         names=names)
+    thorough = (suggestion if not breadth
+                else suggest(nexts, (), breadth=False, route_next=route_next, positions=positions, names=names))
+    return RouteLines(shown, suggestion, thorough)
 
 
 def line_sections(overview: Mapping) -> dict[str, int]:

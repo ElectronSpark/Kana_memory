@@ -572,16 +572,18 @@ class RouteFacts:
         return 0 if self.total <= 0 else min(max(self.completed, 0) + 1, self.total)
 
     @classmethod
-    def from_overview(cls, overview, suggestion=None, mark: str = "") -> RouteFacts:
+    def from_overview(cls, overview, suggestion=None, mark: str = "", name=None) -> RouteFacts:
         """From the dict StudyPathService.overview() returns; reads four keys, nothing else. ``suggestion``: a
-        study_lines.Suggestion (section_id, title, reason) or None; ``mark``: the words that mark it."""
+        study_lines.Suggestion (section_id, title, reason) or None; ``mark``: the words that mark it; ``name``:
+        the caller's study_lines.SectionNames of this overview (the next section's title is its name there),
+        None: the plain title."""
         section = overview.get("next_section")
         extra = {} if suggestion is None else dict(
             suggested_section_id=str(suggestion.section_id), suggested_section_title=str(suggestion.title),
             suggested_mark=mark, suggested_reason=str(suggestion.reason or ""))
+        title = None if not section else str(name(section) if name is not None else section["title"])
         return cls(int(overview.get("required_completed_sections", 0)), int(overview.get("required_total_sections", 0)),
-                   None if not section else str(section["id"]), None if not section else str(section["title"]),
-                   **extra)
+                   None if not section else str(section["id"]), title, **extra)
 
 
 class Part(str, Enum):

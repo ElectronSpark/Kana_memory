@@ -105,6 +105,8 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
     from ..arrangement.sources.recent import RecentFirsts, serviceable
     firsts = getattr(exposures, "first_rated", None) or RecentFirsts(store)
     served = {KIND_ABILITIES[kind] for kind in enabled}
+    from ..learning_probe import GateReader
+    probe_gate = GateReader(learning_store, now)
 
     def prerequisites_block(item, content_row):
         scope = dict(content_row).get('instruction_scope')
@@ -154,6 +156,15 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
                 # to LearningStore.counts()["blocked_content"].
                 if item["id"] not in visible_content:
                     record.blocked_content.add(item["id"])
+                continue
+            # Probe first (design 12 N6): the gate LearningStore.counts() applies to a queued row, for the unit
+            # without one; the spacing is read from the stored answers, so an app start does not open it.
+            held = probe_gate.unit(item['id'], unit['ability'], content_row)
+            if held == "hold":
+                continue   # not yet open: neither ready, waiting nor teaching
+            if held is not None:
+                record.waiting += 1
+                record.future.append(held)
                 continue
             if teaching_stage(item, content_row, record):
                 continue
