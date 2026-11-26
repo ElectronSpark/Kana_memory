@@ -5,7 +5,10 @@ romaji of readings, with the dictionary search's normalisation and aliases (word
 normalize_search, romanization_aliases; no second romaji table): `sensei` finds 先生（せんせい）,
 `koohii` and `kohi` find コーヒー. Substring, as for the other fields. A query without a Latin
 letter is never compared with romaji, so a kana, kanji or Chinese query finds what it found before.
-The aliases are computed once per reading (romaji_of's cache), not once per row per query.
+A lesson's title counts too: each run of two or more kana in it is compared as a reading is, so a
+grammar lesson whose form is only in its title (「い形容词：かった／くなかった」) is found by `katta`.
+The aliases are computed once per reading (romaji_of's cache), not once per row per query, and the
+kana runs once per title (title_kana_runs' cache).
 The 学习库's lesson match (LessonQuery) serves its open tab and its counts of the other tabs alike.
 Pure: no Toga, no learner database.
 """
@@ -31,14 +34,37 @@ def romaji_needle(query) -> str:
     return needle if any("a" <= char <= "z" for char in needle) and "\n" not in needle else ""
 
 
+def _is_kana(char: str) -> bool:
+    """Hiragana ぁ–ゖ, katakana ァ–ヺ, and the long-vowel mark, which belongs to a run (コーヒー)."""
+    return "ぁ" <= char <= "ゖ" or "ァ" <= char <= "ヺ" or char == "ー"
+
+
+@lru_cache(maxsize=65536)
+def title_kana_runs(title: str) -> tuple[str, ...]:
+    """Each run of two or more kana in a title, once, in order; a single kana between other characters is no run."""
+    runs, current = [], []
+    for char in (title or "") + " ":
+        if _is_kana(char):
+            current.append(char)
+            continue
+        if len(current) >= 2:
+            runs.append("".join(current))
+        current = []
+    return tuple(dict.fromkeys(runs))
+
+
 def readings_of(row: Mapping | None) -> list[str]:
-    """A lesson's or word's reading and its accepted and alternative readings, when the row has them."""
+    """The readings a romaji query is compared with: a lesson's or word's reading, its accepted and
+    alternative readings, and the kana runs of its title (title_kana_runs), when the row has them."""
     found = []
     for field in READING_FIELDS:
         value = (row or {}).get(field)
         for text in ([value] if isinstance(value, str) else value if isinstance(value, (list, tuple)) else ()):
             if isinstance(text, str) and text and text not in found:
                 found.append(text)
+    title = (row or {}).get("title")
+    if isinstance(title, str):
+        found.extend(run for run in title_kana_runs(title) if run not in found)
     return found
 
 

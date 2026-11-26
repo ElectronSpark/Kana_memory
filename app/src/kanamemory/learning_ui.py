@@ -565,12 +565,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             if provider is None and availability.available(item["id"]):
                 provider = CORE_LIBRARY_ID
             return titles.get(provider, "不可用的库") if provider else "不可用的库"
-        # Two columns remain readable at enlarged system font sizes.
-        children = [u.row(
-            u.button("假名", self.show_kana, flex=1, compact=True),
-            u.button("单词", lambda w: self.show_learning_library(family="word"), flex=1, compact=True)),
-            u.row(u.button("语法", lambda w: self.show_learning_library(family="grammar"), flex=1, compact=True),
-                  u.button("读音规则", lambda w: self.show_learning_library(family="pronunciation"), flex=1, compact=True))]
+        # Two columns remain readable at enlarged system font sizes. The open tab's button is drawn as the current
+        # choice (the primary style, as a selected slot of a multi-blank question); 假名 is its own page.
+        def tab(caption, tab_family):
+            return u.button(caption, lambda w: self.show_learning_library(family=tab_family), flex=1, compact=True,
+                            primary=family == tab_family)
+        children = [u.row(u.button("假名", self.show_kana, flex=1, compact=True), tab("单词", "word")),
+                    u.row(tab("语法", "grammar"), tab("读音规则", "pronunciation"))]
         # The search (library_search.LessonQuery): form, reading, Chinese meaning, topic, and the romaji of the readings.
         from .library_search import LIBRARY_TABS, LessonQuery, items_by_tab
         search = LessonQuery(query)
@@ -912,10 +913,18 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         enabled = set(self._saved_learning_kinds())
         self.learning_group_switches = {}
         controls = []
+        # Under each switch, the kinds it turns on, in the registry's order, by the names the question pages show
+        # (KIND_LABELS here; the registry's label for a kind that table lacks); none under a group whose one shown
+        # name is the group's own name.
+        from . import learning_questions
         for title, kinds in KIND_GROUPS.items():
             control = u.switch(title, value=bool(kinds & enabled), on_change=lambda w: self.change_learning_kinds())
             self.learning_group_switches[title] = control
             controls.append(control)
+            names = [KIND_LABELS.get(kind, label) for kind, label in learning_questions.KIND_LABELS.items()
+                     if kind in kinds]
+            if names and names != [title]:
+                controls.append(u.label("、".join(names), size=13, color=u.MUTED))
         from .answer_input import SETTING, system_japanese_enabled
         self.learning_system_input = u.switch("使用系统日文键盘（可选）",
             value=system_japanese_enabled(self.store),
