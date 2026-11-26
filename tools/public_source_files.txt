@@ -222,6 +222,7 @@ app/src/kanamemory/backup_worker.py
 app/src/kanamemory/build_info.py
 app/src/kanamemory/card_management.py
 app/src/kanamemory/card_quote_readings.py
+app/src/kanamemory/card_reading_options.py
 app/src/kanamemory/content.py
 app/src/kanamemory/content_pack.py
 app/src/kanamemory/content_library_rules.py
@@ -957,6 +958,7 @@ tests/test_semantic_task_equivalence.py
 tests/test_sentence_annotation_corpus.py
 tests/test_annotate_readings.py
 tests/test_card_quote_readings.py
+tests/test_card_reading_pages.py
 tests/test_sentence_annotation_sequences.py
 tests/test_session_kind_filter.py
 tests/test_session_snapshot_journal.py

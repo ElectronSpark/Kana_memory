@@ -27,6 +27,8 @@ from .question_support import clean_prompt_preferences, build_prompt_block, prom
 from .typography import configure_text_role, configure_study_ranges
 from .example_ui import ExampleUIMixin
 from .structured_lesson_ui import teaching_block, original_notes, block_widget
+from .card_reading_options import course_page as card_page
+from .card_quote_readings import drop_kana_echo
 from .study_path_ui import StudyPathUIMixin
 from .ai_ui import AIUIMixin
 from .learning_pitch_ui import LearningPitchUIMixin, answer_diagram
@@ -258,7 +260,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         children.extend(rule_help_widgets(self, dependencies_for_kana(self.repo.get_kana(data["content_id"]))))
         example = data.get("example")
         if example and familiarity["level"] != "some":
-            children.extend([u.row(u.label(f"{example['form']}（{example['reading']}）", size=17, text_role="study", flex=1),
+            children.extend([u.row(u.label(drop_kana_echo(f"{example['form']}（{example['reading']}）"), size=17, text_role="study", flex=1),
                                    u.speaker_button(lambda w: self.speak_text(example['reading'] or example['form']),
                                                     "朗读例词：" + example['form'])),
                              u.label(example['meaning'], size=14, color=u.MUTED)])
@@ -681,15 +683,18 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         instruction = item.get("instruction", {})
         children = [u.label(item["title"], size=25, bold=True, color=u.GREEN,
                             text_role=lesson_title_role(item))]
+        card = {}  # a verdict on the page: every card reading (design 02, teaching cards)
         if answer_context and answer_context[0].get('target_id') == item['id']:
             from .semantic_errors import feedback_nodes
             children.extend(feedback_nodes(u, *answer_context))
+        else:
+            card = card_page(self)
         children.extend(self.learning_reading_rows(item))
         children.extend(origin_labels(item))
         # The same known set as the batch card (design 11 section 5, D3): shared
         # examples whose other references are not yet introduced stay hidden.
-        children.extend([teaching_block(u, item, speak=self.speak_text),
-                         self.example_cards(item, known_ids=self._intro_batch_known_ids())])
+        children.extend([teaching_block(u, item, speak=self.speak_text, **card),
+                         self.example_cards(item, known_ids=self._intro_batch_known_ids(known=card.get("known_ids")))])
         if not verified_teaching:
             notice = ("学习材料尚不完整。" if item.get("instruction_status") == "instruction_missing"
                       else "待核验草稿 · 可预览，暂不作为正式教案。")
@@ -703,7 +708,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         audio = self.pronunciation_audio_examples(item, rendered=children)
         if audio is not None:
             children.append(audio)
-        children.append(original_notes(u, item))
+        children.append(original_notes(u, item, **card))
         from .personal_content_notes_ui import append_notes
         append_notes(self, u, children, 'lesson', item, page='learning_detail')
         if item.get("depends_on"):
@@ -1685,7 +1690,8 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 speaker = u.speaker_button(play_guide, '播放引导题目')
                 speaker._feedback_fragment = {'kind': 'guide_audio', 'question_id': q['id']}
                 stimulus.append(speaker)
-            reference = self._shared_learning_guide_reference(item, q) if shared_intro else []
+            card = card_page(self, known)  # the prompt's known set decides the card's readings too
+            reference = self._shared_learning_guide_reference(item, q, card) if shared_intro else []
             guide_prompt = (self._learning_guide_context['prompt'] if q.get('input_mode') == 'multi_cloze'
                             else self._learning_prompt_block(q, size=20, known_ids=known))
             if practice:
@@ -1696,7 +1702,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                     demonstration, *choices, self._learning_guide_result, *reference, *self._learning_guide_archive(checkpoint))
             else:
                 self.screen("learning_guide", "跟着做",
-                    *([] if shared_intro else [teaching_block(u, item, compact=True, question=q)]), *task,
+                    *([] if shared_intro else [teaching_block(u, item, compact=True, question=q, **card)]), *task,
                     *stimulus,
                     *([] if is_pitch_question(q) else [guide_prompt]),
                     *reference, *choices, self._learning_guide_result, *self._learning_guide_archive(checkpoint))
@@ -1721,8 +1727,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         practiced_explanation = bool(conceptual and conceptual.get('instruction_ready'))
         focused_application = admitted in (['use'], ['application'], ['listening']) and practiced_explanation
         focused = focused_reading or focused_application
+        card = card_page(self)  # before any answer: the switch and the known lessons decide card readings
         if not focused:
-            children.append(teaching_block(u, item, compact=compact, speak=self.speak_text))
+            children.append(teaching_block(u, item, compact=compact, speak=self.speak_text, **card))
         if item.get("introduction_id") and item.get("read_only"):
             # J6 R1: a lesson that is only read: no guide, no question; 「知道了」 completes it.
             children.append(u.label(READ_ONLY_LINE, size=14, color=u.MUTED))
@@ -1735,7 +1742,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             children.append(u.button("跟着练习" if has_practice else "跟着做一题", self.start_learning_guide,
                                      primary=True))
         if not compact or focused:
-            children.append(self.example_cards(item, known_ids=self._intro_batch_known_ids()))
+            children.append(self.example_cards(item, known_ids=self._intro_batch_known_ids(known=card["known_ids"])))
         if focused:
             explanation = u.col()
             def toggle_explanation(widget):
@@ -1743,7 +1750,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                     explanation.clear()
                     widget.text = '展开讲解'
                 else:
-                    explanation.add(teaching_block(u, item, speak=self.speak_text))
+                    explanation.add(teaching_block(u, item, speak=self.speak_text, **card))
                     widget.text = '收起讲解'
             children.extend([u.button('展开讲解', toggle_explanation, compact=True), explanation])
         pitch = self.pronunciation_pitch_examples(item)
@@ -1755,7 +1762,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if instruction.get("prerequisite"):
             children.append(u.button("还不熟悉接续？", self.show_learning_prerequisite, compact=True))
         children.append(u.button("稍后再学", self.leave_learning))
-        children.append(original_notes(u, item))
+        children.append(original_notes(u, item, **card))
         self.screen("learning_intro", "快速回顾" if compact else "初次学习", *children)
 
     def finish_read_only_lesson(self, item):
@@ -1782,8 +1789,9 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         if item is not None:
             self.show_learning_instruction(item)
 
-    def _shared_learning_guide_reference(self, item, question):
-        """Optional explanation stays beside this ability's live guided work."""
+    def _shared_learning_guide_reference(self, item, question, card=None):
+        """Optional explanation stays beside this ability's live guided work; card: the guide page's
+        card_reading_options.course_page."""
         body = u.col()
         def toggle(widget):
             if self.page != 'learning_guide' or self._learning_guide is not question:
@@ -1792,7 +1800,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 body.clear()
                 widget.text = '讲解'
             else:
-                body.add(teaching_block(u, item, speak=self.speak_text, question=question))
+                body.add(teaching_block(u, item, speak=self.speak_text, question=question, **(card or {})))
                 widget.text = '收起讲解'
         # Current practice guides already show an ability-specific demonstration.
         # Old simple word guides still need this small first-use explanation.
@@ -1903,7 +1911,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 for control in context["buttons"]:
                     control.enabled = False
             # Result of a guided question: its Japanese carries kana like every result (design 11 §7 rule 9).
-            answer = u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", "")),
+            answer = u.label(shown_explanation(self._learning_guide, drop_kana_echo(self._learning_guide.get("feedback", ""))),
                              flex=1 if speaker else 0)
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer,
                 u.button("继续", lambda w, expected=self._learning_guide:
@@ -1919,7 +1927,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 mine.append(entered_answer_row(u, shown_answer(self._learning_guide, picked),
                     text_role=learning_text_role(self._learning_guide, "answer")))
             self._learning_guide_result.add(u.row(answer, speaker) if speaker else answer, *mine,
-                u.label(shown_explanation(self._learning_guide, self._learning_guide.get("feedback", ""))),
+                u.label(shown_explanation(self._learning_guide, drop_kana_echo(self._learning_guide.get("feedback", "")))),
                 *self._learning_guide_pass_controls())
         # The result is already attached to the visible guide. Its introduction
         # identity survives rebuilding this page, so returning cannot replay it.
@@ -2338,11 +2346,12 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         self._learning_question_state["assisted"] = True
         self.learning_store.save_draft(q["id"], self._learning_question_state)
         if card:
-            self.screen("learning_prerequisite", "说明卡", *self._intro_card_body(item),
+            self.screen("learning_prerequisite", "说明卡", *self._intro_card_body(item, card=card_page(self)),
                 u.button("返回题目", self.continue_learning, primary=True))
             return
         instruction = item["instruction"]
-        self.screen("learning_prerequisite", "回看讲解", teaching_block(u, item, speak=self.speak_text, question=q),
+        self.screen("learning_prerequisite", "回看讲解", teaching_block(u, item, speak=self.speak_text, question=q,
+                                                                      **card_page(self)),
             self._learning_instruction_example(instruction),
             self.natural_translation_label(instruction.get('example', ''), instruction.get('translation', '')),
             *self.order_translation_rows(instruction.get('example', ''), instruction.get('translation', ''),
@@ -2487,7 +2496,7 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
                 text_role=learning_text_role(q, "answer"), size=20, reserved_width=48 if speaker else 0)
         children = [build_answer_feedback(result, structure_error=structure_error),
                     u.row(answer, speaker) if speaker else answer]
-        explanation = without_self_gloss(distinct_explanation(q.get("feedback"), answer_text(q)))
+        explanation = drop_kana_echo(without_self_gloss(distinct_explanation(q.get("feedback"), answer_text(q))))
         asked = None if is_pitch_question(q) else asked_text(q, explanation)
         if asked:
             children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, "prompt")))

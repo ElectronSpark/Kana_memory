@@ -63,6 +63,9 @@ Display rules
    and reading is known; a word the course does not teach always shows it. Rule 2's exclusions
    apply. Instructions are drawn inline (文脈（ぶんみゃく）で選（えら）ぶ), prompts through the prompt
    plan; the stored task and prompt strings never change.
+   The course-word lookup (title, reading) of this rule is course_words().
+9. Teaching-card quotations follow rule 3 with the same lookup (card_quote_readings): an unlearned
+   word keeps its reading, a learned one only while the switch is on; result pages show all.
 """
 from __future__ import annotations
 
@@ -174,7 +177,7 @@ def _cue_spans(text):
 
 @content_cache
 @lru_cache(maxsize=1)
-def _course_words():
+def course_words():
     """(title, normal reading) -> ids of the course word lessons written and read so."""
     # The process-wide word projection the sound kinds already build: no second catalogue copy.
     from .learning_questions import _word_pool
@@ -443,7 +446,7 @@ class _Rules:
 
     def cue_shows(self, surface, reading, lesson):
         """Rule 8 for one word of a fixed string."""
-        if any(self.knows(identity) for identity in _course_words().get(lesson, ())):
+        if any(self.knows(identity) for identity in course_words().get(lesson, ())):
             return False
         return not (self.sensitive and self.gives_away(surface, reading))
 

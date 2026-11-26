@@ -165,7 +165,6 @@ def test_legacy_completed_batch_keeps_current_kind_and_scope_with_completed_scri
 def test_home_groups_learning_actions_without_duplicate_navigation(setup_app):
     app = setup_app
     app.page = "home"
-    app._stats_summary = Mock(return_value="今日新增 300 个")
     app.content_label = lambda text, **kw: View(text=text, **kw)
     for name in ("show_practice_setup", "show_new_batch", "show_kana", "show_free_ink", "show_progress", "show_cards", "show_tutor_center"):
         setattr(app, name, Mock())

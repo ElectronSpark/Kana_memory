@@ -83,7 +83,7 @@ def path_app(learning_app, monkeypatch):
         monkeypatch.setattr(domain, "_utc", lambda value=None: value or app._test_clock[0])
         bind(app, StudyPathUIMixin)
         bind(app, StudyPathRuntimeMixin)
-        for name in ("show_home", "refresh_home_actions", "_stats_summary", "resume_practice",
+        for name in ("show_home", "refresh_home_actions", "resume_practice",
                      "_set_queue_kind_policy", "_queue_kinds", "continue_spaced_practice"):
             method = getattr(KanaMemory, name)
             setattr(app, name, MethodType(getattr(method, "__wrapped__", method), app))

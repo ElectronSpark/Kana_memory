@@ -68,7 +68,8 @@ from .tutor_ui import TUTOR_PAGES
 from .retention_session_ui import DIAGNOSTIC_PAGES, RUNNING_PAGES as DIAGNOSTIC_RUNNING
 from .learning_store import LearningStore
 from .study_path_runtime import StudyPathRuntimeMixin, current_route_next
-from .home_counts import practice_header, record_due_text
+from . import home_counts
+from .home_counts import practice_header
 from .kana_learning_intro import should_introduce, intro_wait_until
 
 if current_platform == "android":
@@ -1872,9 +1873,6 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
         self.back_stack.pages.clear()
         self.alert("学习数据已删除，可以重新开始学习。练习设置和已安装资源已保留。")
 
-    def _stats_summary(self, stats):
-        return f"已学内容 {stats.get('total_items', stats.get('cards', stats.get('total_cards', 0)))} 项　{record_due_text(stats.get('due_items', stats.get('due', stats.get('due_count', 0))), stats.get('course_due'))}\n今日新增 {stats.get('new_items_today', stats.get('new_today', 0))} 项 · 作答 {stats.get('today_reviews', stats.get('reviews_today', 0))} 次"
-
     def model_label(self):
         return {"ready": "已下载，可离线识别", "checking": "正在检查日语模型…", "not_downloaded": "尚未下载日语模型", "downloading": "正在下载日语模型…", "error": "模型尚未就绪", "unavailable": "请在安卓版本使用"}.get(self.model_state, self.model_state)
 
@@ -2520,16 +2518,17 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
 
     @page_view()
     def show_progress(self, widget=None, **kwargs):
-        stats = self.store.stats()
-        # Review 2026-11-08 section 6: kana per character, course questions alongside.
-        progress = []
+        """学习记录 (design 02): 时间与进度 and the course records button (with a course store), then the
+        kana figures, then the recent kana reviews; texts from home_counts."""
+        stats, h = self.store.stats(), home_counts
+        children = []
         if getattr(self, "learning_store", None) is not None:
-            stats = {**stats, "course_due": StudyPathRuntimeMixin.record_course_due(self)}
-            # Design 12 UI4: "时间与进度", under every orientation.
-            progress = StudyPathRuntimeMixin.progress_rows(self, stats["course_due"])
+            # Design 12 UI4: "时间与进度", under every orientation; its 课程复习 line has the course due count.
+            children += [*StudyPathRuntimeMixin.progress_rows(self, StudyPathRuntimeMixin.record_course_due(self)),
+                         self.heading(h.RECORDS_COURSE_HEADING), ui.button(h.RECORDS_COURSE_BUTTON, self.show_learning_records)]
         records = [event for event in self.store.review_history(limit=20, newest_first=True, include_states=False)
                    if event["skill"] not in WORD_PRACTICE_KINDS]
-        children = [ui.label(self._stats_summary(stats), size=18, bold=True), self.note("假名按题型和字形保留记忆记录；单词用于练习其中的假名。识别失败、语音失败和未提交的题目不记作遗忘。"), ui.button("管理记忆卡片", self.show_cards), *progress, self.heading("最近复习")]
+        children += [self.heading(h.RECORDS_KANA_HEADING), ui.label(h.kana_record_lines(stats), size=18, bold=True), self.note("假名按题型和字形保留记忆记录；单词用于练习其中的假名。识别失败、语音失败和未提交的题目不记作遗忘。"), ui.button("管理记忆卡片", self.show_cards), self.heading(h.RECORDS_KANA_RECENT_HEADING)]
         for event in records:
             skill = next((title for title, value in PRACTICE_KINDS.items() if value == event["skill"]), event["skill"])
             item = self.repo.get_word(event["content_id"]) if event["skill"] in WORD_PRACTICE_KINDS else self.repo.get_kana(event["content_id"])
@@ -2538,8 +2537,8 @@ class KanaMemory(FeedbackLifecycleMixin, FeedbackUIMixin, StudyPathRuntimeMixin,
             when = app_clock.localize(datetime.fromisoformat(event["occurred_at_utc"])).strftime("%m-%d %H:%M")
             children.append(self.mixed_label(ContentText(title), f" · {skill}\n{rating} · {when}", size=14))
         if not records:
-            children.append(ui.label("完成练习并选择评级后，这里会出现记录。"))
-        self.screen("progress", "复习进度", *children)
+            children.append(ui.label(h.RECORDS_KANA_EMPTY))
+        self.screen("progress", h.RECORDS_TITLE, *children)
 
     def _activate_practice_lane(self, lane):
         if getattr(self.store, "practice_lane", "main") == lane:

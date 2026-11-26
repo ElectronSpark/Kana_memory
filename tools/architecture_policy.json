@@ -231,7 +231,7 @@
       "app/src/kanamemory/ai_ui.py": 43,
       "app/src/kanamemory/app.py": 98,
       "app/src/kanamemory/backup_ui.py": 2,
-      "app/src/kanamemory/content_library_ui.py": 2,
+      "app/src/kanamemory/content_library_ui.py": 1,
       "app/src/kanamemory/example_ui.py": 18,
       "app/src/kanamemory/feedback_analysis_ui.py": 3,
       "app/src/kanamemory/feedback_ui.py": 2,

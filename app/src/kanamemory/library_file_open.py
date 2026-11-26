@@ -114,7 +114,7 @@ def busy(*, blocked_reason=None, choosing=False, working=False, confirming=False
          unsaved=False):
     """Whether a request to open a file must be dropped (with BUSY_NOTICE): the guards that stop moving to
     another page today. ``blocked_reason``: the libraries page's own refusal (backup or restore, a practice
-    round, a focused page); ``choosing``: a library file is being chosen or checked; ``working``: the
+    page shown; a round the learner has left does not count); ``choosing``: a library file is being chosen or checked; ``working``: the
     libraries page shows its status block (a library file is read, checked or installed); ``confirming``: a
     leave confirmation is open; ``navigation_hidden``: the page hides the navigation bar (an answer, a lesson, a diagnostic, a report being written);
     ``unsaved``: a draft could not be saved."""

@@ -19,6 +19,8 @@ from .new_dispatch import study_path_available
 from .question_instruction_ui import instruction_widgets
 from .question_support import learning_text_role, option_labels
 from .structured_lesson_ui import block_widget, teaching_block
+from .card_reading_options import course_page as card_page
+from .card_quote_readings import drop_kana_echo
 
 INTRO_BATCH_PAGES = {"learning_card", "learning_batch_quiz"}
 _RECOGNITION_KINDS = {"word": ("vocab_meaning", READING_CHOICE_KIND), "grammar": ("grammar_meaning",)}
@@ -169,12 +171,13 @@ class IntroBatchUIMixin:
         from .new_dispatch import enabled
         return enabled(self)
 
-    def _intro_batch_known_ids(self, extra=()):
+    def _intro_batch_known_ids(self, extra=(), known=None):
         """Items a batch sentence may use besides the new one: ready items,
-        introduced kana (design 11 section 5, D5) and this batch."""
+        introduced kana (design 11 section 5, D5) and this batch. known: the
+        page's course_planning.known_ids read, when it has one already."""
         from .course_planning import known_ids
         state = self.learning_store.intro_batch()
-        return {*known_ids(self.store.queries),
+        return {*(known_ids(self.store.queries) if known is None else known),
                 *(entry["content_id"] for entry in (state or {}).get("entries", ())), *extra}
 
     def _intro_batch_continue(self):
@@ -253,16 +256,19 @@ class IntroBatchUIMixin:
         expected = dict(entry)
         self.screen("learning_card", "新项说明",
             u.label(f"第 {index + 1} / {len(state['entries'])} 项", size=13, color=u.MUTED),
-            *self.intro_batch_review_hint(), *self._intro_card_body(item, origin=True),
+            *self.intro_batch_review_hint(), *self._intro_card_body(item, origin=True, card=card_page(self)),
             u.button("下一项", lambda w: self.choose_intro_card("next", expected=expected), primary=True),
             u.button("稍后再学", self.leave_learning))
 
-    def _intro_card_body(self, item, *, origin=False):
+    def _intro_card_body(self, item, *, origin=False, card=None):
         """说明卡 content, shared by the card page and wrong-answer feedback.
 
         origin=True adds the loanword source under the meaning; the card opened during a formal
-        question (learning_hint) leaves it out.
+        question (learning_hint) leaves it out. card: card_reading_options.course_page of a page
+        before an answer (the card page, learning_hint); None after an answer: every card reading.
         """
+        card = card or {}
+        known = card.get("known_ids")
         word = item["family"] == "word"
         children = [u.label(item["title"], size=25, bold=True, color=u.GREEN, text_role="study" if word else "ui")]
         instruction = item.get("instruction", {})
@@ -276,7 +282,7 @@ class IntroBatchUIMixin:
                 children.append(u.label(meaning, size=18))
             if origin:
                 children.extend(origin_labels(item))
-            children.append(self.example_cards(item, limit=1, known_ids=self._intro_batch_known_ids()))
+            children.append(self.example_cards(item, limit=1, known_ids=self._intro_batch_known_ids(known=known)))
         else:
             from .structured_lessons import lesson_view
             function = instruction.get("summary") or lesson_view(item).get("focus")
@@ -284,7 +290,7 @@ class IntroBatchUIMixin:
                 children.append(u.label(function, size=17))
             if instruction.get("rule"):
                 children.append(block_widget(u, {"kind": "pattern", "label": "结构", "text": instruction["rule"]}))
-            children.append(self.example_cards(item, limit=2, known_ids=self._intro_batch_known_ids()))
+            children.append(self.example_cards(item, limit=2, known_ids=self._intro_batch_known_ids(known=known)))
             if instruction.get("contrast"):
                 children.append(block_widget(u, {"kind": "points", "label": "常见误用",
                                                  "items": [instruction["contrast"]]}, 1))
@@ -294,7 +300,7 @@ class IntroBatchUIMixin:
                     explanation.clear()
                     widget.text = "展开讲解"
                 else:
-                    explanation.add(teaching_block(u, item, speak=self.speak_text))
+                    explanation.add(teaching_block(u, item, speak=self.speak_text, **card))
                     widget.text = "收起讲解"
             children.extend([u.button("展开讲解", toggle_explanation, compact=True), explanation])
         return children
@@ -403,7 +409,7 @@ class IntroBatchUIMixin:
             self._intro_quiz_result.add(answer_furigana_block(self, expected, size=14, bold=True,
                                                               text_role=learning_text_role(expected, "answer")))
         if expected.get("feedback"):
-            self._intro_quiz_result.add(u.label(shown_explanation(expected, expected["feedback"])))
+            self._intro_quiz_result.add(u.label(shown_explanation(expected, drop_kana_echo(expected["feedback"]))))
         if not correct:
             # The card again; the item then waits at the end of the quiz unless
             # the store released it (design 12 Q2, breadth first).

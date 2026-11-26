@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from .navigation import page_view
 from .answer_result_ui import answer_furigana_block, answer_text, asked_text, shown_answer, shown_explanation
+from .card_quote_readings import drop_kana_echo
 from .retention_session import DiagnosticStore, BUDGETS, LIVE
 from .question_instruction_ui import instruction_widgets
 from .question_support import build_prompt_block, clean_prompt_preferences, learning_text_role, option_labels
@@ -515,7 +516,7 @@ class DiagnosticUIMixin(DiagnosticAIUIMixin, DiagnosticDialogueUIMixin):
         if viewed.get('correct') is not True and result['answered_text'] and result['answered_text'] != q['answer'] and near is None:
             entered = answer_label(q, result['answered_text']) if pitch else shown_answer(q, result['answered_text'])
             children.append(entered_answer_row(u, entered, text_role=learning_text_role(q, 'answer')))
-        explanation = distinct_explanation(q.get('feedback'), answer_text(q))
+        explanation = drop_kana_echo(distinct_explanation(q.get('feedback'), answer_text(q)))
         asked = None if pitch else asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
         from .answer_result_ui import known_wrong_note

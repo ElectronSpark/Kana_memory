@@ -13,8 +13,13 @@ Targets
              (kanamemory-sentence-annotations v1, table sentence; segments without accent numbers). A gap of a
              prompt is never analysed as text: the pieces between gaps are analysed one by one.
   cards      each quotation with kanji inside 「」 of teaching-card prose (card_quote_readings.card_fields of each
-             lesson's view and original sections): spans in the card_quote_readings.json format, keyed by content
-             id, field and quotation. An entry of --card-readings (default: the app's resolved copy) is kept.
+             lesson's view and original sections): spans in the card_quote_readings.json format (version 2),
+             keyed by content id, field and quotation. An entry of --card-readings (default: the app's resolved
+             copy) is kept; a version-1 file there counts as no entries (a line in summary.json says so).
+             Every card span carries its course word: [written form, reading] of the course word lesson whose
+             written form is the token's dictionary or written form and whose reading is the one chosen here
+             for that form (whatever the span's source), else null; only a key the app's lookup
+             (question_readings.course_words) finds is written.
   An existing annotation is never overwritten: a text or quotation that has one is not a target.
 
 Sources, in order; every span records its own
@@ -151,8 +156,12 @@ def _strings(value):
 class CourseKnowledge:
     """What the course knows about readings: word lessons, reviewed overrides, homograph rules, dictionary."""
 
-    def __init__(self, words=None, overrides=(), homographs=None, dictionary=None):
+    def __init__(self, words=None, overrides=(), homographs=None, dictionary=None, word_keys=()):
         self.words = {form: dict(readings) for form, readings in (words or {}).items()}  # form -> {reading: [ids]}
+        # (written form, reading) of the course word lessons as the app looks them up (card spans' fifth element).
+        self.word_keys = defaultdict(set)
+        for title, reading in word_keys:
+            self.word_keys[title].add(reading)
         self.overrides = [rule for rule in overrides if isinstance(rule, dict) and isinstance(rule.get("span"), str)
                           and "when_ref" not in rule and (rule.get("reading") is None
                                                           or HIRAGANA_READING.fullmatch(str(rule["reading"])))]
@@ -161,7 +170,12 @@ class CourseKnowledge:
         self.dictionary = {form: set(values) for form, values in (dictionary or {}).items()}
 
     @classmethod
-    def from_items(cls, items, *, overrides=(), homographs=None, dictionary=None):
+    def from_items(cls, items, *, overrides=(), homographs=None, dictionary=None, word_keys=None):
+        """word_keys: the app's (title, reading) keys of the course word lessons; None: those of ``items``
+        by the app's own projection (word_sound_questions.word_pool, the source of course_words)."""
+        if word_keys is None:
+            from kanamemory.word_sound_questions import word_pool
+            word_keys = {(row[1], row[2]) for row in word_pool(item for item in items if item.get("family") == "word")}
         words = defaultdict(lambda: defaultdict(list))
         for item in items:
             if item.get("family") != "word":
@@ -173,7 +187,17 @@ class CourseKnowledge:
                     for reading in dict.fromkeys(readings):
                         if HIRAGANA_READING.fullmatch(reading):
                             words[form][reading].append(item["id"])
-        return cls(words, overrides, homographs, dictionary)
+        return cls(words, overrides, homographs, dictionary, word_keys)
+
+    def word_key(self, token, reading):
+        """[written form, reading] of the course word lesson that teaches ``token`` as read here (``reading``:
+        the reading chosen for its surface): its dictionary form or written form is the lesson's written form and
+        that reading is the lesson's (an inflected form through inflected_reading), else None."""
+        for form in dict.fromkeys((token.lemma, token.surface)):
+            for lesson_reading in sorted(self.word_keys.get(form, ())):
+                if inflected_reading(token.surface, form, lesson_reading) == reading:
+                    return [form, lesson_reading]
+        return None
 
     def readings_of(self, *forms):
         """Every reading the lessons and the dictionary know for these written forms."""
@@ -458,6 +482,7 @@ def text_spans(text, analysed, knowledge):
                 continue
             spans.append({"start": offset + start, "end": offset + start + len(token.surface),
                           "surface": token.surface, "reading": reading, "source": source, "lemma": token.lemma,
+                          "word": knowledge.word_key(token, reading),
                           "heteronym": source == "analyser" and knowledge.is_heteronym(token),
                           "known_readings": sorted(knowledge.readings_of(token.surface, token.lemma))})
     return spans, problems
@@ -477,8 +502,8 @@ def sentence_record(text, spans):
 
 
 def quote_entry(quote, spans):
-    """Card spans [start, end, reading, source] of one quotation: the kanji parts, never one the quotation already
-    reads right after it (「学校（がっこう）」)."""
+    """Card spans [start, end, reading, source, word] of one quotation: the kanji parts, never one the quotation
+    already reads right after it (「学校（がっこう）」); every part of a word carries that word's course word."""
     result, problems = [], []
     for span in spans:
         parts = kanji_parts(span["surface"], span["reading"])
@@ -488,7 +513,7 @@ def quote_entry(quote, spans):
         for start, end, reading in parts:
             start, end = span["start"] + start, span["start"] + end
             if not card_format.reading_given(quote, end) and HIRAGANA_READING.fullmatch(reading):
-                result.append([start, end, reading, span["source"]])
+                result.append([start, end, reading, span["source"], span.get("word")])
     return result, problems
 
 
@@ -503,12 +528,16 @@ def existing_sentences(path):
 
 
 def existing_cards(path):
+    """(items, note) of a card quote readings file: a version-1 file (no course word per span) gives no items and a
+    note for summary.json; no file gives ({}, None)."""
     if path is None or not Path(path).is_file():
-        return {}
+        return {}, None
     value = json.loads(Path(path).read_text("utf-8"))
+    if value.get("format") == card_format.FORMAT and value.get("version") == 1:
+        return {}, f"{path}: version 1 (spans without their course word), treated as no existing entries"
     if value.get("format") != card_format.FORMAT or value.get("version") != card_format.VERSION:
         raise ValueError("Not a card quote readings file: " + str(path))
-    return value["items"]
+    return value["items"], None
 
 
 def card_targets(items):
@@ -574,6 +603,7 @@ def annotate(analyser, knowledge, *, sentences=(), cards=(), have_sentences=(), 
             result_cards[cid][field][quote] = entry
             totals["card quotations with candidates"] += 1
             totals["card spans"] += len(entry)
+            totals["card spans with a course word"] += sum(span[4] is not None for span in entry)
     return {"sentences": result_sentences, "cards": {cid: dict(f) for cid, f in result_cards.items()},
             "review": review, "totals": totals, "engine": engine}
 
@@ -611,8 +641,9 @@ def agreement(analyser, knowledge, references):
     return {"counts": {label: dict(row) for label, row in counts.items()}, "disagreements": samples}
 
 
-def write_outputs(out, result, *, card_base=None, agreement_result=None):
-    """Write the candidate files, the review file and the summary into ``out`` (a new or empty folder)."""
+def write_outputs(out, result, *, card_base=None, agreement_result=None, notes=()):
+    """Write the candidate files, the review file and the summary into ``out`` (a new or empty folder); notes:
+    lines for summary.json (an input file that was not used)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     database = out / "sentence_annotations.candidates.sqlite3"
@@ -641,6 +672,8 @@ def write_outputs(out, result, *, card_base=None, agreement_result=None):
     (out / "annotation_source.json").write_text(json.dumps(COURSE_SOURCE_RECORD, ensure_ascii=False, indent=1)
                                                 + "\n", "utf-8")
     summary = {"engine": result["engine"], "totals": dict(sorted(result["totals"].items()))}
+    if notes:
+        summary["notes"] = list(notes)
     if agreement_result is not None:
         (out / "agreement.json").write_text(json.dumps(agreement_result, ensure_ascii=False, indent=1) + "\n",
                                             "utf-8")
@@ -709,10 +742,12 @@ def main(argv=None):
         parser.error("--out must be outside the app's resources")
     annotations = args.annotations or side_file_path("sentence_annotations.sqlite3")
     card_file = args.card_readings or side_file_path(card_format.FILE)
+    from kanamemory.question_readings import course_words
     items = learning_items()
     knowledge = CourseKnowledge.from_items(items, overrides=load_overrides(args.overrides),
                                            homographs=load_homographs(args.markers),
-                                           dictionary=load_dictionary(lexicon_path()))
+                                           dictionary=load_dictionary(lexicon_path()),
+                                           word_keys=frozenset(course_words()))
     sentences, cards = [], []
     if "sentences" in kinds:
         from sentence_annotation_corpus import collect_sentence_records
@@ -723,7 +758,7 @@ def main(argv=None):
         cards = card_targets(items)
         cards = cards[:args.limit] if args.limit else cards
     analyser = SubprocessAnalyser(args.analyser_python)
-    base = existing_cards(card_file)
+    base, note = existing_cards(card_file)
     try:
         result = annotate(analyser, knowledge, sentences=sentences, cards=cards,
                           have_sentences=existing_sentences(annotations), have_cards=base)
@@ -735,7 +770,8 @@ def main(argv=None):
     except AnalyserUnavailable as error:
         print("No analyser: " + str(error), file=sys.stderr)
         return EXIT_NO_ANALYSER
-    summary = write_outputs(args.out, result, card_base=base, agreement_result=checked)
+    summary = write_outputs(args.out, result, card_base=base, agreement_result=checked,
+                            notes=[note] if note else ())
     print(json.dumps(summary, ensure_ascii=False, indent=1))
     return 0
 

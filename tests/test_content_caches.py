@@ -1,7 +1,7 @@
 """Caches derived from the course content: one registry (content_caches), dropped together.
 
 A test once patched a synthetic course in, a result page read the course word table through
-question_readings._course_words, and that table stayed cached for the rest of the process: later
+question_readings.course_words, and that table stayed cached for the rest of the process: later
 result pages showed a course word without its kana. Every cached function and every module-level
 table of the app is therefore either registered with content_caches (content_pack drops them all in
 clear_cache and whenever it builds a catalogue with another token) or exempt here with its reason;
@@ -27,7 +27,7 @@ REGISTERED = "registered"
 # "file::name" -> REGISTERED, or why the cache cannot outlive the content it was computed from.
 CACHES = {
     # Derived from the catalogue (learning_content and the namespaces read at import): registered.
-    "question_readings.py::_course_words": REGISTERED,
+    "question_readings.py::course_words": REGISTERED,
     "question_readings.py::_lesson_forms": REGISTERED,
     "question_readings.py::_ENTRY_MEMO": REGISTERED,  # its key does not name the lesson it was located in
     "read_only_lessons.py::_MEMO": REGISTERED,  # per connection; dropped with the catalogue it compared against
@@ -200,12 +200,12 @@ def test_a_course_patched_in_leaves_no_word_table_behind(monkeypatch, drop_conte
     from kanamemory import learning_questions, question_readings, result_readings
     monkeypatch.setattr(learning_content, "_ITEMS", {"word:synthetic:park": _word("word:synthetic:park", "公園", "こうえん")})
     assert "こうえん" in _annotated("公園へ行きます")
-    assert question_readings._course_words.cache_info().currsize == 1 and result_readings._TITLES[0] is not None
+    assert question_readings.course_words.cache_info().currsize == 1 and result_readings._TITLES[0] is not None
     monkeypatch.setattr(learning_content, "_ITEMS",
                         {"word:synthetic:school": _word("word:synthetic:school", "学校", "がっこう")})
     assert _annotated("学校へ行きます") == "学校へ行きます"  # the table of the course before: no kana
     content_caches.clear_all()
-    assert question_readings._course_words.cache_info().currsize == 0
+    assert question_readings.course_words.cache_info().currsize == 0
     assert learning_questions._word_pool.cache_info().currsize == 0 and result_readings._TITLES == [None, None]
     assert "がっこう" in _annotated("学校へ行きます")
 

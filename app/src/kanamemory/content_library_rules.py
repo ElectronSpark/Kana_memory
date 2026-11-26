@@ -601,12 +601,14 @@ def same_version_error(manifest, installed):
     return f"这个内容库的版本 {manifest['library_version']} 已经安装，不需要再安装"
 
 
-def change_blocked_reason(*, backup_busy=False, round_running=False, focused=False):
-    """Section 5.3: no exclusive stage and no practice round in progress."""
+def change_blocked_reason(*, backup_busy=False, focused=False):
+    """Section 5.3: no exclusive stage (backup or restore) and the learner not on a practice page
+    (``focused``). A round the learner has left does not block: every change takes effect after the
+    restart, whose ordinary exit and start archive that round as always."""
     if backup_busy:
         return "备份或恢复正在进行，请等它结束后再更改内容库。"
-    if round_running or focused:
-        return "当前练习轮次还没有结束，请先完成或退出练习，再更改内容库。"
+    if focused:
+        return "当前练习还没有结束，请先完成或退出练习，再更改内容库。"
     return None
 
 

@@ -7,8 +7,10 @@ from unittest.mock import Mock
 from kanamemory import practice_round
 from kanamemory.app import KanaMemory, DEFAULT_SUBTITLE, KANA_ASSEMBLY_PAGE
 from kanamemory.content_availability import LIBRARY_DISABLED_TEXT
-from kanamemory.home_counts import (backlog_threshold, home_counts, next_review_text, practice_header,
-                                    record_due_text, review_backlog_hint, show_next_review, teaching_count)
+from kanamemory import home_counts as counts
+from kanamemory.arrangement import display
+from kanamemory.home_counts import (backlog_threshold, home_counts, kana_record_lines, next_review_text,
+                                    practice_header, review_backlog_hint, show_next_review, teaching_count)
 from kanamemory.study_path_runtime import registry_service_key
 from kanamemory.study_path_ui import ROUTE_STATUS, ROUTE_REFUSED_TEXT
 from support.app_fixtures import question_app, setup_app  # noqa: F401
@@ -51,8 +53,10 @@ def test_texts():
     assert show_next_review(0, 3, moment) and not show_next_review(1, 3, moment)
     assert not show_next_review(0, 0, moment) and not show_next_review(0, 3, None)
     assert practice_header(24, 0, 30) == "本轮剩 24 题 · 第 1 / 30 题"
-    assert record_due_text(35) == "假名到期 35 字"
-    assert record_due_text(35, 4) == "假名到期 35 字 · 课程到期 4 题"
+    # The records page's kana part: kana numbers only, each line naming what it counts.
+    assert kana_record_lines({"total_items": 12, "due_items": 35, "new_items_today": 2, "today_reviews": 6}) == (
+        "已学 12 项 · 到期 35 字\n今日新增 2 项 · 作答 6 次")
+    assert kana_record_lines({}) == "已学 0 项 · 到期 0 字\n今日新增 0 项 · 作答 0 次"
     assert ROUTE_STATUS["library_unavailable"] == LIBRARY_DISABLED_TEXT
     assert ROUTE_STATUS["refused"] == ROUTE_REFUSED_TEXT == "路线被拒（前缀不符）"
 
@@ -116,9 +120,35 @@ def test_records_page_names_kana_characters_and_course_questions(path_app):
                             now=app._test_clock[0] - timedelta(days=7))
     app.show_progress = MethodType(KanaMemory.show_progress.__wrapped__, app)
     app.show_cards = Mock()
+    app.show_learning_records = Mock()
     app.show_progress()
     text = text_of(app.body)
-    assert "假名到期 1 字 · 课程到期 0 题" in text and "最近复习" in text
+    assert "已学 1 项 · 到期 1 字" in text and "课程复习：到期未答 0 题" in text
+    assert "假名到期" not in text and "课程到期" not in text
+    # 学习记录 (design 02): 时间与进度, 课程 with its button, 假名 with the kana figures, the recent kana reviews.
+    assert app.page == "progress" and app.title == counts.RECORDS_TITLE == "学习记录"
+    texts = [str(view.text) for view in descendants(app.body) if view.text]
+    order = [display.PROGRESS_HEADING, counts.RECORDS_COURSE_HEADING, counts.RECORDS_COURSE_BUTTON,
+             counts.RECORDS_KANA_HEADING, kana_record_lines(app.store.stats()), "管理记忆卡片",
+             counts.RECORDS_KANA_RECENT_HEADING]
+    positions = [texts.index(part) for part in order]
+    assert positions == sorted(positions)
+    assert texts[positions[-1] + 1:] and counts.RECORDS_KANA_EMPTY not in texts  # one kana record below
+    next(view for view in descendants(app.body) if view.text == counts.RECORDS_COURSE_BUTTON).on_press(None)
+    app.show_learning_records.assert_called_once()
+
+
+def test_records_page_without_a_course_store_and_without_kana_records(path_app, monkeypatch):
+    app = path_app
+    monkeypatch.setattr(app, "learning_store", None)
+    app.show_cards = Mock()
+    KanaMemory.show_progress.__wrapped__(app)
+    texts = [str(view.text) for view in descendants(app.body) if view.text]
+    assert display.PROGRESS_HEADING not in texts and counts.RECORDS_COURSE_HEADING not in texts
+    assert counts.RECORDS_COURSE_BUTTON not in texts
+    assert texts.index(counts.RECORDS_KANA_HEADING) < texts.index(counts.RECORDS_KANA_RECENT_HEADING)
+    assert texts[texts.index(counts.RECORDS_KANA_RECENT_HEADING) + 1:] == [counts.RECORDS_KANA_EMPTY]
+    assert "已学 0 项 · 到期 0 字\n今日新增 0 项 · 作答 0 次" in texts
 
 
 def test_service_rebuilds_when_registry_changes(path_app):

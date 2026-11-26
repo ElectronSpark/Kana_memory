@@ -217,5 +217,8 @@ def test_merge_follows_priority_singletons_and_contributions():
 def test_change_blocked_reasons():
     assert rules.change_blocked_reason() is None
     assert "备份" in rules.change_blocked_reason(backup_busy=True)
-    assert "练习" in rules.change_blocked_reason(round_running=True)
-    assert "练习" in rules.change_blocked_reason(focused=True)
+    # Only a practice page blocks; a round the learner has left is no argument any more (design 08 5.3).
+    assert rules.change_blocked_reason(focused=True) == "当前练习还没有结束，请先完成或退出练习，再更改内容库。"
+    assert "备份" in rules.change_blocked_reason(backup_busy=True, focused=True)
+    with pytest.raises(TypeError):
+        rules.change_blocked_reason(round_running=True)

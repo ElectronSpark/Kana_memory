@@ -31,7 +31,7 @@ import re
 
 from . import word_sound_questions as sound
 from .content_caches import register as register_content_cache
-from .question_readings import _GAP, _KANJI, _course_words, inline_kana, question_entry
+from .question_readings import _GAP, _KANJI, course_words, inline_kana, question_entry
 
 _KANJI_RUN = re.compile(r"[㐀-䶿一-鿿豈-﫿々]+")
 _KANA = re.compile(r"[ぁ-ゖァ-ヺー]")
@@ -74,7 +74,7 @@ def _lesson(content_id):
 
 def _course_reading(title):
     """The one reading the course teaches for a word written so, else None."""
-    readings = {reading for (written, reading) in _course_words() if written == title}
+    readings = {reading for (written, reading) in course_words() if written == title}
     return next(iter(readings)) if len(readings) == 1 else None
 
 
@@ -138,7 +138,7 @@ def _tile(text, start, surfaces, depth=0):
 def _course_titles():
     """{first character: [(title, reading)]} of the course words with one reading, longest title first."""
     readings = {}
-    for title, reading in _course_words():
+    for title, reading in course_words():
         readings.setdefault(title, set()).add(reading)
     index = {}
     for title, values in readings.items():
@@ -162,7 +162,7 @@ register_content_cache(_clear_titles, "result_readings._TITLES")
 
 def _course_word(text, start):
     """(end, spans) of the longest course word written at start with one reading, else None."""
-    table = _course_words()
+    table = course_words()
     if _TITLES[0] is not table:
         _TITLES[:] = [table, _course_titles()]
     for title, reading in _TITLES[1].get(text[start:start + 1], ()):

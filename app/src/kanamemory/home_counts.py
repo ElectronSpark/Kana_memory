@@ -103,7 +103,21 @@ def practice_header(remaining: int, index: int, total: int) -> str:
     return f"本轮剩 {remaining} 题 · 第 {min(index + 1, total)} / {total} 题"
 
 
-def record_due_text(kana_due_chars: int, course_due: int | None = None) -> str:
-    """Records page due line; course_due None when no course store is attached."""
-    text = f"假名到期 {kana_due_chars} 字"
-    return text if course_due is None else text + f" · 课程到期 {course_due} 题"
+# The page behind the home page's 学习记录 (design 02): every part is labelled with what it counts; the
+# course's due count is in the 时间与进度 block's 课程复习 line and is not repeated in the kana part.
+RECORDS_TITLE = "学习记录"
+RECORDS_COURSE_HEADING = "课程"
+RECORDS_COURSE_BUTTON = "课程学习记录"
+RECORDS_KANA_HEADING = "假名"
+RECORDS_KANA_RECENT_HEADING = "最近的假名复习"
+RECORDS_KANA_EMPTY = "完成假名练习并选择评级后，这里会出现记录。"
+
+
+def kana_record_lines(stats: dict) -> str:
+    """The kana part's two lines from the kana store's stats(): learned and due (one per character),
+    then today's new items and answers. Kana numbers only."""
+    learned = stats.get("total_items", stats.get("cards", stats.get("total_cards", 0)))
+    due = stats.get("due_items", stats.get("due", stats.get("due_count", 0)))
+    new = stats.get("new_items_today", stats.get("new_today", 0))
+    answers = stats.get("today_reviews", stats.get("reviews_today", 0))
+    return f"已学 {learned} 项 · 到期 {due} 字\n今日新增 {new} 项 · 作答 {answers} 次"

@@ -123,7 +123,7 @@ def test_kanji_parts_align_the_reading_with_the_kana_of_the_word():
 
 def test_annotate_never_overwrites_and_flags_for_review(tmp_path):
     analyser = FakeAnalyser(TABLE)
-    have_cards = {"grammar:t:x": {"focus": {"学校へ行った": [[0, 2, "がっこう", "course"]]}}}
+    have_cards = {"grammar:t:x": {"focus": {"学校へ行った": [[0, 2, "がっこう", "course", ["学校", "がっこう"]]]}}}
     result = tool.annotate(analyser, knowledge(),
                            sentences=[(MISE, "shared_example"), ("学校へ行った", "shared_example"),
                                       ("明日来ます", "public_question_prompt"), ("いく", "shared_example")],
@@ -132,7 +132,8 @@ def test_annotate_never_overwrites_and_flags_for_review(tmp_path):
     assert set(result["sentences"]) == {MISE, "明日来ます"}  # an existing row and a text without kanji: no target
     assert list(result["cards"]) == ["grammar:t:x"] and list(result["cards"]["grammar:t:x"]) == ["blocks.0.text"]
     assert result["cards"]["grammar:t:x"]["blocks.0.text"][MISE] == [
-        [0, 1, "みせ", "course"], [2, 4, "くじ", "analyser"], [5, 6, "あ", "homograph"]]
+        [0, 1, "みせ", "course", ["店", "みせ"]], [2, 4, "くじ", "analyser", None],
+        [5, 6, "あ", "homograph", ["開く", "あく"]]]
     assert [row["surface"] for row in result["review"]["heteronym"]] == ["明日"]
     totals = result["totals"]
     assert totals["sentence spans by homograph"] == 1 and totals["sentence flagged heteronym"] == 1
@@ -144,6 +145,51 @@ def test_annotate_never_overwrites_and_flags_for_review(tmp_path):
         "「店（みせ）は九時（くじ）に開（あ）く。」"
     review = json.loads((tmp_path / "review.json").read_text("utf-8"))
     assert review["heteronym"][0]["source"] == "analyser"
+    assert written["version"] == cards.VERSION == 2
+
+
+def _words(text, known=None):
+    analysed, _ = FakeAnalyser(TABLE).tokenise([text])
+    spans, _ = tool.text_spans(text, analysed, known or knowledge())
+    return {s["surface"]: s["word"] for s in spans}
+
+
+def test_every_span_carries_the_course_word_that_teaches_it_as_read_here():
+    # A course word in its dictionary form, and one whose chosen reading is its lesson's (homograph rule).
+    assert _words(MISE) == {"店": ["店", "みせ"], "九時": None, "開く": ["開く", "あく"]}
+    # An inflected form: its dictionary form is the lesson's written form and the derived reading the lesson's.
+    assert _words("学校へ行った") == {"学校": ["学校", "がっこう"], "行っ": ["行く", "いく"]}
+    # A word the course does not teach (木) and an override whose reading has no lesson (下 した): null.
+    assert _words("木の下で") == {"木": None, "下": None}
+    # A homograph whose chosen reading is not the lesson's: only 開く ひらく is taught, the rule reads あく.
+    only_hiraku = knowledge(word_keys={("開く", "ひらく"), ("店", "みせ")})
+    assert _words(MISE, only_hiraku) == {"店": ["店", "みせ"], "九時": None, "開く": None}
+    # A key is written only when the app's lookup has it: the same lessons without the lookup's keys give null.
+    assert _words("学校へ行った", knowledge(word_keys=set())) == {"学校": None, "行っ": None}
+    # The irregular 来る: its stem reading cannot be derived from the lesson's, so no key.
+    assert _words("明日来ます")["来"] is None
+
+
+def test_the_default_keys_are_the_apps_projection_of_the_lessons():
+    from kanamemory.word_sound_questions import word_pool
+    keys = {(row[1], row[2]) for row in word_pool([item for item in LESSONS if item["family"] == "word"])}
+    assert knowledge().word_keys == {title: {r for t, r in keys if t == title} for title, _ in keys}
+
+
+def test_a_version_one_card_file_counts_as_no_existing_entries(tmp_path):
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"format": cards.FORMAT, "version": 1,
+                               "items": {"grammar:t:x": {"focus": {"学校": [[0, 2, "がっこう", "course"]]}}}}), "utf-8")
+    items, note = tool.existing_cards(old)
+    assert items == {} and "version 1" in note
+    current = tmp_path / "current.json"
+    current.write_text(json.dumps({"format": cards.FORMAT, "version": 2, "items": {"a": {}}}), "utf-8")
+    assert tool.existing_cards(current) == ({"a": {}}, None)
+    assert tool.existing_cards(tmp_path / "absent.json") == ({}, None)
+    result = tool.annotate(FakeAnalyser(TABLE), knowledge(), cards=[("grammar:t:x", "focus", MISE)])
+    summary = tool.write_outputs(tmp_path / "out", result, card_base=items, notes=[note])
+    assert summary["notes"] == [note] and summary["totals"]["card spans with a course word"] == 2
+    assert json.loads((tmp_path / "out" / "summary.json").read_text("utf-8"))["notes"] == [note]
 
 
 def test_the_candidate_rows_are_the_app_format_once_the_course_source_is_known(tmp_path, monkeypatch):

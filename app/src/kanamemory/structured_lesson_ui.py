@@ -3,7 +3,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
-from .card_quote_readings import CardReadings
+from .card_quote_readings import CardReadings, drop_kana_echo
 from .structured_lessons import lesson_view, original_sections
 from .typography import configure_study_ranges
 
@@ -38,9 +38,10 @@ def unbroken_groups(text):
 
 def block_widget(u, block, index=0, readings=None):
     """One teaching block; readings (card_quote_readings.CardReadings of its card) adds the readings of the
-    Japanese inside its 「」 (field blocks.<index>...); without it the texts are shown as they are."""
+    Japanese inside its 「」 (field blocks.<index>...); without it the texts are shown as they are, but for a
+    bracket that only repeats the kana before it (card_quote_readings.drop_kana_echo, display only)."""
     def shown(field, text):
-        return readings.text(f"blocks.{index}.{field}", text) if readings is not None else text
+        return readings.text(f"blocks.{index}.{field}", text) if readings is not None else drop_kana_echo(text)
     if block['kind'] == 'prosody':
         from .prosody_cue_ui import cue_widget
         result = cue_widget({'prompt': block['text'], 'prosody_cue': block['prosody_cue']})
@@ -115,11 +116,13 @@ def block_widget(u, block, index=0, readings=None):
     return result
 
 
-def teaching_block(u, item, *, compact=False, speak=None, question=None):
+def teaching_block(u, item, *, compact=False, speak=None, question=None, furigana=True, known_ids=None):
     """The teaching card of ``item``. question: the question shown on the same page; the readings of the
-    Japanese inside the card's 「」 leave out what that question hides (card_quote_readings)."""
+    Japanese inside the card's 「」 leave out what that question hides (card_quote_readings). furigana,
+    known_ids: a course page before or without an answer (card_reading_options.course_page); a learned word
+    then keeps its reading only while the switch is on. Without known_ids every reading is drawn."""
     view = lesson_view(item)
-    readings = CardReadings(item.get("id"), question)
+    readings = CardReadings(item.get("id"), question, furigana=furigana, known_ids=known_ids)
     blocks = deepcopy(view["blocks"][:1] if compact else view["blocks"])
     from .lesson_diagram_ui import diagram_widget
     diagram = view.get('diagram')
@@ -156,10 +159,11 @@ def teaching_block(u, item, *, compact=False, speak=None, question=None):
     return result
 
 
-def original_notes(u, item):
-    """Secondary, local expansion; never changes navigation or study progress."""
+def original_notes(u, item, *, furigana=True, known_ids=None):
+    """Secondary, local expansion; never changes navigation or study progress. furigana, known_ids: as
+    teaching_block's."""
     sections = original_sections(item)
-    readings = CardReadings(item.get("id"))
+    readings = CardReadings(item.get("id"), furigana=furigana, known_ids=known_ids)
     body = u.col()
     opened = [False]
 

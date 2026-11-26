@@ -119,6 +119,62 @@ def test_changes_are_refused_during_backup_or_practice_round(library_app):
     assert app.store.get_setting(rules.REGISTRY_SETTING)["libraries"][1]["enabled"] is True
 
 
+PRACTICE_BLOCK = "当前练习还没有结束，请先完成或退出练习，再更改内容库。"
+
+
+@pytest.mark.parametrize("where", ["home", "content_libraries"])
+def test_a_left_sealed_round_does_not_block_changes_but_a_practice_page_does(library_app, where):
+    # Design 08 section 5.3 (device walk 0.36.23): 加练 ended with 结束加练 leaves a sealed, unfinished round;
+    # only the practice page itself blocks a library change, the left round takes no part.
+    from kanamemory import practice_round
+    app = library_app
+    app.platform.can_restart = False  # the change stays pending; no restart in this test
+    practice_round.enable(app.store)
+    practice_round.begin(app.store)
+    practice_round.seal(app.store)
+    assert practice_round.planned_round_running(app.store)
+    if where == "home":
+        app.show_home()
+    app._practice_context = False
+    app.show_content_libraries()
+    asyncio.run(app.add_content_library())
+    app.platform.import_library_pack.assert_awaited_once()
+    assert app.page == "content_library_precheck"
+    click(app, "安装")
+    assert app.store.get_setting(rules.REGISTRY_SETTING)["libraries"][1]["library_id"] == "author.n3"
+    switch = app.content_library_switches["author.n3"]
+    switch.value = False
+    switch.on_change(switch)
+    assert app.store.get_setting(rules.REGISTRY_SETTING)["libraries"][1]["enabled"] is False
+    assert app._library_file_open_busy() is False
+    # On a practice page: refused with the sentence (the round still sealed and unfinished).
+    app._practice_context = True
+    app.alert.reset_mock()
+    switch = app.content_library_switches["author.n3"]
+    switch.value = True
+    switch.on_change(switch)
+    assert switch.value is False and app.alert.call_args[0][0] == PRACTICE_BLOCK
+    assert app.store.get_setting(rules.REGISTRY_SETTING)["libraries"][1]["enabled"] is False
+    app.main_window.dialog = AsyncMock(return_value=True)
+    asyncio.run(app.remove_content_library("author.n3"))
+    app.main_window.dialog.assert_not_awaited()
+    assert app.alert.call_args[0][0] == PRACTICE_BLOCK
+    asyncio.run(app.add_content_library())
+    assert app.alert.call_args[0][0] == PRACTICE_BLOCK and app.platform.import_library_pack.await_count == 1
+    assert app._library_file_open_busy() is True
+    # Backup busy as before, whatever the page.
+    app._practice_context = False
+    app._backup_busy = True
+    asyncio.run(app.add_content_library())
+    assert "备份" in app.alert.call_args[0][0]
+    app._backup_busy = False
+    # Back off the practice page: removing works with the round still sealed.
+    asyncio.run(app.remove_content_library("author.n3"))
+    app.main_window.dialog.assert_awaited_once()
+    assert [e["library_id"] for e in app.store.get_setting(rules.REGISTRY_SETTING)["libraries"]] == [rules.CORE_LIBRARY_ID]
+    assert practice_round.planned_round_running(app.store)  # the left round is not otherwise touched
+
+
 def test_bad_file_is_reported_and_leaves_the_list_unchanged(library_app):
     app = library_app
     app.platform.import_library_pack = AsyncMock(return_value=b"not a zip")

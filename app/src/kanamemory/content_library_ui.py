@@ -185,7 +185,7 @@ class ContentLibraryUIMixin:
     async def _restart_through_close(self):
         """The one restart path (立即重启 and the automatic restart): the App's normal close, then the
         platform's restart. Returns (why it did not restart, the blocking reason): "blocked" (backup,
-        restore or a practice round), "unsupported" (no restart on this platform), "refused" (the close
+        restore or a practice page shown), "unsupported" (no restart on this platform), "refused" (the close
         refused; nothing was closed). A platform that refuses after the close ends the app as before."""
         reason = self._content_library_blocked()
         if reason:
@@ -284,9 +284,9 @@ class ContentLibraryUIMixin:
         return self._restart_process()
 
     def _content_library_blocked(self):
-        from .practice_round import planned_round_running
+        # A sealed round the learner has left does not block (design 08 section 5.3): only a practice page
+        # does; the restart's ordinary exit and start archive that round.
         return rules.change_blocked_reason(backup_busy=getattr(self, "_backup_busy", False),
-                                           round_running=planned_round_running(self.store),
                                            focused=getattr(self, "_practice_context", False))
 
     def _discard_content_library_inspection(self):

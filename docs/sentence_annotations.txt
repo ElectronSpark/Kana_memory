@@ -50,7 +50,13 @@ data/enrichment/sentence_annotation_review_v1.json保存后续人工核对；too
 例如「店は九時に開く」读 あく）、课程单词的读法（活用形取词干加原文假名尾）、最后才是分析器；每段记下来源。
 候选目录里：
   sentence_annotations.candidates.sqlite3  与本文件同格式的候选行（不带调号；状态 candidate）
-  card_quote_readings.candidates.json      讲解卡读法的整份文件（原有条目加新条目）
+  card_quote_readings.candidates.json      讲解卡读法的整份文件（原有条目加新条目；格式第 2 版）
+                   每段是 [起, 止, 读法, 来源, 词]：第五项“词”是课程里按这里的读法教这个词的单词课的
+                   [写法, 读法]（词的辞书形或原文写法就是那课的写法，且这里定的读法就是那课的读法；不论来源是
+                   读法修正、同形词规则、课程还是分析器），没有这样的课时为 null；只写 App 按（写法, 读法）找得到的
+                   课（question_readings.course_words）。App 据此判断学习者是否已学过这个词：学过的词在
+                   “日文假名注音”关着时不标读法（02 讲解卡）。作为输入的已有文件若是第 1 版（没有第五项），
+                   当作没有已有条目，summary.json 里记一行说明。
   review.json      要看的：分析器为多读法词（课程词条或词典里不止一个读法，或工具里列出的常见多读词）定的读法
                    （heteronym），分析器的词切不准原文的文字（coverage），没有可用读法或不是日文汉字的词（unknown）
   agreement.json   分析器单独读已审核文字时与审校读法的一致率（总体与多读词），以及不一致的样例

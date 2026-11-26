@@ -155,6 +155,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
     def show_retention_check_result(self,context):
         from .answer_feedback import build_answer_feedback
         from .answer_result_ui import answer_furigana_block, asked_text, entered_answer_row, distinct_explanation, shown_answer, shown_explanation
+        from .card_quote_readings import drop_kana_echo
         from .answer_autoplay import autoplay_answer
         row=context['row'];q=row['question'];result=row['result']
         # After the answer every Japanese word of the result carries its kana (design 11 section 7, rule 9);
@@ -166,7 +167,7 @@ class RetentionCheckUIMixin(DiagnosticUIMixin):
         near = near_miss_block(self, q, result, text_role=learning_text_role(q, 'answer'))
         if result['answered_text'] and result['correct'] is not True and result['answered_text']!=q['answer'] and near is None:
             children.append(entered_answer_row(u, shown_answer(q, result['answered_text']), text_role=learning_text_role(q, 'answer')))
-        explanation = distinct_explanation(q.get('feedback'), q['answer'])
+        explanation = drop_kana_echo(distinct_explanation(q.get('feedback'), q['answer']))
         asked = asked_text(q, explanation)
         if asked: children.append(u.label(asked, size=15, color=u.MUTED, text_role=learning_text_role(q, 'prompt')))
         from .answer_result_ui import known_wrong_note
