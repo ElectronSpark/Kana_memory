@@ -3184,6 +3184,14 @@ class LearningStore:
                                 (content_id,) if content_id else ())
         return [_load(row["result_json"]) for row in rows]
 
+    def queued_questions(self, content_id):
+        """(ability, question snapshot) of the lesson's pending questions, one read; no write.
+
+        For the planner's one-sentence-per-lesson order (course_planning.iter_question_plans): a question
+        waiting in the queue for another ability has its sentence already taken.
+        """
+        return [(ability, _load(snapshot)) for ability, snapshot in self.queries.pending_question_snapshots(content_id)]
+
     def practice_history(self, content_id, ability, limit=24):
         """Bounded completed snapshots, oldest first; no draft/scheduler writes."""
         from .learning_practice_policy import HISTORY_LIMIT

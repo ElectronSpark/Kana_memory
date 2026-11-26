@@ -130,6 +130,12 @@ class StudyQueries:
             FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
             WHERE u.content_id=? AND q.status='pending'""", (content_id,))}
 
+    def pending_question_snapshots(self, content_id: str) -> list[tuple[str, str]]:
+        """(ability, snapshot_json) of the lesson's pending questions: the rows pending_abilities counts."""
+        return [(row[0], row[1]) for row in self._connection.execute("""SELECT u.ability,q.snapshot_json
+            FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
+            WHERE u.content_id=? AND q.status='pending' ORDER BY q.rowid""", (content_id,))]
+
     def read_only_lessons(self, *, lesson_ids=None) -> dict:
         """read_only_lessons.read_only_lessons on this connection (J6 R1-R4): {content_id: {position, stage, read}}.
         lesson_ids: every enrolled lesson's id, when the caller read them in the same pass."""

@@ -243,6 +243,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     seen = {True: set(), False: set()}
     early_allowance = state.get("early_allowance") is True
     reviews, enrolled = review_count(state), _enrolled_reader(state)
+    sentence_aware = callable(state.get("met_sentences"))
     for kind in enabled:
         variants = templates.get(kind, []) if isinstance(templates, dict) else None
         sound = dict(questions.sound_variants(item, kind, known)) if kind in questions.SOUND_KINDS else None
@@ -287,6 +288,8 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
             entry = {**descriptor, "kind": kind, "variant": variant,
                      "input_mode": raw.get("input_mode", "choice"),
                      "reviewed_practice": meta is not None, "fallback": not declared}
+            if sentence_aware:
+                entry["sentence_source"] = raw  # read by select_practice_plan only when a sentence was met
             early = gloss = ()
             if unmet and early_allowance:
                 from .early_rules import early_rules
@@ -383,6 +386,37 @@ def practice_candidates(item, kinds, *, known_background_ids=(), system_japanese
         yield from _candidate_questions(item, ability, kinds, state, **({} if admit is None else {"admit": admit}))
 
 
+def met_sentences(questions):
+    """{sentence unit: frozenset of the stimulus fingerprints that showed it} of questions a learner has met.
+
+    questions: question snapshots or raw templates, each with its kind, prompt and answer
+    (question_sentences); anything else is skipped. The fingerprint lets select_practice_plan tell a
+    candidate's own earlier exposures (repetition, ordered by its own criteria) from another question
+    that showed the same sentence.
+    """
+    from .question_sentences import question_sentences
+    met = defaultdict(set)
+    for question in questions:
+        if not isinstance(question, dict) or not isinstance(question.get("kind"), str):
+            continue
+        units = question_sentences(question["kind"], question)
+        if units:
+            fingerprint = _fingerprint(question)
+            for unit in units:
+                met[unit].add(fingerprint)
+    return {unit: frozenset(prints) for unit, prints in met.items()}
+
+
+def _sentence_met(candidate, met):
+    """The candidate shows a sentence unit that another question of the lesson already showed."""
+    from .question_sentences import question_sentences
+    source = candidate.get("sentence_source")
+    if source is None:
+        return False
+    own = candidate["fingerprint"]
+    return any(met.get(unit, frozenset()) - {own} for unit in question_sentences(candidate["kind"], source))
+
+
 def select_practice_plan(item, ability, kinds, state, history, *, templates=None, shared=False, avoid=None):
     """Choose one enabled, background-safe task, or None when none is available.
 
@@ -394,6 +428,14 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
     shared / templates: see _candidate_questions.
     avoid: a (kind, variant) not to choose while another candidate remains (the consolidation deck,
     design 12 N5: never the template of the state's most recent exposure when it has another).
+    state["met_sentences"] (optional; the formal course path, course_planning.iter_question_plans): a
+    callable returning met_sentences() of the questions the learner has met in this lesson (every
+    ability's practice history, its other abilities' queued questions, the plans made before this one in
+    the same pass). It is called at most once, and only when two or more candidates remain. One criterion
+    of the order then ranks a candidate showing a sentence another question already showed after one
+    showing none (one sentence per lesson): after the criteria that decide which kind of task is due
+    (support, stage and recent stimulus, the coverage slot, the last two contexts, the targeted error
+    family), before those that only spread repetition. The candidates are ordered, never filtered.
     """
     state = state or {}
     candidates = list(_candidate_questions(item, ability, kinds, state, templates=templates, shared=shared))
@@ -470,6 +512,13 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
         for position, index in enumerate(indexes):
             rotating_rank[index] = (position - rotation) % len(indexes)
 
+    # One sentence per lesson: a candidate whose sentence the learner met in another question of the
+    # lesson comes after one whose sentences are new (read lazily; nothing is read for a single candidate).
+    met_reader = state.get("met_sentences")
+    met = met_reader() if callable(met_reader) and len(candidates) > 1 else None
+    sentence_met = ({index for index, candidate in enumerate(candidates) if _sentence_met(candidate, met)}
+                    if met else set())
+
     def key(candidate, index):
         stage_gap = abs(candidate["stage"] - desired)
         recent = candidate["fingerprint"] in recent_fingerprints
@@ -480,6 +529,7 @@ def select_practice_plan(item, ability, kinds, state, history, *, templates=None
         return (*first, family_count if coverage else 0,
                 candidate["context"] in recent_contexts,
                 -int(targeted and candidate["family"] in errors),
+                index in sentence_met,
                 family_count, min(4, contexts[candidate["context"]]),
                 min(4, fingerprints[candidate["fingerprint"]]),
                 # All else equal, a task without a not yet taught rule (design 11, D8) or a glossed

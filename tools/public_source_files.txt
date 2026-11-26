@@ -343,6 +343,7 @@ app/src/kanamemory/question_kinds/vocab_sound.py
 app/src/kanamemory/question_kinds/vocab_text.py
 app/src/kanamemory/question_presentation.py
 app/src/kanamemory/question_readings.py
+app/src/kanamemory/question_sentences.py
 app/src/kanamemory/question_support.py
 app/src/kanamemory/result_readings.py
 app/src/kanamemory/reading_audio.py
@@ -955,6 +956,7 @@ tests/test_root_back.py
 tests/test_scheduler_audit.py
 tests/test_selection_layout.py
 tests/test_semantic_task_equivalence.py
+tests/test_sentence_aware_choice.py
 tests/test_sentence_annotation_corpus.py
 tests/test_annotate_readings.py
 tests/test_card_quote_readings.py

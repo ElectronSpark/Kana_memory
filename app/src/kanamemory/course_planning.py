@@ -52,6 +52,7 @@ class CourseProgressReader(Protocol):
     def get_unit(self, content_id: str, ability: str) -> dict | None: ...
     def practice_history(self, content_id: str, ability: str) -> list[dict]: ...
     # Optional: batch_ability_gate(content_id, enabled_kinds), read via getattr.
+    # Optional: queued_questions(content_id) -> [(ability, snapshot)], read via getattr (one sentence per lesson).
 
 
 def preview_question_plans(cache: dict | None, content_id: str, load_item, *, enabled_kinds: Iterable[str],
@@ -79,6 +80,58 @@ def preview_question_plans(cache: dict | None, content_id: str, load_item, *, en
     if key not in cache:
         cache[key] = plans()
     return cache[key]
+
+
+class _LessonSentences:
+    """What the learner has met in one lesson, for one planning pass (one sentence per lesson).
+
+    The sentences of the questions in every ability's bounded practice history (any role, any outcome),
+    of the lesson's questions queued for other abilities, and of the plans made earlier in this pass.
+    Nothing is read until a selection asks for it (reader()); then each ability's history is read once
+    and kept, so the planned abilities reuse it as their own history (history()), and the queued
+    questions are read once, only when the pass found an ability with a pending question.
+    """
+
+    def __init__(self, item, admitted, pending, learning_store):
+        self._id, self._admitted, self._store = item["id"], tuple(admitted), learning_store
+        self._queued_abilities = frozenset(pending)
+        self._histories = {}
+        self._base = None          # (met of all histories, [(ability, met of a queued question)])
+        self._chosen = []          # [question, its met (made when first asked)] of each plan made in this pass
+
+    def history(self, ability):
+        if ability not in self._histories:
+            self._histories[ability] = self._store.practice_history(self._id, ability)
+        return self._histories[ability]
+
+    def chosen(self, question):
+        self._chosen.append([question, None])
+
+    def reader(self, ability):
+        return lambda: self._met(ability)
+
+    def _met(self, ability):
+        from .learning_practice_policy import met_sentences
+        if self._base is None:
+            seen = [row.get("question") for other in self._admitted for row in self.history(other) or ()
+                    if isinstance(row, dict)]
+            read = getattr(self._store, "queued_questions", None)
+            rows = read(self._id) if self._queued_abilities and callable(read) else ()
+            queued = [(row[0], met_sentences([row[1]])) for row in rows if isinstance(row, tuple) and len(row) == 2] \
+                if isinstance(rows, list) else []
+            self._base = (met_sentences(seen), queued)
+        base, queued = self._base
+        for entry in self._chosen:
+            if entry[1] is None:
+                entry[1] = met_sentences([entry[0]])
+        parts = [m for other, m in queued if other != ability] + [entry[1] for entry in self._chosen]
+        if not parts:
+            return base
+        merged = {unit: set(prints) for unit, prints in base.items()}
+        for part in parts:
+            for unit, prints in part.items():
+                merged.setdefault(unit, set()).update(prints)
+        return {unit: frozenset(prints) for unit, prints in merged.items()}
 
 
 def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,
@@ -125,6 +178,8 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
     closed_kinds = gate["closed_kinds"] if gate else frozenset()
     known = None
     enrolled = enrolled_ids_reader(queries)
+    # One sentence per lesson: what the learner met in this lesson's questions, read once for the pass.
+    sentences = _LessonSentences(item, admitted, pending, learning_store)
     for ability in admitted:
         if ability in pending:
             continue
@@ -160,9 +215,11 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
             probe = probe_reader(item["id"], ability, enabled_kinds=sorted(enabled - closed_kinds), known=known,
                                  system_japanese_input=system_japanese_input)
             if probe is not None:
+                sentences.chosen(probe)
                 yield CourseQuestionPlan(state, dict(probe, id=f"{item['id']}:{ability}:review:{count}"))
                 continue
-        history = learning_store.practice_history(item["id"], ability)
+        history = sentences.history(ability)
+        policy_state["met_sentences"] = sentences.reader(ability)
         # avoid_templates ({ability: (kind, variant)}): only the consolidation deck passes it (design 12 N5).
         selected = select_practice_plan(item, ability, kinds, policy_state, history,
                                         templates=templates, shared=True,
@@ -181,7 +238,10 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
                 # this projection cannot become legacy free retrieval.
                 q["prompt"] = raw.get("prompt", "")
                 q["practice"] = deepcopy(raw["practice"])
+            if isinstance(raw, dict):
+                sentences.chosen(dict(raw, kind=kind))
         else:
             q = build_learning_question(item, kind, variant=variant)
+            sentences.chosen(q)
         q["id"] = f"{item['id']}:{ability}:review:{count}"
         yield CourseQuestionPlan(state, q)
