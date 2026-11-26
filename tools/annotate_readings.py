@@ -566,7 +566,10 @@ def annotate(analyser, knowledge, *, sentences=(), cards=(), have_sentences=(), 
     todo_sentences = {text: label for text, label in sentences if KANJI.search(text) and text not in have_sentences}
     todo_cards = [(cid, field, quote) for cid, field, quote in cards
                   if quote not in ((have_cards.get(cid) or {}).get(field) or {})]
-    texts = {piece for text in todo_sentences for _, piece in pieces(text)} | {q for _, _, q in todo_cards}
+    # text_spans reads a text piece by piece (between its gaps): collect the pieces of quotations too, or a
+    # quotation with a gap (「何とも…ない」) finds no tokens when no sentence of the run shares its pieces
+    texts = ({piece for text in todo_sentences for _, piece in pieces(text)}
+             | {piece for _, _, quote in todo_cards for _, piece in pieces(quote)})
     analysed, engine = analyser.tokenise(sorted(texts)) if texts else ({}, "")
     totals, review = Counter(), {"heteronym": [], "coverage": [], "unknown": [], "alignment": []}
     normalised = []  # counted, not listed for review: the tokens cover the text up to width forms and spaces

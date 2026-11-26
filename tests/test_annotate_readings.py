@@ -148,6 +148,17 @@ def test_annotate_never_overwrites_and_flags_for_review(tmp_path):
     assert written["version"] == cards.VERSION == 2
 
 
+def test_a_card_quotation_with_a_gap_is_analysed_piece_by_piece():
+    analyser = FakeAnalyser(TABLE)
+    quote = "学校へ行った…木の下で"
+    result = tool.annotate(analyser, knowledge(), cards=[("grammar:t:x", "focus", quote)])
+    assert analyser.asked[0] == sorted({"学校へ行った", "木の下で"})  # the pieces between the gap, not the quotation
+    assert result["cards"]["grammar:t:x"]["focus"][quote] == [
+        [0, 2, "がっこう", "course", ["学校", "がっこう"]], [3, 4, "い", "course", ["行く", "いく"]],
+        [7, 8, "き", "analyser", None], [9, 10, "した", "override", None]]
+    assert result["review"]["coverage"] == [] and result["totals"]["card quotations with candidates"] == 1
+
+
 def _words(text, known=None):
     analysed, _ = FakeAnalyser(TABLE).tokenise([text])
     spans, _ = tool.text_spans(text, analysed, known or knowledge())
