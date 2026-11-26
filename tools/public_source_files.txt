@@ -384,6 +384,7 @@ app/src/kanamemory/learning_practice_policy.py
 app/src/kanamemory/learning_conditions.py
 app/src/kanamemory/learning_evidence.py
 app/src/kanamemory/semantic_errors.py
+app/src/kanamemory/shared_tables.py
 app/src/kanamemory/tutor_context.py
 app/src/kanamemory/tutor_retrieval.py
 app/src/kanamemory/tutor_memory.py
@@ -959,6 +960,7 @@ tests/test_root_back.py
 tests/test_scheduler_audit.py
 tests/test_selection_layout.py
 tests/test_semantic_task_equivalence.py
+tests/test_shared_template_tables.py
 tests/test_sentence_aware_choice.py
 tests/test_sentence_annotation_corpus.py
 tests/test_annotate_readings.py

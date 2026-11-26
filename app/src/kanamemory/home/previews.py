@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from types import MappingProxyType
 
 from ..answer_input import system_japanese_enabled
 from ..practice_preferences import enabled_preference_kinds
@@ -94,14 +95,38 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
                  else learning_store.content_exposure_times(now=now))
     prerequisites = {}
     from ..intro_batch import ROUTE, ROUTE_KEY
-    from ..course_planning import preview_question_plans
+    from ..course_planning import PassFacts, preview_question_plans
+    facts = PassFacts(store.queries)   # the known set, the opening and the enrolled ids, read once for the preview
     # The plans of the lessons without a question, for this state of the learner records: the next
     # refresh without a write, and the add page's existing-work line, read them instead of planning again.
     plans = costs().plan_preview()
     from ..arrangement.services.review_filter import serving_filter
     serve = serving_filter(store)
-    for row in missing:
-        item = learning_store.get_item(row[0])
+    from ..arrangement.sources.recent import RecentFirsts, serviceable
+    firsts = getattr(exposures, "first_rated", None) or RecentFirsts(store)
+    served = {KIND_ABILITIES[kind] for kind in enabled}
+
+    def prerequisites_block(item, content_row):
+        scope = dict(content_row).get('instruction_scope')
+        key = item['id'], scope
+        if key not in prerequisites:
+            prerequisites[key] = (learning_store.prerequisite_status(item['id'], scope,
+                ready_ids=ready_ids) if scope else prerequisite_status(learning_store, item,
+                ready_ids=ready_ids))['blocked']
+        return prerequisites[key]
+
+    def teaching_stage(item, content_row, record):
+        """The unit's lesson is in teaching (its counts are the teaching ones); False otherwise."""
+        if content_row["stage"] not in {"intro", "guide"}:
+            return False
+        if content_row['introduction_id'] not in known_teaching:
+            record.teaching.add(content_row['introduction_id'])
+            record.unqueued.add(item['id'])
+        return True
+
+    def planned(item):
+        """The lesson's record from its plans (one per unit that gets a question)."""
+        record = _LessonRecord()
         # 四之二: a not-yet-open later ability is neither ready nor teaching,
         # matching LearningStore.counts() for pending rows.
         gate = (learning_store.batch_ability_gate(item['id'], enabled)
@@ -110,53 +135,155 @@ def course_preview(store, learning_store, *, course_kinds, costs, projection=Non
         # contract. Only new lessons need a fresh prerequisite inspection.
         for unit, plan in preview_question_plans(plans, item['id'], lambda item=item: item,
                 enabled_kinds=enabled, queries=store.queries, learning_store=learning_store,
-                system_japanese_input=system_input,
+                system_japanese_input=system_input, facts=facts,
                 unit_states={u['ability']: u for u in item['units']}, unavailable_ids=unavailable):
             if unit["suspended"]:
                 continue
-            ids["planned"].add((item['id'], unit['ability']))
+            record.planned.add((item['id'], unit['ability']))
             if gate and unit['ability'] in gate['closed']:
                 continue
             if serve is not None and not serve.allows(item['id']) and not serve.started_work(item['id'], unit['ability']):
                 continue   # design 12 H10: left out by the learner's filter (still "planned" for the apart counts)
             if learning_store.content_question_blocked(item, plan):
-                result['blocked_material'] += 1
+                record.blocked_material += 1
                 continue
             content_row = learning_store.ability_instruction_row(item['id'], unit['ability'])
-            scope = dict(content_row).get('instruction_scope')
-            key = item['id'], scope
-            if key not in prerequisites:
-                prerequisites[key] = (learning_store.prerequisite_status(item['id'], scope,
-                    ready_ids=ready_ids) if scope else prerequisite_status(learning_store, item,
-                    ready_ids=ready_ids))['blocked']
-            blocked = prerequisites[key]
-            if blocked:
-                result["blocked"] += 1
+            if prerequisites_block(item, content_row):
+                record.blocked += 1
                 # A pending sibling ability already contributes this content
                 # to LearningStore.counts()["blocked_content"].
                 if item["id"] not in visible_content:
-                    blocked_content.add(item["id"])
+                    record.blocked_content.add(item["id"])
                 continue
-            if content_row["stage"] in {"intro", "guide"}:
-                if content_row['introduction_id'] not in known_teaching:
-                    teaching.add(content_row['introduction_id'])
-                    ids["unqueued"].add(item['id'])
+            if teaching_stage(item, content_row, record):
                 continue
             due = learning_store.planned_question_due(unit, plan, now=now, exposure_times=exposures)
             if content_row["stage"] == "bridge" and not learning_store.retrieval_ready(content_row, now):
                 due = max(due or "", content_row["retrieval_at_utc"])
             if due and datetime.fromisoformat(due) > now:
-                result["waiting"] += 1
-                future.append(due)
+                record.waiting += 1
+                record.future.append(due)
             else:
-                result["ready"] += 1
-                ids["due"].add((item['id'], unit['ability']))
+                record.ready += 1
+                record.due.add((item['id'], unit['ability']))
+        return record
+
+    def may_be_free(item, ability):
+        """Whether a plan of ``ability`` can be a free retrieval: one of its templates under the enabled kinds
+        is (LearningStore.free_retrieval of the plan the planner would make of it); a lesson without a
+        template table may be (its questions are built by the legacy builders)."""
+        from ..learning_questions import practice_templates
+        from ..learning_store import free_retrieval
+        table = practice_templates(item)
+        if not isinstance(table, dict):
+            return True
+        for kind in enabled:
+            if KIND_ABILITIES.get(kind) != ability:
+                continue
+            for raw in table.get(kind) or ():
+                if not isinstance(raw, dict):
+                    return True
+                plan = {"target_id": item['id'], "ability": ability, "kind": kind,
+                        "input_mode": raw.get("input_mode", "choice")}
+                if "practice" in raw:
+                    plan.update(prompt=raw.get("prompt", ""), practice=raw["practice"])
+                if free_retrieval(plan):
+                    return True
+        return False
+
+    def bounded(item):
+        """The lesson's record from its stored columns when none of its units can be due now, else None.
+
+        Design 12 (the plan-free bounds of an unqueued unit): a unit's due without a plan is ``upper``
+        (planned_question_due of a question that is no free retrieval: the stored due with its floors), and
+        ``lower`` = min(upper, its probe due) bounds every plan's due from below. A lesson whose every unit
+        has ``lower`` after now is not planned: after the exclusions that need no plan (suspension, the
+        review filter) each such unit is waiting. One that is due now by the queue's N2 reading is planned
+        too, so that "planned" is exact for every unit DueReviews counts; so is a lesson of the batch route
+        (its gate closes kinds), and one with a unit in teaching or blocked by its prerequisites (those
+        counts take a unit only with a question).
+        """
+        if not PLAN_FREE_BOUNDS or item.get('checkpoint', {}).get(ROUTE_KEY) == ROUTE:
+            return None
+        record = _LessonRecord()
+        pending = store.queries.pending_abilities(item['id'])
+        admitted = item.get("enrolled_abilities", item.get("abilities", []))
+        for unit in item['units']:
+            if (not unit or unit['ability'] not in admitted or unit['ability'] in pending
+                    or unit['ability'] not in served or unit["suspended"]):
+                continue   # iter_question_plans plans none of these, or the preview skips it (suspended)
+            # The probe due counts only for a plan that is a free retrieval (_ability_due): an ability whose
+            # enabled templates offer none is planned at its stored due whatever its probe due says.
+            probe = unit['probe_due_at_utc'] if may_be_free(item, unit['ability']) else None
+            if not unit['due_at_utc'] or datetime.fromisoformat(unit['due_at_utc']) <= now or (
+                    probe and datetime.fromisoformat(probe) <= now):
+                return None   # due now as stored, or without a due: planned as before (no bound is read)
+            reading = serviceable(unit, unit['due_at_utc'], firsts, now)[0]
+            if reading and datetime.fromisoformat(reading) <= now:
+                return None
+            if serve is not None and not serve.allows(item['id']) and not serve.started_work(item['id'], unit['ability']):
+                continue
+            content_row = learning_store.ability_instruction_row(item['id'], unit['ability'])
+            if content_row["stage"] in {"intro", "guide"} or prerequisites_block(item, content_row):
+                return None   # counted as blocked or teaching only with a question: planned as before
+            lower = learning_store.planned_question_due(unit, _NO_PLAN, now=now, exposure_times=exposures)
+            if lower and probe:
+                lower = min((lower, probe), key=datetime.fromisoformat)
+            if content_row["stage"] == "bridge" and not learning_store.retrieval_ready(content_row, now):
+                lower = max(lower or "", content_row["retrieval_at_utc"])
+            if not lower or datetime.fromisoformat(lower) <= now:
+                return None
+            record.waiting += 1
+            record.lowers.append(lower)
+        return record
+
+    records, items = {}, {}
+    for row in missing:
+        item = learning_store.get_item(row[0])
+        record = bounded(item)
+        records[item['id']], items[item['id']] = (planned(item) if record is None else record), item
+    # The next-review moment stays exact: the lesson of the unit with the earliest lower bound is planned,
+    # until the earliest planned due is not later than every lower bound left (one plan as a rule).
+    left = sorted((datetime.fromisoformat(lower), cid) for cid, record in records.items() for lower in record.lowers)
+    found = [datetime.fromisoformat(due) for record in records.values() for due in record.future]
+    best = min(found) if found else None
+    while left and (best is None or left[0][0] < best):
+        cid = left[0][1]
+        records[cid] = planned(items[cid])
+        left = [entry for entry in left if entry[1] != cid]
+        dues = [datetime.fromisoformat(due) for due in records[cid].future]
+        best = min([*dues, *([best] if best is not None else [])]) if dues or best is not None else None
+    for record in records.values():
+        for name in ("ready", "waiting", "blocked", "blocked_material"):
+            result[name] += getattr(record, name)
+        teaching |= record.teaching
+        blocked_content |= record.blocked_content
+        future.extend(record.future)
+        ids["unqueued"] |= record.unqueued
+        ids["planned"] |= record.planned
+        ids["due"] |= record.due
     result["instruction"] = len(teaching)
     result["blocked_content"] = len(blocked_content)
     result["next_due"] = min(future) if future else None
     if limited:
         result["ready"] = result["instruction"] = 0
     return result, ids
+
+
+# planned_question_due of a unit without a plan: a question that is no free retrieval (_ability_due keeps the due).
+_NO_PLAN = MappingProxyType({"input_mode": "choice"})
+# The plan-free bounds of course_preview (design 12, N16); False plans every unit (the reference the
+# equivalence test compares with).
+PLAN_FREE_BOUNDS = True
+
+
+class _LessonRecord:
+    """What one lesson without a queued question adds to course_preview's counts and ids."""
+
+    def __init__(self):
+        self.ready = self.waiting = self.blocked = self.blocked_material = 0
+        self.teaching, self.blocked_content, self.unqueued, self.planned, self.due = set(), set(), set(), set(), set()
+        self.future, self.lowers = [], []
 
 
 def kana_preview(store, inputs, *, repository, paths, queue_kinds, pending=UNREAD):

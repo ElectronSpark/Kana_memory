@@ -6,6 +6,7 @@ Old questions and answers are read in place, not rewritten during activation.
 """
 from copy import deepcopy
 from datetime import datetime
+from functools import lru_cache
 import json
 from uuid import uuid4
 
@@ -35,6 +36,14 @@ def resource_fields(kind, version=2):
 
 
 def head_key(identity, kind='lesson'):
+    if type(identity) is str and type(kind) is str:
+        return _head_key(identity, kind)
+    return HEAD + digest([kind, identity])
+
+
+@lru_cache(maxsize=8192)
+def _head_key(identity, kind):
+    # A pure function of two strings, asked for every lesson of every count and preview.
     return HEAD + digest([kind, identity])
 
 

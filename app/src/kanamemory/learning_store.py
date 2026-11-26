@@ -279,9 +279,17 @@ def _retrieval_delay(checkpoint):
 def _independent_retrieval(question):
     free = question.get("input_mode", question.get("response")) in {"text", "typing", "free_text"}
     if free and "practice" in question:
-        from .learning_practice_policy import practice_metadata, question_scaffold
-        return practice_metadata(question) is not None and question_scaffold(question) == "retrieval"
+        # practice_metadata(question) is not None and question_scaffold(question) == "retrieval", read once and
+        # without copying the metadata (a typed question's scaffold is its metadata's).
+        from .learning_practice_policy import practice_metadata_view
+        meta = practice_metadata_view(question)
+        return meta is not None and meta["scaffold"] == "retrieval"
     return free
+
+
+def free_retrieval(question):
+    """Whether ``question`` (a snapshot or a plan) is a free retrieval: its probe due replaces the due (_ability_due)."""
+    return _independent_retrieval(question)
 
 
 def _paused_practice_guide(content, enabled_kinds):
@@ -1458,13 +1466,14 @@ class LearningStore:
         return self._item(row, units)
 
     def _item(self, row, units):
+        # The decoded record is this call's own value: the overlays update it instead of copying it again.
         result = _load(row["content_json"])
         from .material_review import reviewed_item
-        result = reviewed_item(result)
+        result = reviewed_item(result, owned=True)
         from .kana_rule_evidence import teaching_overlay
         result = teaching_overlay(result)
         from .personal_content_versions import resolve as personal_version
-        result = personal_version(self.store, result)
+        result = personal_version(self.store, result, owned=True)
         result.update(content_id=row["content_id"], stage=row["stage"], introduction_id=row["introduction_id"],
                       checkpoint=_load(row["checkpoint_json"]), exposure_group=row["exposure_group"],
                       introduced_at_utc=row["introduced_at_utc"], retrieval_at_utc=row["retrieval_at_utc"])
@@ -2663,11 +2672,13 @@ class LearningStore:
         from functools import lru_cache
         from types import SimpleNamespace
         # Invocation-local read projection: prerequisites use content and SQL
-        # evidence, never units or per-ability attempt counts. No cross-call cache.
-        @lru_cache(maxsize=64)
+        # evidence, never units or per-ability attempt counts. No cross-call cache: each lesson's record and
+        # its lesson for the prerequisites are read once for this call (the visible rows revisit a lesson
+        # after others, which a small cache lost).
+        @lru_cache(maxsize=None)
         def content_row(content_id):
             return self._db.execute("SELECT * FROM learning_content WHERE content_id=?", (content_id,)).fetchone()
-        @lru_cache(maxsize=64)
+        @lru_cache(maxsize=None)
         def dependency_item(content_id):
             content = content_row(content_id)
             return None if content is None else self._item(content, [])
@@ -2709,11 +2720,15 @@ class LearningStore:
         counts["orphaned"] = len(availability.orphaned_ids)
         counts["library_unavailable_pending"] = hidden
         counts["disabled"] = counts["pending"] - len(visible) - reserved - hidden
-        teaching, blocked_content, dependencies = set(), set(), {}
+        teaching, blocked_content, dependencies, projected = set(), set(), {}, {}
         ready_ids = projection.ready_ids() if projection is not None else independent_ready_ids(self)
         exposure_times = (projection.exposure_times(now) if projection is not None
                           else self.content_exposure_times(now))
         ability_states = projection.ability_states() if projection is not None else _teaching.state_map(self._db)
+        # The first formal ratings of every visible unit in one read (the N2 reading asks for each of them).
+        firsts = getattr(exposure_times, "first_rated", None)
+        if firsts is not None:
+            firsts.prime(row["unit_id"] for row in visible.values())
         from .answer_input import available, system_japanese_enabled
         system_input = system_japanese_enabled(self.store)
         gate_closed = self._batch_gate_reader(enabled_kinds)
@@ -2740,8 +2755,13 @@ class LearningStore:
                 return snapshot
             state = ability_states.get(row['content_id'])
             scope = row['ability'] if state and row['ability'] in state['additions'] else None
-            content = _teaching.project(self._db, content_row(row["content_id"]), scope, state=state)
-            teaching_item = {**_load(content['content_json']), 'stage': content['stage'], 'checkpoint': _load(content['checkpoint_json'])}
+            projected_key = (row['content_id'], scope)
+            if projected_key not in projected:
+                content = _teaching.project(self._db, content_row(row["content_id"]), scope, state=state)
+                # Read by content_question_blocked only (never changed): one decode per lesson and scope.
+                projected[projected_key] = (content, {**_load(content['content_json']), 'stage': content['stage'],
+                                                      'checkpoint': _load(content['checkpoint_json'])})
+            content, teaching_item = projected[projected_key]
             if row['result_json'] is None and self.content_question_blocked(teaching_item, question()):
                 counts['blocked_material'] += 1
                 continue

@@ -28,6 +28,50 @@ def known_ids(queries) -> frozenset[str]:
     return frozenset({*queries.instruction_ready_ids(), *(kana() if callable(kana) else ())})
 
 
+class PassFacts:
+    """The facts of one planning pass that no write inside it changes, each read once for the whole pass.
+
+    A pass (the queue pass, the unqueued preview, the add page's existing work) plans many lessons; each
+    lesson read the dependency gate's known set (every instruction-ready lesson, every read lesson, every
+    introduced kana) and the enrolled ids again, and the opening rule (early_rules.in_opening) counted
+    the known set once per template. Read once here instead: known() and course_ids() on first use,
+    opening(item_id) from one count. The only writes inside a pass are the questions it appends
+    (LearningStore.append_questions, the round's question ids): they change no unit's instruction
+    state, no read lesson, no kana card and no enrolled lesson, so nothing here is read again after
+    them. A pass that teaches, enrolls or answers inside itself must not share one.
+    """
+
+    def __init__(self, queries):
+        self._queries = queries
+        self._known = self._ids = self._count = None
+
+    def known(self) -> frozenset[str]:
+        """known_ids(queries) as at the pass's first question."""
+        if self._known is None:
+            self._known = known_ids(self._queries)
+        return self._known
+
+    def opening(self, item_id: str) -> bool:
+        """early_rules.in_opening of the known set with this lesson in it, from one count of the set."""
+        from .early_rules import EARLY_LESSON_LIMIT, counts_in_opening
+        if self._count is None:
+            self._count = sum(1 for cid in self.known() if counts_in_opening(cid))
+        extra = counts_in_opening(item_id) and item_id not in self.known()
+        return self._count + extra <= EARLY_LESSON_LIMIT
+
+    def enrolled_reader(self):
+        """enrolled_ids_reader's reader, read once for the pass (None: the queries have no course_ids)."""
+        course_ids = getattr(self._queries, "course_ids", None)
+        if not callable(course_ids):
+            return None
+
+        def read():
+            if self._ids is None:
+                self._ids = tuple(course_ids())
+            return self._ids
+        return read
+
+
 def enrolled_ids_reader(queries):
     """The stem-gloss tier's reader of enrolled ids (learning_practice_policy._enrolled_reader), or None.
 
@@ -58,6 +102,7 @@ class CourseProgressReader(Protocol):
 def preview_question_plans(cache: dict | None, content_id: str, load_item, *, enabled_kinds: Iterable[str],
                            system_japanese_input: bool, unavailable_ids: Iterable[str] = (),
                            **reader) -> list[CourseQuestionPlan]:
+    # ``facts`` (in reader): the caller's PassFacts; it is no part of the key (the same state plans the same).
     """iter_question_plans of one saved lesson for a read-only preview, planned once per learner state.
 
     Home's counts and the add page's existing-work line both plan a question
@@ -152,7 +197,8 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
                         learning_store: CourseProgressReader, system_japanese_input: bool,
                         unit_states: dict | None = None,
                         unavailable_ids: Iterable[str] = (),
-                        avoid_templates: dict | None = None) -> Iterator[CourseQuestionPlan]:
+                        avoid_templates: dict | None = None,
+                        facts: PassFacts | None = None) -> Iterator[CourseQuestionPlan]:
     """Read missing ability candidates; existing snapshots remain owners.
 
     Explicit templates carry the response mode and reviewed scaffold needed
@@ -163,6 +209,8 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
     unavailable_ids (the caller's AvailabilityView.unavailable_ids, design 08
     section 8.2): content of a disabled/missing library plans nothing, before
     any template or queue read.
+    facts: the caller's PassFacts (one pass over many lessons): the known set, the opening and the
+    enrolled ids are read once for the pass; None reads them for this lesson.
     """
     if item["id"] in frozenset(unavailable_ids):
         return
@@ -191,7 +239,7 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         gate = reader(item["id"], enabled) if callable(reader) else None
     closed_kinds = gate["closed_kinds"] if gate else frozenset()
     known = None
-    enrolled = enrolled_ids_reader(queries)
+    enrolled = enrolled_ids_reader(queries) if facts is None else facts.enrolled_reader()
     # One sentence per lesson: what the learner met in this lesson's questions, read once for the pass.
     sentences = _LessonSentences(item, admitted, pending, learning_store)
     for ability in admitted:
@@ -210,8 +258,11 @@ def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: Co
         # and this item. Read once per planned item; it does not manufacture
         # mastery or alter those items' review dates.
         if known is None:
-            known = known_ids(queries) | {item["id"]}
+            known = (known_ids(queries) if facts is None else facts.known()) | {item["id"]}
         policy_state["known_background_ids"] = known
+        if facts is not None:
+            # early_rules.in_opening of exactly this known set, counted once for the pass.
+            policy_state["early_opening"] = facts.opening(item["id"])
         # Design 11 section 5, D8: only this formal course path lets a simple rule appear
         # before its lesson while the learner is at the very start (the page shows a hint).
         policy_state["early_allowance"] = True

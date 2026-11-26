@@ -56,7 +56,12 @@ def rule_track(lesson):
 
 def in_opening(known_ids):
     """The learner is at the very start: at most EARLY_LESSON_LIMIT lessons introduced (kana not counted)."""
-    return sum(1 for cid in known_ids if isinstance(cid, str) and not cid.startswith(_KANA_ID)) <= EARLY_LESSON_LIMIT
+    return sum(1 for cid in known_ids if counts_in_opening(cid)) <= EARLY_LESSON_LIMIT
+
+
+def counts_in_opening(cid):
+    """One member of a known set that in_opening counts: a lesson id, not a kana."""
+    return isinstance(cid, str) and not cid.startswith(_KANA_ID)
 
 
 def _hint_of(rule_id, lesson):
@@ -126,14 +131,15 @@ def may_appear_early(rule_id, *, target, kind, question=None):
     return kind not in READING_SENSITIVE_KINDS
 
 
-def early_rules(unmet, known_ids, *, target, kind, question=None):
+def early_rules(unmet, known_ids, *, target, kind, question=None, opening=None):
     """The unmet requirements, sorted, when the template may be served in the opening; else ().
 
     unmet: the template's declared requirements the known set lacks (never empty for a
     served result). Everything must be a rule lesson that may appear early.
+    opening: in_opening(known_ids) when the caller has it (a planning pass counts it once); None counts here.
     """
     unmet = [cid for cid in unmet if isinstance(cid, str)] if isinstance(unmet, (set, frozenset, list, tuple)) else []
-    if not 1 <= len(unmet) <= EARLY_RULE_LIMIT or not in_opening(known_ids):
+    if not 1 <= len(unmet) <= EARLY_RULE_LIMIT or not (in_opening(known_ids) if opening is None else opening):
         return ()
     if not all(may_appear_early(cid, target=target, kind=kind, question=question) for cid in unmet):
         return ()

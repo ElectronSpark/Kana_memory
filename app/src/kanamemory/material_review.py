@@ -174,8 +174,10 @@ def has_reviewed_targets(content_id):
     return content_id in review_index(review_data())["target_fingerprints"]
 
 
-def reviewed_item(item):
-    result = deepcopy(item)
+def reviewed_item(item, *, owned=False):
+    """The lesson with its reviewed corrections. owned=True: the caller hands over a value nobody else holds (a
+    lesson just decoded from its record), which is updated in place instead of copied first."""
+    result = item if owned else deepcopy(item)
     entry = review_data().get("items", {}).get(item.get("id"))
     # A later exact correction can also recognize a previously shipped
     # reviewed snapshot. Identity alone never authorizes a replacement.

@@ -35,6 +35,8 @@ CACHES = {
     "learning_questions.py::_word_pool": REGISTERED,
     "learning_questions.py::_READING_FORMS": REGISTERED,
     "learning_questions.py::_source_task": REGISTERED,
+    "learning_questions.py::_TABLES": REGISTERED,  # keyed by the lesson's value and the namespaces' identity
+    "learning_questions.py::_SHARED_FACTS": REGISTERED,  # facts of the shared tables' own templates
     "question_support.py::_background_word_senses": REGISTERED,
     "learning_conditions.py::_reviewed_index": REGISTERED,
     "learning_dependencies.py::_bundled_dependency_signature": REGISTERED,
@@ -84,8 +86,10 @@ CACHES = {
     "sentence_annotations.py::_lookup": "keyed by text, database path and stamp",
     "word_sound_questions.py::_cohort_rows": "pure function of its arguments (the pool is an argument)",
     "word_sound_questions.py::_ranked_rows": "pure function of its arguments (the pool is an argument)",
+    "word_sound_questions.py::_ranked_order": "pure function of its arguments (the pool is an argument)",
     "word_sound_questions.py::_reading_options_of": "pure function of its arguments (the pool is an argument)",
     "word_sound_questions.py::_sound_key": "pure function of a reading",
+    "personal_content_versions.py::_head_key": "pure function of its arguments (the digest of a kind and an id)",
     "word_sound_questions.py::_has_han": "pure function of a text",
     "word_sound_questions.py::_VOWEL_OF": "a constant built from literals at import",
     # Local to one call, or not content at all.

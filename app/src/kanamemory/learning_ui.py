@@ -831,15 +831,16 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
             children.append(u.button(item["meaning"], lambda w, item=item: self.show_learning_detail(item), multiline=True))
         self.screen("learning_detail", "选择词义", *children)
 
-    def _learning_question_plans(self, item):
+    def _learning_question_plans(self, item, facts=None):
         from .course_planning import iter_question_plans
         from .answer_input import system_japanese_enabled
         return iter_question_plans(item, enabled_kinds=self.learning_preferences()["enabled"],
             queries=self.store.queries, learning_store=self.learning_store,
-            system_japanese_input=system_japanese_enabled(self.store))
+            system_japanese_input=system_japanese_enabled(self.store), facts=facts)
 
-    def _queue_learning_questions(self, item, exposure_tables=None, *, early_ability=None):
-        """``exposure_tables``: learning_store.exposure_tables() of a pass over several lessons.
+    def _queue_learning_questions(self, item, exposure_tables=None, *, early_ability=None, facts=None):
+        """``exposure_tables``: learning_store.exposure_tables() of a pass over several lessons; ``facts``:
+        that pass's course_planning.PassFacts (its appends change none of them).
 
         ``early_ability``: the ability of ``item`` an early answer of extra practice just rated (design 12
         K13). Inside a sealed round only that unit's missing question is queued (it keeps the unit among the
@@ -850,13 +851,19 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
         inside = sealed(self.store)
         if inside and early_ability is None:
             return
-        for state, plan in self._learning_question_plans(item):
+        templates = None
+        plans = self._learning_question_plans(item) if facts is None else self._learning_question_plans(item, facts)
+        for state, plan in plans:
             if inside and plan.get("ability") != early_ability:
                 continue
             if "answer" in plan:
                 q = plan
             else:
-                q = build_learning_question(item, plan["kind"], variant=plan["variant"])
+                # Built from the shared table the plan was chosen from (the planner read the same one).
+                if templates is None:
+                    from .learning_questions import practice_templates
+                    templates = practice_templates(item)
+                q = build_learning_question(item, plan["kind"], variant=plan["variant"], templates=templates)
                 q["id"] = plan["id"]
             if exposure_tables is None:
                 self.learning_store.append_questions([q])
@@ -902,11 +909,13 @@ class LearningUIMixin(IntroBatchUIMixin, LearningPitchUIMixin, AIUIMixin, StudyP
     def _queue_missing_learning_questions(self):
         """Queue a question for every lesson direction that has none; the exposure records are read once."""
         self._replace_withdrawn_questions()
-        tables = None
-        for item in self.learning_store.items_needing_questions():
+        learning = self.learning_store
+        tables = facts = None
+        for item in learning.items_needing_questions():
             if tables is None:
-                tables = self.learning_store.exposure_tables()
-            self._queue_learning_questions(item, tables)
+                from .course_planning import PassFacts
+                tables, facts = learning.exposure_tables(), PassFacts(learning.queries)
+            self._queue_learning_questions(item, tables, facts=facts)
 
     @page_view()
     def show_learning_settings(self, widget=None, **kwargs):

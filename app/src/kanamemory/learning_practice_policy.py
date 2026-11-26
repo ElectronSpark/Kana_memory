@@ -26,12 +26,21 @@ def practice_metadata(question):
         return None
 
 
+def practice_metadata_view(question):
+    """practice_metadata for a caller that only reads it: the question's own validated metadata, not a copy."""
+    from .learning_questions import checked_practice
+    try:
+        return checked_practice(question, target_id=question.get("target_id"))
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def question_scaffold(question):
     """Describe evidence from the actual control, with conservative legacy fallbacks."""
     mode = question.get("input_mode", question.get("response", "choice"))
     if not isinstance(mode, str):
         return "cued"
-    meta = practice_metadata(question)
+    meta = practice_metadata_view(question)
     if mode == "choice":
         return "recognition"
     if mode in {"reorder", "multi_cloze"}:
@@ -87,7 +96,7 @@ def _heard_stimulus_kinds():
 
 
 def _descriptor(question):
-    meta = practice_metadata(question)
+    meta = practice_metadata_view(question)
     fingerprint = _fingerprint(question)
     return {"fingerprint": fingerprint, "stage": SCAFFOLDS.index(question_scaffold(question)),
             "family": meta["task_family"] if meta else question.get("kind", ""),
@@ -256,6 +265,9 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     met_any = False
     seen = {True: set(), False: set()}
     early_allowance = state.get("early_allowance") is True
+    # The opening of this known set as a planning pass counted it once (state["early_opening"]); None:
+    # early_rules counts it for each template that asks.
+    opening = state.get("early_opening") if type(state.get("early_opening")) is bool else None
     reviews, enrolled = review_count(state), _enrolled_reader(state)
     sentence_aware = callable(state.get("met_sentences"))
     for kind in enabled:
@@ -288,7 +300,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
                                   target_id=raw.get("target_id", item.get("id"))),
                              system_japanese=state.get("system_japanese_input") is True, template=template):
                 continue
-            meta = practice_metadata(raw)
+            meta = practice_metadata_view(raw)   # read only here and in _descriptor
             if "practice" in raw and meta is None:
                 continue  # Malformed metadata is not a legacy escape hatch.
             if _opens_later(meta, reviews):
@@ -307,7 +319,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
             early = gloss = ()
             if unmet and early_allowance:
                 from .early_rules import early_rules
-                early = early_rules(unmet, known, target=item, kind=kind, question=raw)
+                early = early_rules(unmet, known, target=item, kind=kind, question=raw, opening=opening)
             if unmet and not early and enrolled is not None and stem_only:
                 gloss = _stem_gloss(unmet, stem_only, raw, enrolled)
             if early:

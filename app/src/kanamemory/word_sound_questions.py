@@ -40,6 +40,7 @@ variants are indexed modulo its length, so it must not grow or reorder).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from array import array
 from functools import lru_cache
 from hashlib import sha256
 import re
@@ -168,17 +169,25 @@ def _sound_rows(item: Mapping, pool) -> tuple[tuple[str, str, str], ...]:
 def _ranked_rows(target_id, target_title, target, attested, pool):
     # Bank and known-word variants of both kinds rank the same pool for the
     # same lesson; the bounded cache keeps that one scan per lesson and pool.
+    return tuple((pool[index][1], pool[index][2], pool[index][0])
+                 for index in _ranked_order(target_id, target_title, target, attested, pool))
+
+
+@lru_cache(maxsize=4096)
+def _ranked_order(target_id, target_title, target, attested, pool):
+    """The pool positions of _ranked_rows in rank order: a few kilobytes per lesson and pool, so one ranking
+    (an edit distance per pool word) serves every pass of the process, not only the latest 64 lessons."""
     rows = []
     sound = _sound_key(target)
-    for identity, title, reading, others, *_ in pool:
+    for index, (identity, title, reading, others, *_) in enumerate(pool):
         if identity == target_id or title == target_title or others & attested:
             continue
         if sound is not None and sound == _sound_key(reading):  # same_kana_sound(target, reading, fold_script=True)
             continue
         rows.append((_distance(target, reading) + (0 if _same_script(target_title, title) else 1),
-                     _rank(target_id, identity), title, reading, identity))
+                     _rank(target_id, identity), title, reading, identity, index))
     rows.sort()
-    return tuple((title, reading, identity) for _, _, title, reading, identity in rows)
+    return array("I", (row[-1] for row in rows))
 
 
 def _sound_near(item: Mapping, pool) -> list[tuple[str, str]]:

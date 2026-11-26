@@ -186,14 +186,15 @@ def _course_dues(ctx, enabled, now, unavailable=frozenset()):
         if row["unit_id"] not in dues or (due or "") < (dues[row["unit_id"]] or ""):
             dues[row["unit_id"]] = due
     missing_contents = {unit["content_id"] for identity, unit in units.items() if identity not in pending_ids}
-    from .course_planning import preview_question_plans
+    from .course_planning import PassFacts, preview_question_plans
     from .answer_input import system_japanese_enabled
     plans, system_input = ctx.costs.plan_preview(), system_japanese_enabled(ctx.store)
+    facts = PassFacts(ctx.store.queries)   # read once for these lessons
     for cid in missing_contents:
         # Home has usually planned these lessons a moment ago, from the same records.
         for unit, q in preview_question_plans(plans, cid, lambda cid=cid: learning.get_item(cid),
                 enabled_kinds=enabled, queries=ctx.store.queries, learning_store=learning,
-                system_japanese_input=system_input, unavailable_ids=unavailable):
+                system_japanese_input=system_input, unavailable_ids=unavailable, facts=facts):
             if unit and unit["unit_id"] in units:
                 # The append planner also includes per-attempt retry and late
                 # feedback delays; read as a queued question is (design 12 N10).

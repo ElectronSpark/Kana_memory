@@ -10,8 +10,10 @@ from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import json
+import pickle
 import random
 import re
+import threading
 from typing import NamedTuple
 import unicodedata
 
@@ -23,6 +25,7 @@ from . import cjk_forms
 from . import pitch_practice
 from . import multi_cloze
 from . import reading_form_answers
+from . import shared_tables
 from .answer_policy import overlay as answer_overlay, source as answer_source
 from .answer_policy.numbers import fold_numbers
 
@@ -182,10 +185,38 @@ def validate_practice(raw, *, target_id=None):
     Spans always address the public prompt (a completion marks its visible
     gap). Source anchors and authoring decisions remain in the content pack.
     A reviewed flag alone cannot attach an extension to a changed lesson.
+    Returns a copy of the metadata (checked_practice: the same checks, the metadata itself).
+    """
+    value = checked_practice(raw, target_id=target_id)
+    return None if value is None else deepcopy(value)
+
+
+def checked_practice(raw, *, target_id=None):
+    """validate_practice without the copy: the template's own metadata, for a caller that only reads it.
+
+    The metadata of a template in a shared table is checked once per prompt, control and target (it is
+    read-only, so its verdict cannot change); any other metadata is checked at every call.
     """
     value = raw.get("practice")
     if value is None:
         return None
+    facts = _SHARED_FACTS.get(id(value))
+    key = (raw.get("prompt", ""), raw.get("input_mode", "choice"), target_id)
+    if facts is None or facts[0] is not value or not all(type(part) in (str, type(None)) for part in key):
+        return _checked_practice(raw, value, target_id)
+    verdict = facts[1].get(key)
+    if verdict is None:
+        try:
+            _checked_practice(raw, value, target_id)
+            verdict = facts[1][key] = (True, None)
+        except ValueError as error:
+            verdict = facts[1][key] = (False, error.args)
+    if not verdict[0]:
+        raise ValueError(*verdict[1])
+    return value
+
+
+def _checked_practice(raw, value, target_id):
     required = {"schema_version", "task_family", "context_id", "scaffold",
                 "target_spans", "background_ids", "reviewed"}
     if (not isinstance(value, dict) or not required <= set(value)
@@ -236,7 +267,7 @@ def validate_practice(raw, *, target_id=None):
                 or not 0 <= span["start"] < span["end"] <= len(prompt)
                 or prompt[span["start"]:span["end"]] != span["quote"]):
             raise ValueError("Practice target span does not match its prompt")
-    return deepcopy(value)
+    return value
 
 
 def _practice_binding(item, source=None):
@@ -255,6 +286,16 @@ def _practice_binding(item, source=None):
 
 
 def _template_fingerprint(raw):
+    facts = _SHARED_FACTS.get(id(raw))
+    if facts is not None and facts[0] is raw:
+        # A template of a shared table: read-only, so its fingerprint is computed once.
+        if facts[1] is None:
+            facts[1] = _fingerprint_of(raw)
+        return facts[1]
+    return _fingerprint_of(raw)
+
+
+def _fingerprint_of(raw):
     return hashlib.sha256(json.dumps(raw, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
@@ -878,7 +919,80 @@ def practice_templates(item):
     """Reviewed tasks for an exact lesson, plus each provider kind's tasks.
 
     Provider kinds (sound, context choice) follow in registration order.
+
+    The validated table of a lesson is built once and shared (design 07, the template table cache): every
+    caller gets the same object and only reads it; a caller that needs a changed template copies that
+    template (shared_tables). The key is everything the table is built from: the lesson's whole value as
+    the caller has it (its revision, a reviewed overlay, a personal version and every other field enter
+    that way) and the content namespaces it reads (by identity, kept alive by the entry); the catalogue's
+    caches drop the table with every other content cache (content_caches.clear_all). A lesson whose value
+    cannot be keyed is built for that call alone. A refused table (ValueError) is never kept.
     """
+    key = _table_key(item)
+    if key is None:
+        return shared_tables.share(_built_templates(item))
+    entry = _TABLES.get(key)
+    if entry is None:
+        entry = (shared_tables.share(_built_templates(item)), _table_inputs())
+        with _TABLES_LOCK:
+            while len(_TABLES) >= TEMPLATE_TABLE_LIMIT:
+                _forget_facts(_TABLES.pop(next(iter(_TABLES)))[0])
+            _TABLES[key] = entry
+            _register_facts(entry[0])
+    return entry[0]
+
+
+# Facts of the templates of the shared tables, computed once: {id(object): [object, facts]} for every raw
+# template (facts: its fingerprint, None until asked) and every practice metadata (facts: {(prompt, control,
+# target): verdict}). The entry holds its object, so an id is never another object's while it is listed;
+# a table that leaves the cache takes its entries with it.
+_SHARED_FACTS = {}
+
+
+def _table_objects(table):
+    for variants in (table or {}).values() if isinstance(table, dict) else ():
+        for raw in variants if isinstance(variants, list) else ():
+            if isinstance(raw, dict):
+                yield raw, None
+                if isinstance(raw.get("practice"), dict):
+                    yield raw["practice"], {}
+
+
+def _register_facts(table):
+    for value, facts in _table_objects(table):
+        _SHARED_FACTS.setdefault(id(value), [value, facts])
+
+
+def _forget_facts(table):
+    for value, _ in _table_objects(table):
+        if _SHARED_FACTS.get(id(value), (None,))[0] is value:
+            del _SHARED_FACTS[id(value)]
+
+
+# The shared template tables: {key: (table, the namespace objects the key names)}, oldest first.
+_TABLES = {}
+_TABLES_LOCK = threading.Lock()
+# More than the lessons of a large record (one entry per lesson value), fewer than a whole catalogue.
+TEMPLATE_TABLE_LIMIT = 2048
+register_content_cache(lambda: _TABLES.clear(), "learning_questions._TABLES")
+register_content_cache(lambda: _SHARED_FACTS.clear(), "learning_questions._SHARED_FACTS")
+
+
+def _table_inputs():
+    """The module-level content a table is built from (load_namespace at import, the kind registry)."""
+    return (_CONTENT, _PRACTICE, _CONTEXT_CHOICE, KIND_REGISTRY)
+
+
+def _table_key(item):
+    """(identities of _table_inputs, the lesson's pickled value), or None when the value cannot be pickled."""
+    try:
+        value = pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:  # a value the pickle cannot write is planned without the cache
+        return None
+    return (*map(id, _table_inputs()), value)
+
+
+def _built_templates(item):
     result = _reviewed_templates(item)
     if result is None:
         return None
@@ -1180,7 +1294,9 @@ def _grammar_question(item, kind, variant):
 
 
 def build_learning_question(content_id, kind=None, *, variant=0, guided=False, item=None, apply_review=True,
-                            _practice_template=None):
+                            _practice_template=None, templates=NO_TEMPLATES):
+    """``templates``: practice_templates of this lesson as the caller planned from it (the planning pass
+    builds from the table its plan was chosen from); left out, the shared table of the lesson is read."""
     target = _item(content_id, item)
     if apply_review:
         from .material_review import reviewed_item
@@ -1189,7 +1305,8 @@ def build_learning_question(content_id, kind=None, *, variant=0, guided=False, i
         raise ValueError("Learning material is not ready for this reading/sense")
     # One table for this build: its kinds are read from it (asking for the kinds alone copied the lesson
     # and built the same table a second time for every question).
-    templates = practice_templates(target)
+    if templates is NO_TEMPLATES:
+        templates = practice_templates(target)
     kinds = question_kinds(target, templates=templates)
     if not kinds:
         raise ValueError("No reviewed question templates are available")
