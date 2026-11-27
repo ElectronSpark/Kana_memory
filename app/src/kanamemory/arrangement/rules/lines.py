@@ -1,4 +1,4 @@
-"""The time each study line gets inside new content and course review (design 12 LS1-LS3, LS8).
+"""The time each study line gets inside new content and course review (design 12 LS1-LS8).
 
 Pure. The three units of rules/shares and their weights are untouched: the
 share between the word line and the grammar line lives inside new content and
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 
-from ..model import ClockEvent, LineUsage, Unit
+from ..model import ClockEvent, LineTilt, LineUsage, Unit
 from .clock import LOOKBACK, charges
 
 WORD, GRAMMAR = "word", "grammar"   # the values of study_lines.WORD / GRAMMAR
@@ -25,7 +25,7 @@ WORD, GRAMMAR = "word", "grammar"   # the values of study_lines.WORD / GRAMMAR
 LINE_WINDOW = 7200.0
 # The three tilts between the lines, each (word, grammar).
 LINE_WEIGHTS = {"words": (85, 15), "even": (70, 30), "grammar": (50, 50)}
-# The tilt used until the learner can choose one (design 12 LS4, a later step).
+# The tilt a learner who never chose one has (正常, design 12 LS4).
 DEFAULT_TILT = "even"
 
 _UNITS = (Unit.NEW, Unit.COURSE)
@@ -89,3 +89,27 @@ def behind(usage: LineUsage, unit: Unit, weights: tuple[int, int] = LINE_WEIGHTS
     if right < left:
         return GRAMMAR
     return None
+
+
+def weights_of(tilt: LineTilt | str | None) -> tuple[int, int]:
+    """(word, grammar) of a line tilt (design 12 LS4); None is DEFAULT_TILT."""
+    return LINE_WEIGHTS[LineTilt(tilt if tilt is not None else DEFAULT_TILT).value]
+
+
+def other(line: str) -> str:
+    """The other study line."""
+    return GRAMMAR if line == WORD else WORD
+
+
+def turn(usage: LineUsage, unit: Unit, line: str, weights: tuple[int, int] = LINE_WEIGHTS[DEFAULT_TILT]) -> str | None:
+    """The other line when it is STRICTLY behind line inside unit, else None (design 12 LS5, LS7).
+
+    B behind A: usage(B) * w(A) < usage(A) * w(B), cross-multiplied; equal (also both zero) keeps today's
+    order. The same comparison as behind(), asked from the side of the head's line.
+    """
+    if line not in _LINES:
+        return None
+    word_weight, grammar_weight = weights
+    weight = {WORD: word_weight, GRAMMAR: grammar_weight}
+    b = other(line)
+    return b if usage.of(unit, b) * weight[line] < usage.of(unit, line) * weight[b] else None

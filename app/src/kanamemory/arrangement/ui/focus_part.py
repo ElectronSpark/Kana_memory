@@ -7,9 +7,9 @@ the pair 先做范围内 / 只做范围内 (each with its sentence; the stored o
 当前使用, the other's button stores it at once through ``on_only(bool)``), and
 the section 暂不复习 (each paused scope with 恢复 -> ``on_restore(scope)``,
 添加… -> ``on_pause_add()``); without those callbacks they are not drawn.
-The tilt and kana choices are shown only
-while the picked orientation offers them (FocusModel.offers_tilts), else the
-model's note; hidden choices keep their values, so the stored tilts survive
+The tilt and kana choices, and the third group 课程里的词汇与语法 (the
+line tilt, design 12 LS4), are shown only while the picked orientation offers
+them (FocusModel.offers_tilts), else the model's note; hidden choices keep their values, so the stored tilts survive
 a confirm under thorough. Nothing is written here: the composing page hands
 picked() to its confirm callback and the wiring applies it through the focus
 service, which does nothing when it equals the stored focus.
@@ -29,6 +29,7 @@ class FocusPart:
         self._on_only, self._on_restore, self._on_pause_add = on_only, on_restore, on_pause_add
         self._tilts = {option.text: option.tilt for option in model.tilts}
         self._kana = {option.text: option.kana for option in model.kana_tilts}
+        self._lines = {option.text: option.lines for option in model.line_tilts}
         self._scopes = {option.title: option.scope for option in model.scopes}
         tilt = next(option.text for option in model.tilts if option.tilt is model.focus.tilt)
         kana = next(option.text for option in model.kana_tilts if option.kana is model.focus.kana)
@@ -36,6 +37,8 @@ class FocusPart:
                      model.scopes[0].title)
         self.tilt = u.selection(items=list(self._tilts), value=tilt)
         self.kana = u.selection(items=list(self._kana), value=kana)
+        lines = next((option.text for option in model.line_tilts if option.lines is model.focus.lines), None)
+        self.lines = u.selection(items=list(self._lines), value=lines) if self._lines else None
         self.scope = u.selection(items=list(self._scopes), value=scope)
         self._tilt_box = u.col()
         self.follow(mode)
@@ -47,6 +50,9 @@ class FocusPart:
             self._tilt_box.add(u.label(self._model.tilt_heading, size=15, bold=True), self.tilt,
                                u.label(self._model.kana_heading, size=15, bold=True), self.kana,
                                u.label(self._model.kana_note, size=13, color=u.MUTED))
+            if self.lines is not None:
+                self._tilt_box.add(u.label(self._model.line_heading, size=15, bold=True), self.lines,
+                                   u.label(self._model.line_note, size=13, color=u.MUTED))
         else:
             self._tilt_box.add(u.label(self._model.tilt_note, size=13, color=u.MUTED))
 
@@ -103,4 +109,5 @@ class FocusPart:
         """The focus as the selections stand (a selection without a value keeps the stored part)."""
         stored = self._model.focus
         return Focus(self._tilts.get(self.tilt.value, stored.tilt), self._kana.get(self.kana.value, stored.kana),
-                     self._scopes[self.scope.value] if self.scope.value in self._scopes else stored.scope)
+                     self._scopes[self.scope.value] if self.scope.value in self._scopes else stored.scope,
+                     self._lines.get(self.lines.value, stored.lines) if self.lines is not None else stored.lines)

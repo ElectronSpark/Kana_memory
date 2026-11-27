@@ -747,6 +747,10 @@ class StoreEventSource:
         self._origins = _ItemOrigins(store, self._marks, self._logs.day)
         self._line_map = _LineMap(store)   # {content id: line} of the enrolled lessons (design 12 LS3)
 
+    def lesson_lines(self) -> Mapping[str, str]:
+        """{content id: line} of the enrolled lessons: the clock's own map (re-read only when they change)."""
+        return self._line_map.current(self._store.queries.has_course_history())[1]
+
     def _new_window(self) -> _Window:
         return _Window(self._store, self._logs, self._marks, self._later_states, self._line_map, self._contents)
 

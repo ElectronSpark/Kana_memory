@@ -935,6 +935,12 @@ class StudyPathRuntimeMixin:
         existing order. The study clock reads every answer from the store.
         ``scope``: the focus scope's content (design 12 H2), None for none:
         the kinds with a candidate inside it share the time first.
+        The line share (design 12 LS5-LS7): the dispatcher's LineTurn of this
+        dispatch goes with the candidates; the new-content probe shares by line
+        (first_teaching_dispatch._line_course), and when the decision is
+        course review the other line's due review is served instead of the
+        head while that line is behind (DispatchCandidates.line_review), shown
+        as a protected ("course", head) like a recent review behind the head.
         """
         from .arrangement.model import Unit
         from .arrangement.rules.recent import REVIEW_TIER
@@ -964,7 +970,8 @@ class StudyPathRuntimeMixin:
             kana=LaneHead(normal_kana, kana_priority) if normal_kana else None,
             course=LaneHead(current, course_priority) if course_priority is not None else None,
             enabled_kinds=enabled, kana_kinds=kana_kinds, now=now, projection=read, skipped=skipped,
-            memo=arrangement.probe_memo, scope_contents=scope)
+            memo=arrangement.probe_memo, scope_contents=scope,
+            lines=arrangement.line_turn(now))
         if priority is None or priority[0] >= REVIEW_TIER:
             # Design 12 N4 (revised): after tiers 0-2, before the share rule, a recent state's due review,
             # then a ready consolidation deck; nobody's candidate, charged to new content (N3).
@@ -974,6 +981,12 @@ class StudyPathRuntimeMixin:
         # The share rule decides once the normal head is review of its lane (tier 3, or a first check of
         # something already learned: candidates.review_head, 2026-11-18); tiers 0-2 and new work keep their order.
         if priority is None or not review_head(normal, normal_kana if normal == "kana" else current, priority):
+            if normal == "course" and not learned_only:
+                # Design 12 LS5 with no review due (B2 (3)): the course lane is about to start a fresh lesson;
+                # the line share chooses which (the same rule and guard as the share probe).
+                turned = source.fresh_line_head(priority)
+                if turned is not None:
+                    return ("course", turned), None
             return None, None
         dispatcher = arrangement.dispatcher
         decision = dispatcher.decide(source, now)
@@ -1010,6 +1023,12 @@ class StudyPathRuntimeMixin:
                 due = home_service(self).unqueued_due(projection=read)
                 if due and memo.may_rearrange(due):
                     return Rearrange(due), None
+        if decision.unit is Unit.COURSE:
+            # Design 12 LS7: inside course review the line that is behind gets its due review; nothing is
+            # promoted, the unit's own queued question is served (also after without_new above).
+            other = source.line_review()
+            if other is not None:
+                return ("course", other), None
         return None, {Unit.COURSE: "course", Unit.KANA: "kana"}.get(decision.unit)
 
     def _before_share(self, source, now):

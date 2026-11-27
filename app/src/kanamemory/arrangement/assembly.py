@@ -43,6 +43,7 @@ from .sources.deck_questions import StoreDeckQuestions
 from .sources.due_reviews import DueReviews
 from .sources.events import StoreEventSource
 from .sources.extra_states import StoreExtraStates
+from .sources.lesson_lines import StoreLessonLines
 from .sources.practice_exposure import ConsolidationExposure, StorePracticeExposure
 from .sources.practice_moves import StorePracticeMoves
 from .sources.recent import lesson_firsts
@@ -90,7 +91,8 @@ class StoreArrangement:
         """
         preferences = ArrangementPreferences(store)
         events = StoreEventSource(store)
-        dispatcher = ShareDispatcher(preferences, events)
+        # The enrolled lessons by line and their core-route places for the line share (design 12 LS5-LS7).
+        dispatcher = ShareDispatcher(preferences, events, StoreLessonLines(store, events, routes))
         launch_notes = LaunchNotes()
         catalog = catalog if catalog is not None else StoreScopeCatalog(store, routes)
         focus = FocusService(preferences, catalog, restart=lambda: _restart_main_round(store))
@@ -123,6 +125,12 @@ class StoreArrangement:
         """
         self.probe_memo.rearranged(identities)
         _restart_main_round(self.store)
+
+    def line_turn(self, now):
+        """The dispatcher's LineTurn for one dispatch at ``now`` (design 12 LS5-LS7) with this store's probe
+        memo and current round, so that a line read that found nothing is not repeated within RETRY_AFTER."""
+        from ..practice_round import round_id
+        return self.dispatcher.line_turn(now, memo=self.probe_memo, round_id=round_id(self.store))
 
     def hold_note_once(self) -> bool:
         """True the first time it is asked in the current main round (design 12 G3's line, once per round)."""

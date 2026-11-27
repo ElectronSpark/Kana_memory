@@ -304,7 +304,8 @@ def _kana_scoped(scope):
 
 
 def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds, kana_kinds, now, projection,
-                hold_started=False, skip_teaching_ids=frozenset(), scope=None, lessons_only=False) -> _Block:
+                hold_started=False, skip_teaching_ids=frozenset(), scope=None, lessons_only=False,
+                lines=None) -> _Block:
     """The block that runs once one is due.
 
     First the blocks already started and not yet rated: those of the latest
@@ -321,7 +322,10 @@ def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds,
     and a kana direction opened later are review of their lane there. Those
     with their own introduction or guide, and a continuation after a failed
     placement, stay reachable: they are introduction-pool rows or started
-    blocks.
+    blocks. ``lines`` (the share rule only; design 12 LS5, LS6): the
+    dispatcher's line share of this dispatch; a fresh course lesson that is
+    not started may give way to another lesson by line (_line_course).
+    Without it nothing changes.
     """
     from .first_teaching_kana import probe as kana_probe
     skip = {'skip_teaching_ids': frozenset(skip_teaching_ids)} if skip_teaching_ids else {}
@@ -348,6 +352,10 @@ def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds,
                  {'include_unassessed': True, 'prefer_unassessed': anchors.prior_course_pool != 'additional'})
         course = learning.current(enabled_kinds, now=now, fair_new=True, teaching_only=True,
             **pools, **_shared(projection), **skip, **_scoped(scope))
+        if lines is not None and course is not None and not course.get('new_dispatch_continue'):
+            course = _line_course(course, lines, scope, lambda only: learning.current(
+                enabled_kinds, now=now, fair_new=True, teaching_only=True, only_contents=only,
+                **_shared(projection), **skip, **_scoped(scope)))
         kana_pools = ({} if lessons_only else
                       {'include_unassessed': True, 'prefer_unassessed': anchors.prior_kana_pool != 'additional'})
         kana = kana_probe(store, kana_kinds, now, new_only=True, **kana_pools, **_kana_scoped(scope))
@@ -361,6 +369,39 @@ def _block_head(store, learning, service, ks, anchors, *, earned, enabled_kinds,
     lane = store.teaching_queries.choose_lane(_priority(kana), _priority(course), course_started=course_started)
     selected = kana if lane == 'kana' else course if lane == 'course' else None
     return _Block(lane, selected, course, kana)
+
+
+def _line_course(course, lines, scope, read):
+    """Design 12 LS5, LS6: the fresh course lesson after the line share; ``course`` itself unless a switch holds.
+
+    ``course`` is a fresh lesson that is not started, of line A. In this order: the other line B must be
+    strictly behind inside new content and have enrolled lessons (lines.new_turn; else no read is made);
+    B's candidate is the first fresh teaching head among B's lessons (``read(lessons)``: the same course
+    read with one more pass-over filter), none -> no switch; with a focus scope, ``course`` inside and
+    the candidate outside -> no switch. Then the guard (lines.waiting): a grammar lesson does not
+    overtake the untaught word lessons the route puts before it. It is one-sided on purpose: the route
+    puts a grammar lesson after the words its questions use, while a word lesson's questions need no
+    sentence; a two-sided guard would always pick the earlier lesson and the share would do nothing.
+    The first fresh, not started head among those word lessons is taught instead (its time is charged
+    to the word line, so grammar stays behind and its turn comes right after); none -> B's candidate.
+    """
+    line = lines.line_of(course.get('content', {}).get('id'))
+    other = lines.new_turn(line)
+    if other is None:
+        return course
+    candidate = read(lines.lessons(other))
+    if candidate is None:
+        lines.found_nothing('new', other)   # remembered for the round and the memo's interval (no read meanwhile)
+        return course
+    if (scope is not None and course.get('content', {}).get('id') in scope
+            and candidate.get('content', {}).get('id') not in scope):
+        return course
+    waiting = lines.waiting(other, candidate.get('content', {}).get('id'))
+    if waiting:
+        word = read(waiting)
+        if word is not None and not word.get('new_dispatch_continue'):
+            return word
+    return candidate
 
 
 def _chosen(store, kana, course, course_started, inside) -> _Block:
@@ -526,7 +567,7 @@ class ShareProbe(NamedTuple):
 
 
 def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=None,
-                skip_teaching_ids=frozenset(), scope=None) -> ShareProbe:
+                skip_teaching_ids=frozenset(), scope=None, lines=None) -> ShareProbe:
     """The new-content head of the time-share rule (design 12 B3).
 
     What _proportional_teaching gives once a block is earned, without the
@@ -536,7 +577,9 @@ def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=N
     stopped by today's unscored initial checks (breadth first only uses it). ``skip_teaching_ids``:
     teaching heads the learner passed over in this run. ``scope``: the
     learner's focus scope, None for none: fresh candidates inside it first
-    (_block_head). Reads only.
+    (_block_head). ``lines``: the dispatcher's line share of this dispatch
+    (design 12 LS5, LS6; arrangement services.dispatch.LineTurn), None for none:
+    the probe is then the one without it. Reads only.
     """
     now = _utc(now)
     services = _services(store, now)
@@ -545,7 +588,8 @@ def share_probe(store, learning, *, enabled_kinds, kana_kinds, now, projection=N
     anchors = _block_anchors(services.service, services.kana, services.ability, services.kana_ability)
     block = _block_head(store, learning, services.service, services.kana, anchors, earned=True,
                         enabled_kinds=enabled_kinds, kana_kinds=kana_kinds, now=now, projection=projection,
-                        hold_started=True, skip_teaching_ids=skip_teaching_ids, scope=scope, lessons_only=True)
+                        hold_started=True, skip_teaching_ids=skip_teaching_ids, scope=scope, lessons_only=True,
+                        **({} if lines is None else {'lines': lines}))
     since = anchors.latest if anchors.latest else datetime.min.replace(tzinfo=now.tzinfo)
     found = _protected_block(block, anchors, {'rule': 'time_share', 'service_anchor_utc': since.isoformat()})
     return ShareProbe(found, block.waiting)

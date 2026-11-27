@@ -65,6 +65,7 @@ tests/test_answer_overlay_pack.py
 tests/test_answer_overlay_records.py
 tests/test_near_miss_answers.py
 tests/test_probe_first.py
+tests/test_arrangement_line_share.py
 tests/test_arrangement_lines.py
 tests/test_arrangement_recent.py
 tests/test_arrangement_review_filter.py
@@ -194,6 +195,7 @@ app/src/kanamemory/arrangement/sources/deck_questions.py
 app/src/kanamemory/arrangement/sources/due_reviews.py
 app/src/kanamemory/arrangement/sources/events.py
 app/src/kanamemory/arrangement/sources/extra_states.py
+app/src/kanamemory/arrangement/sources/lesson_lines.py
 app/src/kanamemory/arrangement/sources/practice_moves.py
 app/src/kanamemory/arrangement/sources/practice_exposure.py
 app/src/kanamemory/arrangement/sources/scope_catalog.py

@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 
 from ..display import (ANSWERED_TODAY_TEXT, RECENT_UNITS_NOTE, BREADTH_TEXT, CHANGED_TEXT, BREADTH_TITLE, CANCEL_FOCUS, COURSE_REVIEW_TITLE, DEPTH_TITLES,
                        DIRECTION_TITLES, FOCUS_SET_TEXT, INVITE_TEXT, UNCHOSEN_TEXT, KANA_TILT_TITLES, KEEP_TEXT, KEEP_TITLE,
+                       LINE_TILT_TITLES, LineTiltOption,
                        NO_REVIEWS_TEXT, NO_SCOPE_TITLE, PASS_RATE_REVIEWS, PLAN_UNCHANGED_TEXT, SCOPE_GONE_TEXT,
                        SCOPE_GONE_TITLE, SCOPE_KIND_TITLES, SCOPE_TEXT, SET_FOCUS, SINGLE_KIND_UNCHANGED_TEXT,
                        THOROUGH_TEXT, THOROUGH_TITLE, TILT_TITLES, DayMinutes, DepthOption, FocusButtonModel,
@@ -40,10 +41,10 @@ from ..display import (ANSWERED_TODAY_TEXT, RECENT_UNITS_NOTE, BREADTH_TEXT, CHA
                        PART_TITLES, PAUSED_LINE, PAUSED_FULL,
                        SCOPE_DONE_EXTRA, SCOPE_DONE_OUTSIDE, ExtraPartsModel, OnlySwitchModel, PartOption,
                        PauseChooserModel, PausedModel, PausedRow, ScopeDoneModel)
-from ..model import (KANA_DIRECTION_KINDS, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, RouteFacts, Tilt,
-                     Unit)
+from ..model import (KANA_DIRECTION_KINDS, Focus, FocusScope, KanaDirection, KanaTilt, LineTilt, Orientation,
+                     RouteFacts, Tilt, Unit)
 from ..rules.clock import charges
-from ..rules.lines import period_usage
+from ..rules.lines import LINE_WEIGHTS, period_usage
 from ..rules.depth import GROUP_TITLES, LEVELS, KanaDepth, switched_groups
 from ..rules.review_filter import Apart
 from ..rules.shares import KANA_WEIGHTS, TILT_WEIGHTS
@@ -128,13 +129,15 @@ def focus_line(focus: Focus, scope_title: str | None, *, breadth: bool) -> str |
 
     ``scope_title`` is scope_line() of the focus scope (None without a
     scope). The tilts act only under breadth (``breadth``); the even tilt
-    and the normal kana tilt are not a focus.
+    and the normal kana tilt are not a focus, nor the line tilt 正常 (LS4).
     """
     parts = [scope_title] if focus.scope is not None and scope_title else []
     if breadth and focus.tilt is not Tilt.EVEN:
         parts.append(TILT_TITLES[focus.tilt])
     if breadth and focus.kana is not KanaTilt.NORMAL:
         parts.append(KANA_TILT_TITLES[focus.kana])
+    if breadth and focus.lines is not LineTilt.EVEN:
+        parts.append(LINE_TILT_TITLES[focus.lines])
     return "重点：" + " · ".join(parts) if parts else None
 
 
@@ -149,6 +152,13 @@ def kana_tilt_options() -> tuple[KanaTiltOption, ...]:
     return tuple(KanaTiltOption(kana, KANA_TILT_TITLES[kana], f"{course}:{share}",
                                 f"{KANA_TILT_TITLES[kana]} {course}:{share}")
                  for kana, (course, share) in KANA_WEIGHTS.items())
+
+
+def line_tilt_options() -> tuple[LineTiltOption, ...]:
+    """The three line tilts with the share each means inside the course (word:grammar), e.g. 词汇多 85:15."""
+    return tuple(LineTiltOption(tilt, LINE_TILT_TITLES[tilt], f"{word}:{grammar}",
+                                f"{LINE_TILT_TITLES[tilt]} {word}:{grammar}")
+                 for tilt, (word, grammar) in ((tilt, LINE_WEIGHTS[tilt.value]) for tilt in LineTilt))
 
 
 def _overdue_days(now: datetime, dues: Iterable[datetime]) -> int | None:
@@ -427,6 +437,7 @@ class ArrangementPresenter:
         if state is not None and self._filter is not None:
             switch = OnlySwitchModel(self._filter.setting().only, acts=state.resolves)
         return FocusModel(focus=focus, tilts=tilt_options(), kana_tilts=kana_tilt_options(),
+                          line_tilts=line_tilt_options(),
                           scopes=(ScopeOption(None, NO_SCOPE_TITLE), *_unique_titles(choices)),
                           scope_line=line, scope_resolves=resolves, only_switch=switch, paused=self._paused_model())
 

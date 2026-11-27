@@ -17,6 +17,10 @@ nobody's candidate; the clock charges them to new content (rules/clock,
 N3). So the course head that reaches this source is not recent.
 found_nothing_in_round tells the caller that the probe found nothing the
 frozen round may show, so it can re-arrange the round once (design 12 B5).
+The line share (design 12 LS5-LS7): with ``lines`` (the dispatcher's
+LineTurn of this dispatch) the probe shares new content between the word and
+the grammar line, and line_review gives the course-review head of the line
+that is behind.
 Reads only, apart from clearing the promotion marker of a block that no
 longer holds the slot. No SQL: the store's query owners, the first-teaching
 probes and practice_round answer.
@@ -131,7 +135,7 @@ class DispatchCandidates:
     def __init__(self, store, learning, *, pending, kana: LaneHead | None, course: LaneHead | None,
                  enabled_kinds, kana_kinds, now: datetime, projection=None, skipped=frozenset(),
                  in_scope: Callable[[Unit, object], bool] | None = None, memo=None,
-                 scope_contents: Collection[str] | None = None):
+                 scope_contents: Collection[str] | None = None, lines=None):
         self._store = store
         self._learning = learning
         self._session = pending
@@ -146,6 +150,9 @@ class DispatchCandidates:
         self._memo = memo     # services.probe_memo.ProbeMemo of the store, or None (always probe)
         self._new: list = []  # [candidate or None] once probed
         self._empty = False   # the probe ran and the round holds no new content it may show now
+        self._lines = lines   # services.dispatch.LineTurn of this dispatch (design 12 LS5-LS7), or None
+        self.line_reads = 0       # course reads line_review made (tests, diagnostics)
+        self.line_refused = 0     # heads of the other line it read that were not review candidates
 
     def _candidate(self, lane: str, head: dict, unit: Unit | None = None) -> Candidate:
         unit = unit or _LANE_UNIT[lane]
@@ -173,6 +180,83 @@ class DispatchCandidates:
         if head and head.get("type") == "question" and head.get("recent_review"):
             return head
         return None
+
+    def line_review(self) -> dict | None:
+        """Design 12 LS7: the course-review head of the other line when that line is behind, else None.
+
+        Asked once the share rule chose course review and its candidate is the course head, of line A. In
+        this order: the other line B strictly behind A inside course review with enrolled lessons
+        (LineTurn.review_turn; else no read); the first row of the course order among B's lessons
+        (LearningStore.current(only_contents=...) with this dispatch's read context, skipped lessons and
+        scope, as first_recent_review reads) that review_head accepts with its frozen round priority, none
+        (also a teaching head, a waiting or blocked state, or a row the sealed round never registered) ->
+        None, remembered in the probe memo for the round and RETRY_AFTER (no read for that line meanwhile);
+        with a focus scope, the head inside and B's head outside -> None. Nothing is promoted and no
+        frozen priority or entry of the round changes: the caller shows the head as a protected
+        ("course", head), as a recent state's due review behind the course head is shown.
+        """
+        entry = self._heads["course"]
+        if self._lines is None or entry is None:
+            return None
+        head = entry.head
+        other = self._lines.review_turn(self._lines.line_of(head_member("course", head)))
+        if other is None:
+            return None
+        scoped = {} if self._scope is None else {"scope_content_ids": self._scope}
+        self.line_reads += 1
+        found = self._learning.current(self._enabled_kinds, now=self._now, fair_new=True, projection=self._projection,
+                                       only_contents=self._lines.lessons(other),
+                                       **({"skip_teaching_ids": self._skipped} if self._skipped else {}), **scoped)
+        if not found or found.get("type") not in {"question", "instruction"}:
+            self.line_refused += bool(found)
+            self._lines.found_nothing("course", other)
+            return None
+        from ...practice_round import frozen_priority
+        priority = frozen_priority(self._store, "cross-course", found["question"]["id"], found.get(
+            "dispatch_priority", (4 if found["type"] == "question" else 5, 0)))
+        if not review_head("course", found, priority):
+            self.line_refused += 1
+            self._lines.found_nothing("course", other)
+            return None
+        if head_in_scope("course", head, self._scope) and not head_in_scope("course", found, self._scope):
+            return None
+        return found
+
+    def fresh_line_head(self, priority: tuple | None) -> dict | None:
+        """Design 12 LS5 where no review is due (B2 (3)): the line share chooses the fresh lesson the course
+        lane is about to start, or None for today's head.
+
+        Asked when the existing lane choice would serve the course head and no lane head is review. Only for
+        a fresh teaching head (an instruction of tier 4 or more that is not started, not read only, not
+        skipped): a started or promoted block that can be served is the head itself and goes on as today.
+        The same rule and guard as the share probe (first_teaching_dispatch._line_course, the same course
+        read with one more pass-over filter). A replacement is promoted as the share rule promotes a
+        new-content candidate (practice_round.promote: first in the frozen order, cross-lane (1, 0)) and
+        returned marked as a protected block; refused -> today's head, remembered in the probe memo for the
+        round and RETRY_AFTER (no re-arrangement). While a promoted block waits for its spacing (N6: other
+        fresh lessons may start meanwhile, as before) a replacement is served without a promotion, so that
+        the waiting block's own next question stays first once its spacing is over.
+        """
+        entry, lines = self._heads["course"], self._lines
+        if lines is None or entry is None or priority is None:
+            return None
+        current = entry.head
+        if (current.get("type") != "instruction" or priority[0] < 4 or current.get("new_dispatch_continue")
+                or current.get("read_only") or head_member("course", current) in self._skipped):
+            return None
+        from ...first_teaching_dispatch import _line_course
+        from ...practice_round import promote
+        scoped = {} if self._scope is None else {"scope_content_ids": self._scope}
+        head = _line_course(current, lines, self._scope, lambda only: self._learning.current(
+            self._enabled_kinds, now=self._now, fair_new=True, teaching_only=True, only_contents=only,
+            projection=self._projection, **({"skip_teaching_ids": self._skipped} if self._skipped else {}),
+            **scoped))
+        if head_member("course", head) == head_member("course", current):
+            return None
+        if not self.block_open() and not promote(self._store, course_id=head["question"]["id"]):
+            lines.found_nothing("new", lines.line_of(head_member("course", head)))
+            return None
+        return {**head, "dispatch_priority": (2.5, 0), "first_teaching_protected": True, "new_dispatch_continue": True}
 
     def review_candidates(self) -> tuple[Candidate, ...]:
         return tuple(self._candidate(lane, entry.head) for lane, entry in self._heads.items()
@@ -216,7 +300,8 @@ class DispatchCandidates:
             return None
         probe = share_probe(self._store, self._learning, enabled_kinds=self._enabled_kinds,
                             kana_kinds=self._kana_kinds, now=self._now, projection=self._projection,
-                            skip_teaching_ids=self._skipped, **({} if self._scope is None else {"scope": self._scope}))
+                            skip_teaching_ids=self._skipped, **({} if self._scope is None else {"scope": self._scope}),
+                            **({} if self._lines is None else {"lines": self._lines}))
         found = probe.found
         if found is None:
             self._empty = not probe.waiting and not getattr(probe, "stopped", False)

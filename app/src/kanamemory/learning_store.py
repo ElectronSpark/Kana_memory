@@ -2230,7 +2230,7 @@ class LearningStore:
     def current(self, enabled_kinds=None, now=None, *, fair_new=False, teaching_only=False,
                 teaching_content_ids=None, include_unassessed=False, prefer_unassessed=False,
                 projection=None, skip_teaching_ids=None, scope_content_ids=None,
-                only_recent=False) -> LearningCurrent | None:
+                only_recent=False, only_contents=None) -> LearningCurrent | None:
         """Read a tagged dispatch state without consuming or rebuilding questions.
 
         Normal mode returns a course head or an explicit blocking/wait state;
@@ -2261,10 +2261,15 @@ class LearningStore:
         arrangement.services.review_filter.serving_filter, None outside one)
         passes over every row of tier 3 and up whose lesson it does not allow,
         also in a sealed round; tiers 0-2 are served wherever they are.
+        only_contents: a frozenset of content ids, None for all (design 12 LS5-LS7: the
+        line share reads the first head among one line's lessons): every row of
+        another lesson is passed over, in a sealed round too, like the rows
+        only_recent passes over; the order and every other rule are unchanged.
         """
         from .arrangement.services.review_filter import serving_filter
         serve = serving_filter(self.store)
         skip = frozenset(skip_teaching_ids or ())
+        only = None if only_contents is None else frozenset(only_contents)
         if include_unassessed and (not teaching_only or teaching_content_ids is not None):
             raise ValueError("New-ability service requires an unrestricted teaching probe")
         scope = self._effective_scope(scope_content_ids, include_unassessed)
@@ -2273,16 +2278,16 @@ class LearningStore:
             key = self.current_key(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
                 teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
                 prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, scope_content_ids=scope,
-                only_recent=only_recent, serve_filter=serve)
+                only_recent=only_recent, serve_filter=serve, only_contents=only)
             return projection.result(key, lambda: self._current(enabled_kinds, now, fair_new=fair_new,
                 teaching_only=teaching_only, teaching_content_ids=teaching_content_ids,
                 include_unassessed=include_unassessed, prefer_unassessed=prefer_unassessed,
                 projection=projection, skip_teaching_ids=skip, focus_scope=scope, only_recent=only_recent,
-                serve=serve))
+                serve=serve, only_contents=only))
         return self._current(enabled_kinds, now, fair_new=fair_new, teaching_only=teaching_only,
             teaching_content_ids=teaching_content_ids, include_unassessed=include_unassessed,
             prefer_unassessed=prefer_unassessed, skip_teaching_ids=skip, focus_scope=scope,
-            only_recent=only_recent, serve=serve)
+            only_recent=only_recent, serve=serve, only_contents=only)
 
     def _effective_scope(self, scope_content_ids, include_unassessed):
         """The focus scope where it can still act: None without one, or once the course order is frozen."""
@@ -2296,7 +2301,7 @@ class LearningStore:
     @staticmethod
     def current_key(enabled_kinds, now, *, fair_new=False, teaching_only=False, teaching_content_ids=None,
                     include_unassessed=False, prefer_unassessed=False, skip_teaching_ids=None,
-                    scope_content_ids=None, only_recent=False, serve_filter=None):
+                    scope_content_ids=None, only_recent=False, serve_filter=None, only_contents=None):
         """read_operation key of one current() call (see _LearningRead.seed).
 
         ``scope_content_ids`` is the effective scope of that call (current() drops it once the order is frozen);
@@ -2309,6 +2314,7 @@ class LearningStore:
         # Unchanged key without a skip or a scope, so seeded worker results still match.
         key = key + (frozenset(skip_teaching_ids),) if skip_teaching_ids else key
         key = key + ("only-recent",) if only_recent else key
+        key = key + (("only", frozenset(only_contents)),) if only_contents is not None else key
         key = key + (("serve", serve_filter),) if serve_filter is not None else key
         return key + (("scope", frozenset(scope_content_ids)),) if scope_content_ids is not None else key
 
@@ -2399,7 +2405,7 @@ class LearningStore:
 
     def _current(self, enabled_kinds, now, *, fair_new, teaching_only, teaching_content_ids,
                  include_unassessed, prefer_unassessed, projection=None, skip_teaching_ids=frozenset(),
-                 focus_scope=None, only_recent=False, serve=None):
+                 focus_scope=None, only_recent=False, serve=None, only_contents=None):
         # focus_scope: current()'s effective focus scope (not an instruction scope, which the loop below names "scope").
         # serve: the review filter of the running "继续学习" (design 12 H10), None for none.
         from .learning_dependencies import independent_ready_ids, prerequisite_status, has_started_answer
@@ -2506,6 +2512,8 @@ class LearningStore:
             if only_recent and (_read_only_row(row) or row["result_json"] is not None
                                 or not recent_review(row, dispatch_priority(row))):
                 continue
+            if only_contents is not None and row["content_id"] not in only_contents:
+                continue   # design 12 LS5-LS7: the line share reads one line's lessons only
             if serve is not None and not serve.serves(row["content_id"], dispatch_priority(row)[0], row["ability"]):
                 continue   # design 12 H8, H9: left out by the learner's filter from tier 3 on (section 22: not
                            # work started by hand before its first formal rating)

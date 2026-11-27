@@ -3,7 +3,7 @@
 An interface exists only where something must be kept apart: the clock must
 be testable without a store, the new-content candidate must be fetched only
 when it can be chosen, a focus scope must be turned into content without
-the dispatcher reading routes, and what one answer counts as must be
+the dispatcher reading routes (nor, for the line share, lesson data), and what one answer counts as must be
 decidable over states held in memory (design 12 E3). Everything else calls the existing store and
 query owners directly.
 """
@@ -31,6 +31,23 @@ class CandidateSource(Protocol):
 
     def new_candidate(self) -> Candidate | None:
         """The first-teaching head, or None. Probed only when it could be chosen."""
+
+
+class LessonLines(Protocol):
+    """The enrolled lessons by study line and the core route's order of lessons (design 12 LS5-LS7).
+
+    The dispatch shares new content and course review between the word and the grammar line without
+    reading routes or lesson data itself.
+    """
+
+    def lines(self) -> Mapping[str, str]:
+        """{content id: "word" or "grammar"} of every enrolled lesson (study_lines.line_of)."""
+
+    def positions(self) -> Mapping[str, int]:
+        """{content id: position} of the lessons on the static core route order; a lesson not on it is absent."""
+
+    def untaught(self) -> frozenset[str]:
+        """The enrolled lessons whose first teaching has not been shown yet (StudyQueries.untaught_course_ids)."""
 
 
 class ScopeCatalog(Protocol):

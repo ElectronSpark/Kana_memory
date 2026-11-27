@@ -1,17 +1,21 @@
-"""Shapes of the three arrangement settings: strict validation, defaults, conversion.
+"""Shapes of the four arrangement settings: strict validation, defaults, conversion.
 
 Pure: no storage access. A missing orientation means THOROUGH (the rule the
 app had before), so existing data and test stores keep their behaviour; a
 missing focus means no focus; a missing review filter means 只做范围内 off and
-nothing paused (design 12 H8, H9). The app never writes any of them on its own.
+nothing paused (design 12 H8, H9); a missing line tilt means 正常 (LS4). The
+app never writes any of them on its own.
 """
 from __future__ import annotations
 
-from .model import Focus, FocusScope, KanaTilt, Orientation, ReviewFilterSetting, SCOPE_KINDS, Tilt
+from .model import Focus, FocusScope, KanaTilt, LineTilt, Orientation, ReviewFilterSetting, SCOPE_KINDS, Tilt
 
 ORIENTATION_KEY = "study_orientation_v1"
 FOCUS_KEY = "study_focus_v1"
 REVIEW_FILTER_KEY = "study_review_filter_v1"
+# The line tilt between words and grammar (design 12 LS4): its own key, so that study_focus_v1 keeps the
+# shape an older app validates; a missing key means 正常 (LineTilt.EVEN).
+LINES_KEY = "study_lines_v1"
 MAX_EXCLUDED = 20   # scopes 暂不复习 can hold (design 12 H9)
 VERSION = 1
 
@@ -77,6 +81,25 @@ def focus_value(focus: Focus) -> dict:
     scope = focus.scope
     return {"version": VERSION, "tilt": Tilt(focus.tilt).value, "kana": KanaTilt(focus.kana).value,
             "scope": {"kind": scope.kind, "id": scope.id} if scope else None}
+
+
+def validate_lines(value) -> dict:
+    """Return a clean copy of a stored line tilt ({"version": 1, "tilt": "<name>"}) or raise ValueError."""
+    _version(value, {"version", "tilt"}, "study lines")
+    if not isinstance(value["tilt"], str) or value["tilt"] not in {tilt.value for tilt in LineTilt}:
+        raise ValueError("Unknown line tilt")
+    return {"version": VERSION, "tilt": value["tilt"]}
+
+
+def lines_of(value) -> LineTilt:
+    """The line tilt a stored value stands for; nothing stored means 正常 (EVEN)."""
+    if value is None:
+        return LineTilt.EVEN
+    return LineTilt(validate_lines(value)["tilt"])
+
+
+def lines_value(tilt: LineTilt) -> dict:
+    return {"version": VERSION, "tilt": LineTilt(tilt).value}
 
 
 def validate_review_filter(value) -> dict:

@@ -36,6 +36,15 @@ class KanaTilt(str, Enum):
     MORE = "more"
 
 
+class LineTilt(str, Enum):
+    """How the time inside new content and inside course review leans between the word line and the
+    grammar line (design 12 LS4); the names of rules/lines.LINE_WEIGHTS."""
+
+    WORDS = "words"
+    EVEN = "even"
+    GRAMMAR = "grammar"
+
+
 class Unit(str, Enum):
     """The three places study time can go."""
 
@@ -90,15 +99,21 @@ class FocusScope:
 
 @dataclass(frozen=True)
 class Focus:
-    """The learner's current focus: a tilt, a kana tilt and an optional scope."""
+    """The learner's current focus: a tilt, a kana tilt, an optional scope and the line tilt.
+
+    ``lines`` (design 12 LS4) is stored under its own key (settings.LINES_KEY); the
+    preferences service reads both keys into one Focus.
+    """
 
     tilt: Tilt = Tilt.EVEN
     kana: KanaTilt = KanaTilt.NORMAL
     scope: FocusScope | None = None
+    lines: LineTilt = LineTilt.EVEN
 
     @property
     def is_default(self) -> bool:
-        return self.tilt is Tilt.EVEN and self.kana is KanaTilt.NORMAL and self.scope is None
+        return (self.tilt is Tilt.EVEN and self.kana is KanaTilt.NORMAL and self.scope is None
+                and self.lines is LineTilt.EVEN)
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,5 @@
-"""ArrangementPreferences: reading and writing the learner's orientation, focus and review filter (design 12 B1, H, 10).
+"""ArrangementPreferences: reading and writing the learner's orientation, focus (with the line tilt, LS4) and
+review filter (design 12 B1, H, 10).
 
 Pure application layer: the store is any object with the existing public
 ``get_setting(key, default)`` / ``set_setting(key, value)`` methods; no SQL.
@@ -12,24 +13,28 @@ reached through kana_depth() / apply_kana_depth(level).
 """
 from __future__ import annotations
 
-from ..model import Focus, Orientation, ReviewFilterSetting
+from ..model import Focus, LineTilt, Orientation, ReviewFilterSetting
 from ..rules.depth import KanaDepth
-from ..settings import (FOCUS_KEY, ORIENTATION_KEY, REVIEW_FILTER_KEY, focus_of, focus_value, orientation_of,
-                        orientation_value, review_filter_of, review_filter_value, validate_focus, validate_orientation,
-                        validate_review_filter)
+from ..settings import (FOCUS_KEY, LINES_KEY, ORIENTATION_KEY, REVIEW_FILTER_KEY, focus_of, focus_value, lines_of,
+                        lines_value, orientation_of, orientation_value, review_filter_of, review_filter_value,
+                        validate_focus, validate_lines, validate_orientation, validate_review_filter)
 from .kana_depth import KanaDepthSetting
 
 _MISSING = object()
 
-# The three keys and their strict validators: the backup validation chain and the
-# feedback settings snapshot use these (design 12 section 10 (1), (5), (7)).
+# The four keys and their strict validators: the backup validation chain and the
+# feedback settings snapshot use these (design 12 section 10 (1), (5), (7), (8)).
 _VALIDATORS = {ORIENTATION_KEY: validate_orientation, FOCUS_KEY: validate_focus,
-               REVIEW_FILTER_KEY: validate_review_filter}
+               REVIEW_FILTER_KEY: validate_review_filter, LINES_KEY: validate_lines}
 KEYS = tuple(_VALIDATORS)
 
 
+def _with_lines(focus: Focus, lines: LineTilt) -> Focus:
+    return Focus(focus.tilt, focus.kana, focus.scope, lines)
+
+
 def validate_stored(key: str, value) -> dict:
-    """Strictly validate a stored value of one of the three keys; raise ValueError otherwise."""
+    """Strictly validate a stored value of one of the four keys; raise ValueError otherwise."""
     if key not in _VALIDATORS:
         raise ValueError("Not a study arrangement setting")
     return _VALIDATORS[key](value)
@@ -67,15 +72,31 @@ class ArrangementPreferences:
         return Orientation(value["mode"])
 
     def focus(self) -> Focus:
-        return focus_of(self._read(FOCUS_KEY))
+        """The stored focus with the stored line tilt (two settings reads: study_focus_v1 and study_lines_v1)."""
+        return _with_lines(focus_of(self._read(FOCUS_KEY)), self.lines())
+
+    def lines(self) -> LineTilt:
+        """The line tilt between words and grammar (design 12 LS4); 正常 when the key is missing (one read)."""
+        return lines_of(self._read(LINES_KEY))
 
     def set_focus(self, focus: Focus) -> Focus:
-        """Store the learner's focus; anything but a valid Focus raises ValueError and writes nothing."""
+        """Store the learner's focus; anything but a valid Focus raises ValueError and writes nothing.
+
+        The line tilt goes to its own key (design 12 LS4), written only when it differs from the stored
+        one, so a learner who never touches it gets no key; study_focus_v1 keeps its shape and is
+        written as before, except when only the line tilt changed (its bytes stay as they are).
+        """
         if not isinstance(focus, Focus):
             raise ValueError("A Focus is required")
         value = validate_focus(focus_value(focus))
-        self._store.set_setting(FOCUS_KEY, value)
-        return focus_of(value)
+        line_value = validate_lines(lines_value(focus.lines))
+        stored_lines = self.lines()
+        lines_changed = LineTilt(focus.lines) is not stored_lines
+        if not lines_changed or focus_of(self._read(FOCUS_KEY)) != _with_lines(focus, LineTilt.EVEN):
+            self._store.set_setting(FOCUS_KEY, value)
+        if lines_changed:
+            self._store.set_setting(LINES_KEY, line_value)
+        return _with_lines(focus_of(value), LineTilt(line_value["tilt"]))
 
     def review_filter(self) -> ReviewFilterSetting:
         """只做范围内 and 暂不复习 (design 12 H8, H9); off and nothing paused when the key is missing."""

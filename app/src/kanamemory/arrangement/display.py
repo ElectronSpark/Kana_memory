@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .model import DeckAnswerMode, Focus, FocusScope, KanaDirection, KanaTilt, Orientation, Tilt
+from .model import DeckAnswerMode, Focus, FocusScope, KanaDirection, KanaTilt, LineTilt, Orientation, Tilt
 from .rules.depth import KanaDepth
 
 # Fixed wording (design 12 UI1, UI3, UI4, UI5).
@@ -66,6 +66,11 @@ TILT_TITLES = {Tilt.ONLY_NEW: "只学新的", Tilt.NEW: "多学新的", Tilt.EVE
 KANA_TILT_TITLES = {KanaTilt.LESS: "假名少", KanaTilt.NORMAL: "正常", KanaTilt.MORE: "假名多"}
 TILT_THOROUGH_TEXT = "偏重只在广度优先时起作用；深度优先是先把到期的复习做完再学新的，没有份额可调。"
 KANA_SHARE_TEXT = "假名只占自己的那一份；课程复习用不完的时间留给新内容。"
+# The third group (design 12 LS4): the line tilt between words and grammar inside the course.
+LINE_TILT_HEADING = "课程里的词汇与语法"
+LINE_TILT_TITLES = {LineTilt.WORDS: "词汇多", LineTilt.EVEN: "正常", LineTilt.GRAMMAR: "语法多"}
+LINE_SHARE_TEXT = ("新课和课程复习的时间在词汇与语法之间怎么分；只在两边都有内容可学、可复习时起作用。"
+                   "常用表达和读音规则算在词汇里。")
 SCOPE_TEXT = "范围内的先做；范围内都做完才轮到别的，别的复习会排得更晚。"
 CHANGE_TEXT = "改重点会重新排一次当前这一轮。"
 NO_SCOPE_TITLE = "不设范围"
@@ -252,6 +257,17 @@ class KanaTiltOption:
 
 
 @dataclass(frozen=True)
+class LineTiltOption:
+    """One of the three line tilts inside the course (design 12 LS4): ``share`` word:grammar "85:15",
+    ``text`` "词汇多 85:15"."""
+
+    lines: LineTilt
+    title: str
+    share: str
+    text: str
+
+
+@dataclass(frozen=True)
 class ScopeOption:
     """A scope the screen offers; ``scope`` None is "no scope" (不设范围)."""
 
@@ -361,6 +377,9 @@ class FocusModel:
     drop_scope: str = DROP_SCOPE
     only_switch: OnlySwitchModel | None = None   # only while a scope is stored (H8)
     paused: PausedModel | None = None            # the section 暂不复习 (H9)
+    line_tilts: tuple[LineTiltOption, ...] = ()  # the third group (LS4), offered with the two tilts
+    line_heading: str = LINE_TILT_HEADING
+    line_note: str = LINE_SHARE_TEXT
 
     @staticmethod
     def offers_tilts(mode: Orientation) -> bool:
