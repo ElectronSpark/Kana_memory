@@ -10,6 +10,10 @@ from .practice_availability import summarize_queue_availability
 
 
 _UNREAD = object()
+# The offers of a wait or end page inside 继续学习 (继续已加入的学习, the next section) read what its dispatch read:
+# the read operation still open (counts, course reads) and the route overview of that operation
+# (route_overview); False reads them again as before (the reference reading the equivalence tests compare with).
+SHARED_OFFER_READS = True
 # A continue wait page that outlives this offers retry (review 2026-11-08 section 2).
 CONTINUE_WAIT_SECONDS = 20
 RECOMPUTE_QUEUE_TEXT = "重新计算今日队列"
@@ -252,8 +256,24 @@ def current_route_next(service):
     from .study_path_display import active_route, route_key
     current = active_route(service)
     if route_key(current) is None:
-        return (service.overview(),)
-    return (service.overview(route_id=current), current)
+        return (route_overview(service),)
+    return (route_overview(service, current), current)
+
+
+def route_overview(service, route_id=None):
+    """service.overview(route_id=route_id) as the running action reads it: once per its read operation (the
+    same service, nothing written since), shared read-only (shared_tables); without an open read operation,
+    or with SHARED_OFFER_READS off, a read of its own as before."""
+    learning = getattr(service, "learning", None)
+    reader = getattr(learning, "action_read", None)
+    read = reader() if SHARED_OFFER_READS and callable(reader) else None
+    route = {} if route_id is None else {"route_id": route_id}
+    if read is None:
+        return service.overview(**route)
+    from .shared_tables import share
+    kept_service, value = read.kept(("route_overview", id(service), route_id),
+                                    lambda: (service, share(service.overview(**route))))
+    return value if kept_service is service else service.overview(**route)
 
 
 @dataclass(frozen=True)
@@ -349,7 +369,9 @@ class StudyPathRuntimeMixin:
         from .app import KanaMemory
         from .home_runtime import home_inputs, home_service
         service = home_service(self, queue_kinds=lambda pending: KanaMemory._queue_kinds(self, pending))
-        return service.can_continue(home_inputs(self))
+        # Asked from a wait or end page inside 继续学习: the counts and course reads of its dispatch (the read
+        # operation still open), under the review filter it serves with; elsewhere a read of its own.
+        return service.can_continue(home_inputs(self), in_action=SHARED_OFFER_READS)
 
     def study_path_service(self):
         # Learner IDs, not the number of rows, detect restored/custom courses.
@@ -1314,7 +1336,7 @@ class StudyPathRuntimeMixin:
                     round_saved()
                     return
             # Reference-only symbols have no made-up independent audio cards.
-            path = service.overview()
+            path = route_overview(service)
             reference = service.next_reference_entry()
             if reference:
                 self.show_study_reference(reference["id"])
@@ -1357,7 +1379,7 @@ class StudyPathRuntimeMixin:
                 from .arrangement.model import RouteFacts
                 from .arrangement.ui.section_note import section_note_rows
                 current = active_route(service)
-                shown = path if route_key(current) is None else service.overview(route_id=current)
+                shown = path if route_key(current) is None else route_overview(service, current)
                 others = other_route_rows(service, current) if not shown.get("next_section") else ()
                 # B10 under breadth: the next section first (presenter.end_note is None otherwise), named apart
                 # from sections of the same title (study_lines.section_name).

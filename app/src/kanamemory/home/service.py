@@ -283,17 +283,21 @@ class HomeOverviewService:
             return self._presenter().apart(read.moment(), course_kinds=self._course_kinds(),
                                            course_exclude=view.unavailable_ids)
 
-    def can_continue(self, inputs: HomeInputs) -> bool:
+    def can_continue(self, inputs: HomeInputs, *, in_action: bool = False) -> bool:
         """Whether 继续学习 can reach anything now (the route page and the end pages ask; reads only).
 
         The main queue and the counts answer first; only without an answer
         there are the two unqueued previews and the reference entries read.
+        ``in_action``: asked inside an action whose read operation is still open (the dispatch of a wait or
+        end page): its counts and course reads are shared; otherwise, or without one, a read of its own.
         """
         store, learning = self._store, self._learning
         pending = store.load_session_progress(lane="main", lazy_questions=True)
         available = summarize_queue_availability(store, pending,
             allowed_kinds=self._queue_kinds(pending) if pending else None)
-        with learning.read_operation() as read:
+        projection = learning.action_read() if in_action else None
+        from contextlib import nullcontext
+        with (nullcontext(projection) if projection is not None else learning.read_operation()) as read:
             counts = learning.counts(self._course_kinds(), projection=read)
             if available.ready_count or available.blocked_count or counts["ready"] or counts["instruction"]:
                 return True

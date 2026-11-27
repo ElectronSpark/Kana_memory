@@ -112,6 +112,11 @@ class _LearningRead:
             self._values[key] = compute()
         return self._values[key]
 
+    def kept(self, key, compute):
+        """``compute()`` once for this action while nothing is written (dropped with every memoized value;
+        computed anew inside a transaction). ``key`` names it exactly; the value is shared as it is."""
+        return self._shared(("kept", *key), compute)
+
     def ready_ids(self):
         from .learning_dependencies import independent_ready_ids
         return self._shared(("ready_ids",), lambda: frozenset(independent_ready_ids(self.learning)))
@@ -193,6 +198,163 @@ class _LearningRead:
                 self._values[key] = deepcopy(value)
             return value
         return deepcopy(self._values[key])
+
+
+# current() and counts() read each lesson's and question's facts once per read operation (_DispatchFacts);
+# False reads them for every row as before (the reference reading the equivalence tests compare with).
+SHARED_DISPATCH_FACTS = True
+
+
+class _LessonsView:
+    """The LearningStore as the prerequisite rules read it, with one read operation's lesson views."""
+
+    def __init__(self, learning, facts):
+        self._learning, self._facts = learning, facts
+
+    def __getattr__(self, name):
+        return getattr(self._learning, name)
+
+    def get_item(self, content_id):
+        return self._facts.lesson(content_id)
+
+    def instruction_item(self, content_id, instruction_scope=None):
+        return self._facts.item(content_id, instruction_scope)
+
+
+class _DispatchFacts:
+    """What current() and counts() check on the rows of one course read, read once (design 12 N16).
+
+    One per read operation (kept among its memoized values, so a write or a commit of another connection
+    drops it with them; transaction reads get their own), else one per call. Every value is shared
+    read-only (shared_tables.share) and has the exact key of what it is read from at this revision: a
+    lesson's view per (content id, instruction scope) (instruction_item), its view without units and its
+    stored row per content id (the prerequisite rules read no units), the view of a question the checks read
+    (get_question without its two assessment fields, which no due, wait or block rule reads; the whole view
+    where the material check could read them), a prerequisite status per (content id, instruction scope),
+    question_block_possible per lesson, the pending dispatch rows per set of kinds, the batch gate per set of
+    kinds, the probe gate per moment and a row's serviceable due per (question id, moment). A served head
+    leaves as an own value (own: the lesson and status copied, the question read again whole), so nothing
+    shared leaves current(). ``shared=False`` (SHARED_DISPATCH_FACTS off) reads every fact on each request,
+    as the per-row reading did.
+    """
+
+    def __init__(self, learning, ready_ids, projection=None, *, shared=True):
+        self._learning, self._ready_ids, self._projection = learning, ready_ids, projection
+        self.shared, self._values = shared, {}
+        self._lessons = _LessonsView(learning, self)
+
+    @classmethod
+    def of(cls, learning, projection, ready_ids):
+        """The read operation's facts (``ready_ids``: its ready ids), or this call's own."""
+        if not SHARED_DISPATCH_FACTS:
+            return cls(learning, ready_ids, projection, shared=False)
+        if projection is None:
+            return cls(learning, ready_ids)
+        return projection._shared(("dispatch_facts",), lambda: cls(learning, ready_ids, projection))
+
+    def _memo(self, key, compute):
+        if not self.shared:
+            return compute()
+        if key not in self._values:
+            from .shared_tables import share
+            self._values[key] = share(compute())
+        return self._values[key]
+
+    def item(self, content_id, scope=None):
+        """instruction_item; without a scope built on this operation's lesson view (the overlays applied once)."""
+        def read():
+            if scope is None and self.shared and self.row(content_id) is not None:
+                return self._learning.instruction_item(content_id, None, _lesson=self.lesson(content_id))
+            return self._learning.instruction_item(content_id, scope)
+        return self._memo(("item", content_id, scope), read)
+
+    def row(self, content_id):
+        """The lesson's stored row (learning_content), or None."""
+        return self._memo(("row", content_id), lambda: self._learning.instruction_row(content_id))
+
+    def lesson(self, content_id):
+        """The lesson as the prerequisite rules read it (counts' dependency view): no units, which they never read."""
+        def read():
+            row = self.row(content_id)
+            return None if row is None else self._learning._item(row, [])
+        return self._memo(("lesson", content_id), read)
+
+    def question(self, question_id):
+        """The question as the checks read it: without its assessment fields (whole without sharing)."""
+        if not self.shared:
+            return self._learning.get_question(question_id)
+        return self._memo(("question", question_id),
+                          lambda: self._learning.get_question(question_id, _assessed=False))
+
+    def blocked(self, item, question):
+        """content_question_blocked(item, question) as of the whole question.
+
+        Without a personal version, hold or personal question of the lesson
+        (personal_content_versions.question_block_possible), a personal rubric or material of model origin
+        neither material rule reads the question beyond the fields the view keeps; otherwise the whole view.
+        """
+        if not self.shared:
+            return self._learning.content_question_blocked(item, question)
+        from .assessment_policy import _ai_origin
+        possible = self.block_possible(item)
+        if possible or question.get("personal_rubric") or _ai_origin(item, question):
+            question = self._memo(("whole", question["id"]), lambda: self._learning.get_question(question["id"]))
+        return self._learning.content_question_blocked(item, question, _personal=possible)
+
+    def block_possible(self, item):
+        """personal_content_versions.question_block_possible of the lesson (it reads the lesson's id only)."""
+        if not self.shared:
+            return True
+        from .personal_content_versions import question_block_possible
+        return self._memo(("block_possible", item.get("id", "")),
+                          lambda: question_block_possible(self._learning.store, item))
+
+    def prerequisite(self, content_id, scope):
+        return self._memo(("prerequisite", content_id, scope), lambda: LearningStore.prerequisite_status(
+            self._lessons if self.shared else self._learning, content_id, scope, ready_ids=self._ready_ids))
+
+    def serviceable_due(self, row, now, exposure_times):
+        """serviceable_ability_due of a pending dispatch row at ``now`` (its question id and the moment are the
+        key: the row, and the moment's exposure tables, are this operation's)."""
+        def read():
+            return self._learning.serviceable_ability_due(row, _load(row["snapshot_json"]), now,
+                                                          exposure_times=exposure_times)
+        return self._memo(("serviceable_due", row["question_id"], now.isoformat()), read)
+
+    def pending(self, enabled_kinds):
+        rows = self._memo(("pending", None if enabled_kinds is None else frozenset(enabled_kinds)),
+                          lambda: list(self._learning.dispatch_pending(enabled_kinds, projection=self._projection)))
+        return list(rows)
+
+    def batch_gate(self, enabled_kinds):
+        key = ("batch_gate", None if enabled_kinds is None else frozenset(enabled_kinds))
+        if key not in self._values:
+            self._values[key] = self._learning._batch_gate_reader(enabled_kinds)
+        return self._values[key]
+
+    def probe_gate(self, now):
+        key = ("probe_gate", now.isoformat())
+        if key not in self._values:
+            from .learning_probe import GateReader
+            self._values[key] = GateReader(self._learning, now)
+        return self._values[key]
+
+    def own(self, value):
+        """A result of current() as its own value: the lesson and the status copied, the question read again."""
+        if not self.shared:
+            return value
+        from copy import deepcopy
+        value = dict(value)
+        if "dependency_status" in value:
+            status = deepcopy(value["dependency_status"])
+            value.update(dependency_status=status, prerequisites=status["missing"])
+        if not value.get("read_only"):
+            # The lesson as a copy of the shared view (the same value as instruction_item(content_id, scope) of
+            # this operation); the question read again whole (the shared view lacks its assessment fields).
+            question = self._learning.get_question(value["question"]["id"])
+            value.update(content=deepcopy(value["content"]), question=question,
+                         draft=question["draft"], result=question["result"])
+        return value
 
 
 def _dump(value):
@@ -388,7 +550,60 @@ def _word_lookup(store):
         if cached is None:
             cached = _DICTIONARY_WORDS[(key, word_id)] = repo.get_word(word_id) is not None
         return cached
+    exists.repository = repo   # two checks of the same repository give the same answers (_same_catalogue)
     return exists
+
+
+# availability_view keeps its last view on the store while its inputs are the same (_kept_view); False builds
+# it on every read as before (the reference reading the equivalence tests compare with).
+KEEP_AVAILABILITY = True
+
+
+def _same_catalogue(kept, catalogue):
+    """Whether ``catalogue`` gives every answer ``kept`` gives: the same object, or field by field the same
+    values, the process's effective catalogue the same object and the word check of the same repository."""
+    if kept is catalogue:
+        return True
+    if type(kept) is not type(catalogue):
+        return False
+    from dataclasses import fields
+    for field in fields(catalogue):
+        a, b = getattr(kept, field.name), getattr(catalogue, field.name)
+        if a is b:
+            continue
+        if field.name == "word_exists":
+            repository = getattr(a, "repository", None)
+            if repository is None or repository is not getattr(b, "repository", None):
+                return False
+        elif field.name == "effective" or callable(a) or callable(b) or a != b:
+            return False
+    return True
+
+
+def _kept_view(store, catalogue, registry, rows, ready_ids):
+    """build_view(catalogue, registry, rows, ready_ids=ready_ids), kept on ``store`` for its next read.
+
+    The view is a function of exactly these inputs (the ready ids only when a dependency of a row is
+    missing; they are then read again and compared). An appended question changes none of them, so a queue
+    pass builds the view once; an enrolment (rows), a library switched on or off (registry) or another
+    catalogue builds it again. Shared read-only (shared_tables.share).
+    """
+    from dataclasses import replace
+    from .content_availability import build_view
+    from .shared_tables import share
+    if not KEEP_AVAILABILITY:
+        return build_view(catalogue, registry, rows, ready_ids=ready_ids)
+    kept = getattr(store, "_kept_availability", None)
+    if kept is not None:
+        k_catalogue, k_registry, k_rows, given, view = kept
+        if (given == (ready_ids is not None) and k_rows == rows and k_registry == registry
+                and _same_catalogue(k_catalogue, catalogue)):
+            if view.catalogue is k_catalogue or frozenset(ready_ids()) == view.catalogue.ready_ids:
+                return view
+    view = build_view(catalogue, registry, rows, ready_ids=ready_ids)
+    view = replace(view, registry=share(view.registry), states=share(view.states))
+    store._kept_availability = (catalogue, registry, rows, ready_ids is not None, view)
+    return view
 
 
 def availability_view(store, *, ready_ids=None):
@@ -422,7 +637,7 @@ def availability_view(store, *, ready_ids=None):
                 "SELECT content_id FROM learning_content WHERE content_id IN (%s) "
                 "AND json_extract(content_json,'$.dictionary_only')=1" % ",".join("?" * len(chunk)), chunk))
         rows = [{"content_id": cid, "dictionary_only": cid in dictionary} for cid in ids]
-    return build_view(catalogue, registry, rows, ready_ids=ready_ids)
+    return _kept_view(store, catalogue, registry, rows, ready_ids)
 
 
 class GuidedQuestionUnavailable(LookupError):
@@ -467,6 +682,10 @@ class LearningStore:
             read.active = False
             read._values = {}
             self.store._learning_read = previous
+
+    def action_read(self):
+        """The read operation of the running action (the innermost read_operation still open), or None."""
+        return _attached_read(self.store)
 
     def availability(self, *, projection=None):
         """AvailabilityView of the attached/explicit read operation, else a live read."""
@@ -1447,12 +1666,16 @@ class LearningStore:
         """Resolve the existing introduction scope without exposing the connection."""
         return _teaching.scope_for(self._db, content_id, ability)
 
-    def instruction_item(self, content_id, instruction_scope=None):
+    def instruction_item(self, content_id, instruction_scope=None, *, _lesson=None):
+        """``_lesson``: this lesson's view without units (_item(row, []) of the same row, _DispatchFacts.lesson)
+        when the caller has it: its overlays are not applied again, only the units are added."""
         row = self.instruction_row(content_id, instruction_scope)
         if row is None:
             return None
         units = [self.get_unit(content_id, ability) for ability in _teaching.abilities(self._db, row)]
-        item = self._item(row, units)
+        item = (self._item(row, units) if _lesson is None else
+                self._with_units({key: value for key, value in _lesson.items() if key not in self._UNIT_KEYS},
+                                 row, units))
         if instruction_scope:
             item['instruction_scope'] = instruction_scope
         return item
@@ -1466,6 +1689,9 @@ class LearningStore:
         return self._item(row, units)
 
     def _item(self, row, units):
+        return self._with_units(self._lesson_view(row), row, units)
+
+    def _lesson_view(self, row):
         # The decoded record is this call's own value: the overlays update it instead of copying it again.
         result = _load(row["content_json"])
         from .material_review import reviewed_item
@@ -1477,6 +1703,13 @@ class LearningStore:
         result.update(content_id=row["content_id"], stage=row["stage"], introduction_id=row["introduction_id"],
                       checkpoint=_load(row["checkpoint_json"]), exposure_group=row["exposure_group"],
                       introduced_at_utc=row["introduced_at_utc"], retrieval_at_utc=row["retrieval_at_utc"])
+        return result
+
+    # The keys _with_units sets: a lesson view without units (_item(row, [])) is the same view before them.
+    _UNIT_KEYS = frozenset({"units", "retired_abilities", "read_only", "enrolled_abilities"})
+
+    @staticmethod
+    def _with_units(result, row, units):
         # J6 R4: units of an ability the lesson no longer lists stay stored (history) but leave this view,
         # so nothing plans, teaches or counts them; with none left the lesson is only read (R1).
         retired = [unit["ability"] for unit in units if unit and retired_ability(row["content_id"], unit["ability"])]
@@ -1953,7 +2186,12 @@ class LearningStore:
         self._db.execute("UPDATE learning_content SET checkpoint_json=? WHERE content_id=?",
                          (_dump(checkpoint), content_id))
 
-    def get_question(self, question_id):
+    def get_question(self, question_id, *, _assessed=True):
+        """The question as stored, reviewed and with its assessment contract and decision.
+
+        ``_assessed=False`` (the dispatch's checks of a row it does not serve, _DispatchFacts.question): the
+        same view without the two assessment fields, which no due, wait or blocking rule reads.
+        """
         row = self._db.execute("SELECT * FROM learning_question WHERE question_id=?", (question_id,)).fetchone()
         if row is None:
             return None
@@ -1971,6 +2209,8 @@ class LearningStore:
         archive = archived_question(self.store, question_id)
         if archive:
             result.update(status="archived", round_archive=archive)
+        if not _assessed:
+            return result
         from .assessment_contract import for_question as assessment_contract
         result["assessment_contract"] = ((result["result"] or {}).get("assessment_contract")
                                          or assessment_contract(result))
@@ -2194,14 +2434,22 @@ class LearningStore:
         finally:
             rows.close()
 
-    def dispatch_pending(self, enabled_kinds=None, *, projection=None):
+    def dispatch_pending(self, enabled_kinds=None, *, projection=None, _fresh=False):
         """Read small sort fields; hydrate only the selected question later.
 
         Preserve absent-vs-explicit-null input_mode, since the former falls
         back to response. Queue snapshots, drafts and result bytes are never
         changed by this projection; _pending stays the full-row reader.
         Read only; public since design 13 S3 (the home's unqueued preview reads it).
+        With ``projection`` the rows (immutable) are read once per operation and set of kinds and shared by its
+        readers (current(), the unqueued preview; SHARED_DISPATCH_FACTS).
         """
+        if projection is not None and not _fresh and SHARED_DISPATCH_FACTS:
+            from .shared_tables import share
+            key = ("dispatch_pending", None if enabled_kinds is None else frozenset(enabled_kinds))
+            yield from projection.kept(key, lambda: share(list(
+                self.dispatch_pending(enabled_kinds, projection=projection, _fresh=True))))
+            return
         kinds = set(enabled_kinds) if enabled_kinds is not None else None
         unavailable = self.availability(projection=projection).unavailable_ids
         for row in self._db.execute("""SELECT q.question_id,q.unit_id,q.kind,q.status,
@@ -2418,6 +2666,7 @@ class LearningStore:
         exposure_times = (projection.exposure_times(now) if projection is not None
                           else self.content_exposure_times(now))
         firsts = self._first_rated(exposure_times)
+        facts = _DispatchFacts.of(self, projection, ready_ids)
         from .arrangement.rules.recent import REVIEW_TIER, ordered_priority
         def has_text(value):
             return isinstance(value, str) and bool(value.strip())
@@ -2459,8 +2708,7 @@ class LearningStore:
                            or bool(_load(content["checkpoint_json"]).get("instruction_exposed_at_utc")))
                 return (4, -1 if started else 0) if fair_new else (5, 0)
             # Design 12 N2: a recent unit's short interval is served after one day (serviceable_ability_due).
-            return review_priority(row, due=self.serviceable_ability_due(row, _load(row["snapshot_json"]), now,
-                                                                         exposure_times=exposure_times),
+            return review_priority(row, due=facts.serviceable_due(row, now, exposure_times),
                 now=now, day_start=review_day, reviewed_today=daily_counts.get(row["unit_id"], 0))
 
         def recent_review(row, priority):
@@ -2501,10 +2749,9 @@ class LearningStore:
                     for pool, head in service_heads.items()}}
 
         from .practice_round import freeze_course_rows
-        from .learning_probe import GateReader
-        gate_closed = self._batch_gate_reader(enabled_kinds)
-        probe_gate = GateReader(self, now)
-        pending_rows = list(self.dispatch_pending(enabled_kinds, projection=projection))
+        gate_closed = facts.batch_gate(enabled_kinds)
+        probe_gate = facts.probe_gate(now)
+        pending_rows = facts.pending(enabled_kinds)
         firsts.prime(row["unit_id"] for row in pending_rows if row["review_count"])
         # J6 R1: unread read-only lessons join as stand-in rows at their route place (never recent work).
         rows = self._with_read_only_heads(pending_rows, projection)
@@ -2529,7 +2776,7 @@ class LearningStore:
                 result = {"content": content, "question": read_only_head_question(cid), "draft": None,
                           "result": None, "dispatch_priority": dispatch_priority(row), "read_only": True}
                 if (cid, None) not in dependencies:
-                    dependencies[(cid, None)] = self.prerequisite_status(cid, None, ready_ids=ready_ids)
+                    dependencies[(cid, None)] = facts.prerequisite(cid, None)
                 if dependencies[(cid, None)]["blocked"]:
                     blocked.append({**result, "dependency_status": dependencies[(cid, None)],
                                     "prerequisites": dependencies[(cid, None)]["missing"]})
@@ -2562,9 +2809,11 @@ class LearningStore:
             if include_unassessed and ("additional" if unassessed(row) else "introduction") in service_heads:
                 continue
             scope = dict(content_row).get('instruction_scope')
-            content = self.instruction_item(row["content_id"], scope)
-            q = self.get_question(row["question_id"])
-            if q['result'] is None and self.content_question_blocked(content, q):
+            # Read once per operation and shared (_DispatchFacts); a head leaves as its own value (facts.own).
+            cid = row["content_id"]
+            content = facts.item(cid, scope)
+            q = facts.question(row["question_id"])
+            if q['result'] is None and facts.blocked(content, q):
                 blocked_material.append(q['id'])
                 continue
             result = {"content": content, "question": q, "draft": q["draft"], "result": q["result"],
@@ -2576,7 +2825,7 @@ class LearningStore:
                     result["recent_review"] = True
             dependency_key = (content['id'], scope)
             if dependency_key not in dependencies:
-                dependencies[dependency_key] = self.prerequisite_status(content['id'], scope, ready_ids=ready_ids)
+                dependencies[dependency_key] = facts.prerequisite(content['id'], scope)
             dependency = dependencies[dependency_key]
             if dependency["blocked"]:
                 blocked.append({**result, "dependency_status": dependency, "prerequisites": dependency["missing"]})
@@ -2584,7 +2833,7 @@ class LearningStore:
             if q["result"] is not None and q["result"].get("initial_diagnostic"):
                 # A failed placement test now needs teaching, but its frozen
                 # feedback must be saved before returning to that introduction.
-                return {**result, "type": "question", "stage": "check"}
+                return facts.own({**result, "type": "question", "stage": "check"})
             if content["stage"] in {"intro", "guide"}:
                 # A whole lesson (its id) or one of its scopes ((id, scope): no qualifying probe yet).
                 if content["id"] in skip_teaching_ids or (content["id"], scope) in skip_teaching_ids:
@@ -2600,8 +2849,9 @@ class LearningStore:
                         or bool(content["checkpoint"].get("instruction_exposed_at_utc")))
                 head = {**result, "type": "instruction", "stage": content["stage"]}
                 if not include_unassessed:
-                    return head
-                service_heads.setdefault("introduction", head)
+                    return facts.own(head)
+                if "introduction" not in service_heads:
+                    service_heads["introduction"] = facts.own(head)
                 if len(service_heads) == 2:
                     return chosen_service_head()
                 continue
@@ -2619,8 +2869,9 @@ class LearningStore:
                 result["probe"] = True   # its page shows no aid on the item itself (probe_rules)
             head = {**result, "type": "question", "stage": "check"}
             if not include_unassessed:
-                return head
-            service_heads.setdefault("additional", head)
+                return facts.own(head)
+            if "additional" not in service_heads:
+                service_heads["additional"] = facts.own(head)
             if len(service_heads) == 2:
                 return chosen_service_head()
         if include_unassessed and service_heads:
@@ -2630,7 +2881,8 @@ class LearningStore:
         if blocked_material and not blocked and not waiting:
             return {'type': 'content_blocked', 'question_ids': blocked_material, 'counts': self.counts(enabled_kinds, now, projection=projection)}
         if blocked:
-            return {**blocked[0], "type": "prerequisite", "counts": self.counts(enabled_kinds, now, projection=projection),
+            return {**facts.own(blocked[0]), "type": "prerequisite",
+                    "counts": self.counts(enabled_kinds, now, projection=projection),
                     "due_at_utc": min(waiting) if waiting else None}
         if waiting:
             return {"type": "waiting", "due_at_utc": min(waiting), "counts": self.counts(enabled_kinds, now, projection=projection)}
@@ -2739,9 +2991,16 @@ class LearningStore:
             firsts.prime(row["unit_id"] for row in visible.values())
         from .answer_input import available, system_japanese_enabled
         system_input = system_japanese_enabled(self.store)
-        gate_closed = self._batch_gate_reader(enabled_kinds)
-        from .learning_probe import GateReader
-        probe_gate = GateReader(self, now)
+        # The gates and prerequisite statuses current() of the same read operation reads (_DispatchFacts).
+        facts = _DispatchFacts.of(self, projection, ready_ids)
+        gate_closed = facts.batch_gate(enabled_kinds)
+        probe_gate = facts.probe_gate(now)
+
+        def prerequisites(content_id, scope):
+            if facts.shared:
+                return facts.prerequisite(content_id, scope)
+            return (self.prerequisite_status(content_id, scope, ready_ids=ready_ids) if scope else
+                    prerequisite_status(dependencies_view, dependency_item(content_id), ready_ids=ready_ids))
         if serve is not None:
             from .review_dispatch import reviews_today
             review_day, daily_counts = reviews_today(self.store, now, course=True)
@@ -2765,12 +3024,14 @@ class LearningStore:
             scope = row['ability'] if state and row['ability'] in state['additions'] else None
             projected_key = (row['content_id'], scope)
             if projected_key not in projected:
-                content = _teaching.project(self._db, content_row(row["content_id"]), scope, state=state)
+                content = _teaching.project(self._db, (facts.row if facts.shared else content_row)(row["content_id"]),
+                                            scope, state=state)
                 # Read by content_question_blocked only (never changed): one decode per lesson and scope.
                 projected[projected_key] = (content, {**_load(content['content_json']), 'stage': content['stage'],
                                                       'checkpoint': _load(content['checkpoint_json'])})
             content, teaching_item = projected[projected_key]
-            if row['result_json'] is None and self.content_question_blocked(teaching_item, question()):
+            if row['result_json'] is None and self.content_question_blocked(
+                    teaching_item, question(), _personal=facts.block_possible(teaching_item)):
                 counts['blocked_material'] += 1
                 continue
             if _paused_practice_guide(content, enabled_kinds):
@@ -2778,8 +3039,7 @@ class LearningStore:
                 continue
             dependency_key = (row['content_id'], scope)
             if dependency_key not in dependencies:
-                dependencies[dependency_key] = (self.prerequisite_status(row['content_id'], scope, ready_ids=ready_ids)
-                    if scope else prerequisite_status(dependencies_view, dependency_item(row["content_id"]), ready_ids=ready_ids))
+                dependencies[dependency_key] = prerequisites(row['content_id'], scope)
             if dependencies[dependency_key]["blocked"]:
                 counts["blocked"] += 1
                 blocked_content.add(row["content_id"])
@@ -2813,7 +3073,8 @@ class LearningStore:
         for cid, _ in self.read_only_unread(projection=projection):
             if serve is not None and not serve.allows(cid) and not serve.started_work(cid):
                 continue   # design 12 H10: new content the learner's filter leaves out (not one started by hand)
-            if self.prerequisite_status(cid, None, ready_ids=ready_ids)["blocked"]:
+            if (facts.prerequisite(cid, None) if facts.shared
+                    else self.prerequisite_status(cid, None, ready_ids=ready_ids))["blocked"]:
                 counts["blocked"] += 1
                 blocked_content.add(cid)
             else:
@@ -2908,15 +3169,20 @@ class LearningStore:
         return {"content": content, "question": q, "draft": q["draft"], "result": q["result"],
                 "type": "question", "stage": "check"}
 
-    def content_question_blocked(self, item, question):
+    def content_question_blocked(self, item, question, *, _personal=True):
+        """``_personal=False``: the caller read personal_content_versions.question_block_possible(store, item) as
+        False; by its contract question_blocked is then False for every question without a personal rubric."""
         from .personal_content_versions import question_blocked
         from .material_validity import blocked_question
+
+        def personal(value):
+            return (_personal or bool(value.get('personal_rubric'))) and question_blocked(self.store, item, value)
         checkpoint = item.get('checkpoint', {})
         # Frozen batch-quiz questions block like the single frozen guide.
         guides = [checkpoint.get('guide_question'),
                   *(checkpoint.get('intro_batch') or {}).get('questions', ())] if item.get('stage') == 'guide' else ()
-        return (question_blocked(self.store, item, question) or blocked_question(self.store, item, question)
-                or any(guide and (question_blocked(self.store, item, guide) or blocked_question(self.store, item, guide))
+        return (personal(question) or blocked_question(self.store, item, question)
+                or any(guide and (personal(guide) or blocked_question(self.store, item, guide))
                        for guide in guides))
 
     def content_question_may_block(self, item, templates=None):
