@@ -1108,3 +1108,4 @@ app/src/kanamemory/cjk_forms.py
 tests/test_cjk_forms.py
 tests/test_button_selected_look.py
 tests/test_arrangement_backup_carries_mode.py
+tests/test_word_boundaries_and_explanation_lines.py

@@ -438,6 +438,11 @@ question_readings（v1，按条目分片，键同 question_dependencies：conten
    短句听力的答案是释义；使用／应用／读法类答案是日文），同形词“大学”“学校”作为释义出现时不标。说明文字中日混排，只在看得出是日文
    的地方标：整行是日文句子（没有中文标点，且每两个汉字至少有一个假名）、在「」『』引号里、或紧挨着假名（“五段动词休（やす）む去掉む”；
    “在学校学习”不标）。音调题的答案是图，不在此列。
+   整行规则（2026-11-26）：说明里的一整行（去掉首尾空白，带或不带一个句末 。！？）正好是例句注音库里的一条记录时，这条记录的
+   读法补在这一行上面规则没标到的词上；上面规则已经标上的读法一个也不去掉、不改（重叠时以上面的为准）。查询由调用方
+   answer_furigana.explanation_line_segments 做（纯模块 result_readings 不读注音库）；没有假名的一行只在它正是本题的题干或答案时才查，
+   中文的纯汉字行不会被读。存下的说明文字和用于比较的纯文本（result_explanations.course_explanation）不变。
+   这类记录由 tools/annotate_readings.py 的讲解行（explanation_lines.json）产出，只取现在至少有一段汉字没读出的行。
    接入的结果页：课程作答结果、引导题与批量小测的结果、掌握情况检查的两种结果页、Tutor 练习结果、AI 训练结果
    （answer_result_ui.shown_answer／shown_text／shown_explanation／asked_text）。AI 生成题没有条目，只能用到“被考的课”和课程词表
    两个来源；假名练习线的答案本身就是假名或罗马字，没有可标的汉字。

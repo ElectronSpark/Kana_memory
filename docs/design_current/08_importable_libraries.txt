@@ -182,7 +182,8 @@ N6 不为移除的库删除学习记录；删除学习数据仍只走现有 lear
 
 4.1.1 附属文件（每段文字的注音、译文与审校资料）
   核心库可以带这些文件，名单在 content_library_rules.SIDE_FILES（名称 → 分层）：
-    annotations/sentence_annotations.sqlite3      例句与题干日文的逐词注音
+    annotations/sentence_annotations.sqlite3      例句与题干日文的逐词注音（记录可带 word_boundaries 词界，
+                                                  0.36.24 起的应用都能装：旧版本忽略它；格式见 docs/sentence_annotations.txt）
     annotations/natural_translations.sqlite3      现代中文显示译文
     annotations/order_translations.sqlite3        语序参考译文
     annotations/lexical_sentence_review.sqlite3   词典例句审校（属于同一库的 lexicon/content.sqlite3）

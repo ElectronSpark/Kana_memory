@@ -37,9 +37,14 @@ def known_wrong_note(question, result):
 
 
 def shown_explanation(question, explanation):
-    """The explanation under a result, with kana on the Japanese words the question has readings for."""
+    """The explanation under a result, with kana on the Japanese words the question has readings for.
+
+    A whole line that is exactly a text of the sentence annotations also takes that record's readings where
+    the line has none (answer_furigana.explanation_line_segments; design 11 section 7, rule 9).
+    """
+    from .answer_furigana import explanation_line_segments
     from .result_readings import annotate_explanation
-    return annotate_explanation(question, explanation)
+    return annotate_explanation(question, explanation, lambda line: explanation_line_segments(question, line))
 
 
 def asked_text(question, explanation=""):

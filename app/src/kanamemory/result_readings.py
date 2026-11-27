@@ -294,8 +294,31 @@ def annotation_reader(question):
     return spans
 
 
-def annotate_explanation(question, text):
-    """The explanation under a result: kana only where a known word is visibly Japanese (module text)."""
+def sentence_line_spans(line, segments):
+    """[(start, end, kana)] of a whole explanation line from an exact sentence record's reading segments
+    (start, end, surface, reading; offsets in ``line``), drawn by the same rule as the other readings here:
+    each kanji run of a word carries its part of the word's reading (食べ たべ: 食→た)."""
+    spans = []
+    for segment in segments:
+        start, end, reading = segment.get("start"), segment.get("end"), segment.get("reading")
+        if (type(start) is not int or type(end) is not int or not isinstance(reading, str) or not reading
+                or not 0 <= start < end <= len(line) or line[start:end] != segment.get("surface")
+                or reading == line[start:end]):
+            continue
+        spans.extend((start + a, start + b, kana) for a, b, kana in word_spans(line[start:end], reading)
+                     if not _NOTED.match(line, start + b))  # never a second reading after a given （かな）
+    spans.sort()
+    return [span for index, span in enumerate(spans) if not index or spans[index - 1][1] <= span[0]]
+
+
+def annotate_explanation(question, text, line_record=None):
+    """The explanation under a result: kana only where a known word is visibly Japanese (module text).
+
+    line_record: the caller's lookup of a whole line (line -> reading segments with offsets in that line, or
+    None). On a line it answers the record's readings (sentence_line_spans) are added where the rules here
+    give none: every reading the line shows without the record stays. The lookup stays with the caller:
+    this module reads no sidecar.
+    """
     if not isinstance(text, str) or not _KANJI.search(text):
         return text
     pairs = known_pairs(question)
@@ -315,6 +338,10 @@ def annotate_explanation(question, text):
                     or start > 0 and bool(_KANA.match(line[start - 1]))
                     or end < len(line) and bool(_KANA.match(line[end])))
         spans = _spans(line, pairs, allowed, tails=True)
+        segments = line_record(line) if callable(line_record) else None
+        if segments:
+            spans = sorted([*spans, *(added for added in sentence_line_spans(line, segments)
+                                      if not any(start < added[1] and added[0] < end for start, end, _ in spans))])
         lines.append(inline_kana(line, spans) if spans else line)
     return "\n".join(lines)
 

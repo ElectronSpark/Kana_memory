@@ -58,13 +58,77 @@ def _display_plan(text, source, preferences):
         segments, position = [], 0
     if position < len(text):
         segments.append(dict(start=position, end=len(text), surface=text[position:], reading=None, accent_number=None))
+    words = _words(text, source.get("word_boundaries") if valid else None, segments)
     return {"text": text, "segments": segments, "preferences": settings, "aligned": bool(valid),
+            **({"word_boundaries": words} if words else {}),
             "furigana_visible": any(s["reading"] is not None for s in segments),
             "accent_visible": any(s["accent_number"] is not None or s.get("accent_phrases") for s in segments)}
 
 
-def _cell_lines(text, segments, width, size, scale):
-    """Use the tested prompt wrapping rules, preserving paragraph offsets."""
+def _words(text, value, segments):
+    """The record's word_boundaries as (start, end) pairs when they still fit the text and the segments, else ()."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    pairs, offset = [], 0
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return ()
+        start, end = pair
+        if (type(start) is not int or type(end) is not int or not offset <= start < end <= len(text)
+                or any(s["start"] < end and start < s["end"] and not start <= s["start"] < s["end"] <= end
+                       for s in segments if s.get("reading") is not None or s.get("accent_number") is not None
+                       or s.get("accent_phrases"))):
+            return ()
+        pairs.append((start, end))
+        offset = end
+    return tuple(pairs)
+
+
+def _word_wrap(cells, words, available):
+    """Lines of positioned cells where a break falls only between words (design 04: word_boundaries).
+
+    The cells of one word stay on one line; a cell outside every word (punctuation, a gap) is a unit of its own;
+    closing punctuation keeps its preceding unit, as _prompt_lines does. A word wider than the line falls back
+    to breaking between its cells.
+    """
+    groups, word_of = [], {}
+    for index, (start, end) in enumerate(words):
+        word_of.update((i, index) for i in range(start, end))
+    for cell in cells:
+        key = word_of.get(cell["start"]) if cell["end"] > cell["start"] else None
+        if key is not None and groups and groups[-1][0] == key and all(
+                word_of.get(i) == key for i in range(cell["start"], cell["end"])):
+            groups[-1][1].append(cell)
+        else:
+            groups.append((key, [cell]))
+    lines, current, occupied = [], [], 0
+    for key, group in groups:
+        width = sum(cell["width"] for cell in group)
+        units = [group] if width <= available else [[cell] for cell in group]
+        for unit in units:
+            width = sum(cell["width"] for cell in unit)
+            if current and occupied + width > available:
+                last = current[-1]
+                if (len(unit) == 1 and unit[0]["surface"] in "。、，．！？!?」』）】" and len(current) > 1
+                        and sum(c["width"] for c in last) + width <= available):
+                    current.pop()
+                    lines.append([cell for part in current for cell in part])
+                    current, occupied = [last], sum(c["width"] for c in last)
+                else:
+                    lines.append([cell for part in current for cell in part])
+                    current, occupied = [], 0
+            current.append(unit)
+            occupied += width
+    if current:
+        lines.append([cell for part in current for cell in part])
+    return lines
+
+
+def _cell_lines(text, segments, width, size, scale, words=()):
+    """Use the tested prompt wrapping rules, preserving paragraph offsets.
+
+    words: the record's word boundaries; with them a row breaks only between words (_word_wrap).
+    """
     result, offset = [], 0
     for paragraph in text.split("\n"):
         end = offset + len(paragraph)
@@ -77,7 +141,16 @@ def _cell_lines(text, segments, width, size, scale):
                     "reading": segment.get("reading") if complete else None,
                     "accent_number": segment.get("accent_number") if complete else None,
                     "accent_phrases": deepcopy(segment.get("accent_phrases", [])) if complete else []})
-        lines = _prompt_lines(parts, width, size, scale)
+        local = [(max(start, offset), min(stop, end)) for start, stop in words if start < end and offset < stop]
+        if local:
+            cursor, placed = offset, []
+            for entry in (cell for line in _prompt_lines(parts, float("inf"), size, scale) for cell in line):
+                placed.append({**entry, "width": min(width, entry["width"]), "start": cursor,
+                               "end": cursor + len(entry["surface"])})
+                cursor += len(entry["surface"])
+            lines = _word_wrap(placed, local, max(1, width))
+        else:
+            lines = _prompt_lines(parts, width, size, scale)
         if not lines:
             lines = [[dict(surface="", annotation="", width=width, annotation_size=max(11, size * .55))]]
         cursor = offset
@@ -168,7 +241,7 @@ def build_sentence_block(app, text, *, highlight_spans=(), links=(), on_select=N
     if not plan["furigana_visible"] and not plan["accent_visible"]:
         result = body(text, 0, len(text))
     else:
-        lines = _cell_lines(text, plan["segments"], available_width, size, scale)
+        lines = _cell_lines(text, plan["segments"], available_width, size, scale, plan.get("word_boundaries", ()))
         rows = []
         for line in lines:
             cells = []

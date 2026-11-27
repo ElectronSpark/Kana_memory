@@ -61,6 +61,31 @@ def validated_accent_phrases(segment):
     return output if "".join(p["reading"] for p in output) == reading else []
 
 
+def _word_boundaries(text, value, segments):
+    """The optional word_boundaries of a record, checked; None when malformed (the record then fails closed).
+
+    [[start, end], ...]: the words of the text (kana words and particles too), ints with 0 <= start < end <=
+    len(text), in order, not overlapping, at most 2048; a pair never cuts a segment (it lies outside a segment
+    or contains it). A record-level field, because delivered apps show a reading-pending row for every segment
+    without a reading and ignore unknown record fields.
+    """
+    if not isinstance(value, list) or len(value) > 2048:
+        return None
+    pairs, offset = [], 0
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        start, end = pair
+        if type(start) is not int or type(end) is not int or not offset <= start < end <= len(text):
+            return None
+        if any(s["start"] < end and start < s["end"] and not (start <= s["start"] and s["end"] <= end)
+               for s in segments):
+            return None
+        pairs.append([start, end])
+        offset = end
+    return pairs
+
+
 def _validated(text, record):
     """Fail closed for a stale text, broken anchor, fake number or provenance."""
     if not isinstance(record, dict) or record.get("text") != text or record.get("version") != VERSION:
@@ -115,6 +140,12 @@ def _validated(text, record):
         out['context_projection_sha256'] = projection
     if excluded:
         out["excluded"] = deepcopy(excluded)
+    boundaries = record.get("word_boundaries")
+    if boundaries is not None:
+        boundaries = _word_boundaries(text, boundaries, result)
+        if boundaries is None:
+            return None
+        out["word_boundaries"] = boundaries
     covered = {i for s in result if s.get("reading") is not None
                and (s.get("accent_number") is not None or validated_accent_phrases(s))
                for i in range(s["start"], s["end"])}

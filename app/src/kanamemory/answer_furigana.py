@@ -220,3 +220,37 @@ def lookup_answer_form(question):
     """The content's display form of the question's answer; {} when there is none. Result pages only."""
     from .learning_questions import reviewed_answer_form
     return reviewed_answer_form(question)
+
+
+_CLOSING = "。！？"
+_EXACT_ROWS = frozenset({"precomputed", "candidate"})  # an exact row of the sidecar; never the dictionary fallback
+
+
+def explanation_line_segments(question, line):
+    """Reading segments (offsets in ``line``) of a whole explanation line from its exact sentence record, or None.
+
+    For answer_result_ui.shown_explanation, result pages only. The line is trimmed and tried as it is, then
+    without one closing 。！？ (or with one when it has none). A line without kana is looked up only when it is
+    the question's own Japanese (its prompt or answer): a Chinese line of kanji only is never read. Nothing is
+    guessed: without an exact record the line keeps the readings it has.
+    """
+    from .sentence_annotations import sentence_annotation_plan
+    if not isinstance(line, str) or not isinstance(question, dict):
+        return None
+    text = line.strip()
+    own = {str(question.get(key) or "").strip() for key in ("prompt", "answer")}
+    if not text or not _KANJI.search(text) or (not _KANA.search(text) and text not in own):
+        return None
+    lead = len(line) - len(line.lstrip())
+    tries = [text, text[:-1]] if text[-1] in _CLOSING else [text, *(text + mark for mark in _CLOSING)]
+    for candidate in tries:
+        if not candidate:
+            continue
+        plan = sentence_annotation_plan(candidate)
+        if plan.get("text") != candidate or plan.get("status") not in _EXACT_ROWS:
+            continue
+        segments = [dict(segment, start=segment["start"] + lead, end=segment["end"] + lead)
+                    for segment in plan["segments"] if segment.get("reading") and segment["end"] <= len(text)]
+        if segments:
+            return segments
+    return None
