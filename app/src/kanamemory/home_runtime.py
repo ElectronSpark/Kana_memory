@@ -72,6 +72,33 @@ def home_refresh_held(app) -> bool:
                 or (activity is not None and activity.working))
 
 
+def line_readiness_running(app):
+    """The line-readiness read a home refresh started (start_line_readiness) while it runs, else None."""
+    task = getattr(app, "_home_readiness_task", None)
+    return task if task is not None and not task.done() else None
+
+
+def start_line_readiness(app, drawn, read: Callable[[Any], Any]) -> bool:
+    """Start ``read(overview)`` (a coroutine: the warm-up's prepare_line_readiness for the drawn overview) on
+    the running loop when the path service lacks the readiness of the lines a home refresh drew (``drawn``:
+    HomeShowing.lines) and no such read runs; True when one was started. The home never waits for it."""
+    if drawn is None or line_readiness_running(app) is not None:
+        return False
+    import asyncio
+    from .study_lines import readiness_ids
+    path = drawn[0]
+    try:
+        make = getattr(app.study_path_service(), "line_readiness_job", None)
+        if not callable(make) or make(readiness_ids(path)) is None:
+            return False
+        loop = asyncio.get_running_loop()
+    except Exception:  # noqa: BLE001 - an optional hint: the home stays as drawn
+        return False
+    from .draft_debounce import create_task_awake
+    app._home_readiness_task = create_task_awake(loop, read(path))
+    return True
+
+
 def home_inputs(app) -> HomeInputs:
     """The app's device state and preferences in memory, read for one refresh (or one count); nothing is computed."""
     return HomeInputs(
@@ -135,7 +162,7 @@ def run_action(app, action: HomeAction, widget=None, *, open_word_drill: Callabl
             return app._add_study_sections([identity], **route_kwargs(route_id or action.route_id))
         return StudyPathRuntimeMixin.press_home_primary(
             app, widget, lambda pressed: run_action(app, then, pressed, open_word_drill=open_word_drill),
-            route=action.route, no_new_content=action.no_new_content, add_next=add_next)
+            route=action.route, no_new_content=action.no_new_content, add_next=add_next, backlog=action.backlog)
     if kind is HomeActionKind.CONTINUE:
         return app.continue_study_path(widget)
     if kind is HomeActionKind.ADD_SECTIONS:

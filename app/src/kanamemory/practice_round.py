@@ -109,6 +109,11 @@ def round_id(store):
     return store._practice_run_plan.run_id if active(store) else None
 
 
+def frozen_course_ids(store):
+    """The course question ids the active round froze when it was collected (() without one)."""
+    return tuple(store._practice_run_plan.course_order or ()) if active(store) else ()
+
+
 def collecting(store):
     return active(store) and not store._practice_run_plan.is_sealed
 

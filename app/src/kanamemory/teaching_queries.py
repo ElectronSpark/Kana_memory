@@ -50,6 +50,19 @@ class TeachingQueries:
             WHERE q.question_id=? AND q.status='pending' AND q.result_json IS NULL''', (question_id,)).fetchone()
         return None if row is None else row[0]
 
+    def probes_sent_to_teaching(self, question_ids: Sequence[str]) -> frozenset:
+        """Content ids of the lessons one of whose probes among these course questions sent the lesson to its
+        teaching (answered wrongly, its answer shown, or 还不会: the result's diagnostic_needs_teaching)."""
+        ids, found = list(question_ids), set()
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" for _ in chunk)
+            found.update(row[0] for row in self._connection.execute(f'''SELECT DISTINCT u.content_id
+                FROM learning_question q JOIN learning_unit u ON u.unit_id=q.unit_id
+                WHERE q.question_id IN ({marks}) AND q.result_json IS NOT NULL
+                AND json_extract(q.result_json,'$.diagnostic_needs_teaching')=1''', chunk))
+        return frozenset(found)
+
     def ability_states(self) -> dict:
         from .ability_teaching import state_map
         return state_map(self._connection)

@@ -171,9 +171,12 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
         then = HomeAction(HomeActionKind.ADD_SECTIONS, section_id=next_section[0], route_id=route_id)
     else:
         caption, hint, then = SHOW_ROUTE, route_title + ALL_LEARNED, HomeAction(HomeActionKind.ROUTE_PAGE)
-    primary = HomeButton(caption, HomeAction(HomeActionKind.PRIMARY, route_id=route_id, then=then, route=route,
-                                             no_new_content=no_new_content))
     beside_work = next_section if has_work else None
+    # Design 11 V2: a large review backlog earns a hint beside the next section, never a block; while it is
+    # drawn, B10's once-per-start prompt is not shown (the two would advise the opposite).
+    backlog_line = review_backlog_hint(ready) if beside_work else None
+    primary = HomeButton(caption, HomeAction(HomeActionKind.PRIMARY, route_id=route_id, then=then, route=route,
+                                             no_new_content=no_new_content, backlog=backlog_line is not None))
     # With work in progress the section is enrolled and queued behind due reviews, not taught at once (review
     # 2026-11-08 2.4); B10's note may already offer the same section first in the card: not twice.
     by_line = beside_work is not None and any(section_id == beside_work[0] for _, section_id, _ in line_sections)
@@ -202,8 +205,7 @@ def compose(*, rows: HomeRowsModel, focus: FocusRowModel | None, route: RouteFac
         rows=rows, focus=focus, has_work=has_work,
         heading=HEADING_WORK if has_work else HEADING_START, hint=hint, primary=primary,
         next_review_line=next_review_text(next_change_at) if show_next_review(ready, waiting, next_change_at) else None,
-        # Design 11 V2: a large review backlog earns a hint beside the next section, never a block.
-        backlog_line=review_backlog_hint(ready) if beside_work else None,
+        backlog_line=backlog_line,
         add_next=add_next, other_routes=tuple(listed),
         route_page=HomeButton(ROUTE_PAGE, HomeAction(HomeActionKind.ROUTE_PAGE)),
         add_content=HomeButton(ADD_CONTENT, HomeAction(HomeActionKind.ADD_CONTENT)),

@@ -385,18 +385,38 @@ class StudyPathRuntimeMixin:
         return not (not getattr(self, "_background_assembly", False) or getattr(self, "_backup_closing", False)
                     or getattr(self, "_backup_busy", False) or not callable(getattr(self, "study_path_service", None)))
 
-    async def prepare_line_readiness(self):
+    async def prepare_line_readiness(self, overview=None):
         """Startup warm-up, first step: the readiness of each line's next section on the current route (the
         two-line design: the add page's hint, the suggestion of B10's note; memory only), read on a worker
         thread before the slower warm-up steps, so the add page opened right after the start has it. Home is
         redrawn only when the drawn home shows something the read changes (warm_up_refresh). True when
-        something was read."""
+        something was read. ``overview``: the overview a home refresh drew (home_line_readiness); without it
+        the current route's, read here, after a read a home refresh started has ended (one at a time)."""
         if not StudyPathRuntimeMixin._warm_up_allowed(self):
             return False
-        read = await read_line_readiness(self.study_path_service)
+        from .home_runtime import line_readiness_running
+        running = line_readiness_running(self) if overview is None else None
+        if running is not None:
+            import asyncio
+            await asyncio.wait({running})
+        read = await read_line_readiness(self.study_path_service, overview)
         if read:
             await StudyPathRuntimeMixin.warm_up_refresh(self, plan_saved=False)
         return read
+
+    def home_line_readiness(self, drawn):
+        """The two-line design: a home refresh that drew its lines (``drawn``: the overview's drawn_lines)
+        while the path service lacks their readiness (after a restore, or when added sections moved a line's
+        next section on) starts that read on a worker as the warm-up does (prepare_line_readiness, its
+        redraw rule lines_changed through the loop, the page-token check); at most one such read runs at a
+        time and the home never waits for it. True when one was started. Nothing is started when nothing is
+        missing, outside the started app (the warm-up's guard) or without a running loop
+        (home_runtime.start_line_readiness)."""
+        if drawn is None or not StudyPathRuntimeMixin._warm_up_allowed(self):
+            return False
+        from .home_runtime import start_line_readiness
+        return start_line_readiness(
+            self, drawn, lambda path: StudyPathRuntimeMixin.prepare_line_readiness(self, overview=path))
 
     async def prepare_main_route_mix(self):
         """Startup warm-up, last step (design 11 section 16, M10): the main route mix plan of the current
@@ -502,9 +522,10 @@ class StudyPathRuntimeMixin:
                   stats_label=showing.stats_label, on_action=on_action)
         record_drawing(self, showing, model.next_change_at)
         showing.lines = getattr(home, "drawn_lines", None)
+        StudyPathRuntimeMixin.home_line_readiness(self, showing.lines)
         KanaMemory._arm_home_review_refresh(self)
 
-    def press_home_primary(self, widget, action, *, route, no_new_content, add_next):
+    def press_home_primary(self, widget, action, *, route, no_new_content, add_next, backlog=False):
         """The home page's primary button: the arrangement's two first-time questions, then ``action``.
 
         Only this button asks them (continue_study_path and the other entry
@@ -513,13 +534,15 @@ class StudyPathRuntimeMixin:
         the first press of this launch with nothing new to start shows the
         B10 prompt once. The presenter decides; this only navigates.
         ``add_next(section_id, route_id)``: the prompt's section may lie in the
-        focus scope's route (SectionNote.route_id).
+        focus scope's route (SectionNote.route_id). ``backlog``: the pressed home drew its review backlog hint
+        (先复习); then the prompt is not shown and not counted as shown, so a later press of this start
+        without the backlog still gets it.
         """
         presenter = StudyPathRuntimeMixin.study_arrangement(self).presenter
         if presenter.orientation_due():
             presenter.showed_orientation()
             return self.show_study_orientation(then=lambda: action(widget))
-        note = presenter.continue_prompt(route, no_new_content=no_new_content)
+        note = None if backlog else presenter.continue_prompt(route, no_new_content=no_new_content)
         if note is not None:
             presenter.prompted_continue()
             return self.show_section_prompt(note=note, on_add_and_start=lambda: add_next(note.section_id, note.route_id),
@@ -1071,6 +1094,20 @@ class StudyPathRuntimeMixin:
             return identities
         return None
 
+    def _teaching_after_probe(self, identities):
+        """Design 12 N9: the re-arrangement identities for those of ``identities`` (_ready_teaching_outside's)
+        whose lesson had a probe in this round that sent it to its teaching (failed, its answer shown, or
+        还不会), or None (HomeOverviewService.probed_in_round); a lesson whose teaching became ready otherwise
+        is not one. Each is the teaching state marked as the one re-arrangement made for it, kept with B5's
+        re-arrangements in the probe memo: never two for the same state, and once it was made, a later
+        ending for the same state is the round's end as before."""
+        from .home_runtime import home_service
+        probed = home_service(self).probed_in_round({identity[1] for identity in identities})
+        marked = frozenset(("after probe", *identity) for identity in identities if identity[1] in probed)
+        if marked and StudyPathRuntimeMixin.study_arrangement(self).probe_memo.may_rearrange(marked):
+            return marked
+        return None
+
     def _show_consolidation(self, items, show):
         """The consolidation deck (design 12 N5): header 巩固, leave 先到这里; afterwards 继续学习 goes on.
 
@@ -1242,11 +1279,17 @@ class StudyPathRuntimeMixin:
                     *self.learning_next_content_controls(),
                     *extra_button_rows(self),
                     u.button("回到今日", self.leave_learning))
-            # Design 12 N9: teaching that is ready but outside this frozen round (a probe that sent its lesson
-            # to teaching) ends the round as a round with nothing left does (N12 of the native notes): 本轮已保存,
-            # whose 开始新一轮 (and the home's 继续学习) collects a round that teaches it; never a wait page alone.
+            # Design 12 N9: teaching that is ready but outside this frozen round. When a probe of this round sent
+            # its lesson there, the round is re-arranged once (B5) and this action goes on to the explanation;
+            # otherwise (or once that was done for the same state) the round ends as a round with nothing left
+            # does (N12 of the native notes): 本轮已保存, whose 开始新一轮 (and the home's 继续学习) collects a
+            # round that teaches it; never a wait page alone.
             outside = (StudyPathRuntimeMixin._ready_teaching_outside(self, read, serve)
                        if rearrange and sealed_before else None)
+            after_probe = (StudyPathRuntimeMixin._teaching_after_probe(self, outside)
+                           if outside is not None else None)
+            if after_probe is not None:
+                return Rearrange(after_probe)
             if outside is not None:
                 StudyPathRuntimeMixin.study_arrangement(self).probe_memo.rearranged(outside)
                 mark_finished(self.store)

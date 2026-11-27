@@ -53,8 +53,9 @@ class HomeAction:
     The outer layer (kanamemory.home_runtime.run_action) makes the call; "button" is the pressed control:
     PRIMARY       the card's primary button: the arrangement's two first-time questions (the orientation
                   screen on a fresh install, B10's prompt) asked from ``route`` and ``no_new_content``, then
-                  ``then``; the prompt's 加入下一小节并开始 adds in the prompt's route, else in ``route_id``
-    CONTINUE      continue_study_path(button)
+                  ``then``; the prompt's 加入下一小节并开始 adds in the prompt's route, else in ``route_id``;
+                  no prompt while ``backlog`` (the card's own review backlog hint applies)
+    CONTINUE     continue_study_path(button)
     ADD_SECTIONS  _add_study_sections([section_id], **route_kwargs(route_id))
     ROUTE_PAGE    show_study_path(button)
     OTHER_ROUTE   show_study_path(route_id=route_id)
@@ -75,6 +76,7 @@ class HomeAction:
     then: HomeAction | None = None     # PRIMARY: CONTINUE, ADD_SECTIONS or ROUTE_PAGE
     route: RouteFacts | None = None    # PRIMARY: the current route as the refresh read it
     no_new_content: bool = False       # PRIMARY: B10's "nothing new to start" of the refresh
+    backlog: bool = False              # PRIMARY: the refresh drew the review backlog hint (review_backlog_hint)
     orientation: str | None = None     # CHOOSE_ORIENTATION: the Orientation value to store
 
 

@@ -352,6 +352,16 @@ class HomeOverviewService:
                         row["stage"] if row else None, profile.get("diagnostic_state")))
         return frozenset(states)
 
+    def probed_in_round(self, content_ids) -> frozenset[str]:
+        """Those of ``content_ids`` whose lesson had a probe in the running round that sent it to its teaching
+        (failed, its answer shown, or 还不会): a course question the round froze when it was collected
+        (practice_round.frozen_course_ids). Design 12 N9 then re-arranges the round once instead of ending it."""
+        from ..practice_round import frozen_course_ids
+        frozen = frozen_course_ids(self._store)
+        if not frozen or not content_ids:
+            return frozenset()
+        return frozenset(content_ids) & self._store.teaching_queries.probes_sent_to_teaching(frozen)
+
     def untaught_lessons(self, now, projection=None) -> int:
         """Added lessons (and added abilities) with a queued question still to be taught (counts' "instruction")."""
         return int(self._learning.counts(self._course_kinds(), now, projection=projection).get("instruction", 0))
