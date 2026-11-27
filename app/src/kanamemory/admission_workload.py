@@ -22,8 +22,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+from types import MappingProxyType
 from typing import Any
 
 from .domain import (WORD_SKILLS, LISTENING_SKILLS, HANDWRITING_SKILLS,
@@ -104,10 +105,9 @@ def admission_snapshot(ctx, plan, *, overview=None, now=None, read=None):
             if item:
                 new_directions.update((cid, KIND_ABILITIES[kind]) for kind in question_kinds(item)
                                       if kind in enabled and KIND_ABILITIES[kind] in item["abilities"])
+    targets = _KanaTargets(repo, ctx.store, now)
     for (kind, script), content_ids in kana_targets.items():
-        candidates = build_questions(repo, _BatchQuestionStore(ctx.store, sorted(content_ids)),
-            kind=kind, script=script, limit=len(content_ids), seed=0, now=now,
-            include_extended=True, _targets_only=True)
+        candidates = targets(sorted(content_ids), kind, script)
         kana_directions.update((q.content_id, kind, script) for q in candidates)
     if kana_directions:
         new_directions.update(prospective_identities(ctx.store, kana_directions).values())
@@ -146,7 +146,11 @@ def _existing_work(ctx, repo, pending, entries, enabled, kana_kinds, now, read):
         introduction_ids.update(("kana", entry["content_id"], entry["script"])
                                 for entry in entries.values() if entry["kind"] == "kana"
                                 and entry.get("state") in {"added", "started"})
-        dues = [*_course_dues(ctx, enabled, now, unavailable), *_kana_dues(ctx, repo, pending, kana_kinds, now)]
+        # Kept for _EXISTING_SECONDS and counted against a ``now`` up to that much later: a unit whose
+        # plan-free lower bound lies beyond that window is waiting at every such ``now`` (_course_dues).
+        window = timedelta(seconds=_EXISTING_SECONDS)
+        dues = [*_course_dues(ctx, enabled, now, unavailable, window),
+                *_kana_dues(ctx, repo, pending, kana_kinds, now)]
         return {"pending_intro_count": len(introduction_ids), "dues": dues}
     return ctx.costs.existing_work((frozenset(enabled), frozenset(kana_kinds), unavailable, enrolled_kana),
                                    now, reading, seconds=_EXISTING_SECONDS)
@@ -167,8 +171,14 @@ def _kana_reviews(ctx, repo, pending, kinds, now, result):
     _count(_kana_dues(ctx, repo, pending, kinds, now), now, result)
 
 
-def _course_dues(ctx, enabled, now, unavailable=frozenset()):
-    """The earliest time (None: now) of every enabled course review direction."""
+def _course_dues(ctx, enabled, now, unavailable=frozenset(), window=None):
+    """The earliest time (None: now) of every enabled course review direction.
+
+    ``window`` (a timedelta; None: every time is exact): the dues are counted against a ``now`` up to
+    ``window`` after this one only, so a lesson without a question that is not planned yet is not planned
+    when each of its units that gets a question has a plan-free lower bound later than now + window
+    (_bounded_dues): such a unit stands at its bound, waiting at every such ``now`` as its planned time is.
+    """
     learning = ctx.learning_store
     units = {row["unit_id"]: dict(row) for row in ctx.store.queries.active_review_units(exclude=unavailable)}
     if not units or not enabled:
@@ -186,13 +196,22 @@ def _course_dues(ctx, enabled, now, unavailable=frozenset()):
         if row["unit_id"] not in dues or (due or "") < (dues[row["unit_id"]] or ""):
             dues[row["unit_id"]] = due
     missing_contents = {unit["content_id"] for identity, unit in units.items() if identity not in pending_ids}
-    from .course_planning import PassFacts, preview_question_plans
+    from .course_planning import PassFacts, kept_question_plans, preview_question_plans
     from .answer_input import system_japanese_enabled
     plans, system_input = ctx.costs.plan_preview(), system_japanese_enabled(ctx.store)
     facts = PassFacts(ctx.store.queries)   # read once for these lessons
+    limit = now + window if window is not None and PLAN_FREE_DUES else None
     for cid in missing_contents:
         # Home has usually planned these lessons a moment ago, from the same records.
-        for unit, q in preview_question_plans(plans, cid, lambda cid=cid: learning.get_item(cid),
+        kept = kept_question_plans(plans, cid, enabled_kinds=enabled, system_japanese_input=system_input,
+                                   unavailable_ids=unavailable)
+        if kept is None and limit is not None:
+            bounds = _bounded_dues(ctx, cid, units, enabled, system_input, unavailable, facts, now, exposures, limit)
+            if bounds is not None:
+                dues.update(bounds)
+                continue
+        for unit, q in kept if kept is not None else preview_question_plans(
+                plans, cid, lambda cid=cid: learning.get_item(cid),
                 enabled_kinds=enabled, queries=ctx.store.queries, learning_store=learning,
                 system_japanese_input=system_input, unavailable_ids=unavailable, facts=facts):
             if unit and unit["unit_id"] in units:
@@ -200,6 +219,79 @@ def _course_dues(ctx, enabled, now, unavailable=frozenset()):
                 # feedback delays; read as a queued question is (design 12 N10).
                 dues[unit["unit_id"]] = learning.planned_question_due(unit, q, now=now, exposure_times=exposures)
     return [datetime.fromisoformat(due) if due else None for due in dues.values()]
+
+
+# planned_question_due of a unit without a plan: a question that is no free retrieval (_ability_due keeps the due).
+_NO_PLAN = MappingProxyType({"input_mode": "choice"})
+# _course_dues with a window: the plan-free lower bounds of the lessons not planned yet; False plans every
+# lesson (the reference the equivalence test compares with).
+PLAN_FREE_DUES = True
+# The kana directions' eligibility from one catalogue read (domain.KanaCardPass.targets); False runs one
+# target-only build_questions per direction (the reference the equivalence test compares with).
+KANA_TARGET_PASS = True
+
+
+def _bounded_dues(ctx, cid, units, enabled, system_input, unavailable, facts, now, exposures, limit):
+    """{unit id: a lower bound of its planned due} of the lesson's units that get a question, when every bound
+    is later than ``limit``; None: plan the lesson.
+
+    Which units of the lesson get a question is course_planning.plannable_abilities (no plan is made). The
+    planned due of a unit's question depends on the plan only through _ability_due: a plan that is no free
+    retrieval is due exactly as _NO_PLAN is; a free retrieval's due is that with min(due, probe due) as its
+    schedule, which is never earlier than min(the due of _NO_PLAN, the probe due) (the floors, exposure waits
+    and feedback cooldowns are the same or later, and the earlier schedules, an active confirmation and the
+    serviceable reading, are a min with the schedule). So the lower bound is min(_NO_PLAN's due, probe due).
+    """
+    from .course_planning import plannable_abilities
+    learning = ctx.learning_store
+    item = learning.get_item(cid)
+    if item is None:
+        return None
+    wanted = {unit["ability"] for unit in units.values() if unit["content_id"] == cid}
+    states = plannable_abilities(item, enabled_kinds=enabled, queries=ctx.store.queries, learning_store=learning,
+                                 system_japanese_input=system_input, abilities=wanted,
+                                 unavailable_ids=unavailable, facts=facts)
+    if states is None:
+        return None
+    found = {}
+    for ability, (state, kinds) in states.items():
+        if state["unit_id"] not in units:
+            continue
+        lower = learning.planned_question_due(state, _NO_PLAN, now=now, exposure_times=exposures)
+        probe = state["probe_due_at_utc"] if _may_be_free(item, ability, kinds) else None
+        if lower and probe:
+            lower = min((lower, probe), key=datetime.fromisoformat)
+        if not lower or datetime.fromisoformat(lower) <= limit:
+            return None
+        found[state["unit_id"]] = lower
+    return found
+
+
+def _may_be_free(item, ability, kinds):
+    """Whether the plan of ``ability`` chosen from ``kinds`` can be a free retrieval (its probe due then counts).
+
+    The plan is built from one of the lesson's templates of those kinds (course_planning.iter_question_plans:
+    its input mode, prompt and practice); a generated sound kind takes its templates from sound_variants, a
+    non-dict entry from the legacy builders: either may be. False only when no template of those kinds is.
+    """
+    from .learning_questions import SOUND_KINDS, practice_templates
+    from .learning_store import free_retrieval
+    table = practice_templates(item)
+    if not isinstance(table, dict):
+        return True
+    for kind in kinds:
+        if kind in SOUND_KINDS:
+            return True
+        for variant, raw in enumerate(table.get(kind) or ()):
+            if not isinstance(raw, dict):
+                return True
+            plan = {"target_id": item["id"], "ability": ability, "kind": kind, "variant": variant,
+                    "input_mode": raw.get("input_mode", "choice")}
+            if "practice" in raw:
+                plan.update(prompt=raw.get("prompt", ""), practice=raw["practice"])
+            if free_retrieval(plan):
+                return True
+    return False
 
 
 def _kana_dues(ctx, repo, pending, kinds, now):
@@ -239,14 +331,33 @@ def _kana_dues(ctx, repo, pending, kinds, now):
     for key in due_by_key:
         due_by_key[key] = max(due_by_key[key], queue_due.get(identities[key], due_by_key[key]))
     by_ability = {}
+    targets = _KanaTargets(repo, ctx.store, now)
     for (kind, script), ids in grouped.items():
-        candidates = build_questions(repo, _BatchQuestionStore(ctx.store, ids), kind=kind,
-            script=script, limit=len(ids), seed=0, now=now, include_extended=True, _targets_only=True)
-        for q in candidates:
+        for q in targets(ids, kind, script):
             key = identities[q.content_id, kind, script]
             due = due_by_key[q.content_id, kind, script]
             by_ability[key] = min(by_ability.get(key, due), due)
     return list(by_ability.values())
+
+
+class _KanaTargets:
+    """build_questions(repo, _BatchQuestionStore(store, ids), kind=, script=, limit=len(ids), seed=0, now=,
+    include_extended=True, _targets_only=True) of the directions of one read-only call: the targets of the
+    given states its eligibility keeps (only their content ids are read here). With KANA_TARGET_PASS one
+    domain.KanaCardPass reads the catalogue once for all of them."""
+
+    def __init__(self, repo, store, now):
+        self._repo, self._store, self._now = repo, store, now
+        self._cards = None
+
+    def __call__(self, ids, kind, script):
+        if not KANA_TARGET_PASS:
+            return build_questions(self._repo, _BatchQuestionStore(self._store, ids), kind=kind, script=script,
+                                   limit=len(ids), seed=0, now=self._now, include_extended=True, _targets_only=True)
+        if self._cards is None:
+            from .domain import KanaCardPass
+            self._cards = KanaCardPass(self._repo, self._store, seed=0, now=self._now)
+        return self._cards.targets(ids, kind, script)
 
 
 def admission_text(snapshot):

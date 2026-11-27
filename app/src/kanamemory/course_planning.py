@@ -121,10 +121,22 @@ def preview_question_plans(cache: dict | None, content_id: str, load_item, *, en
                                         unavailable_ids=unavailable_ids, **reader))
     if cache is None:
         return plans()
-    key = (content_id, frozenset(enabled_kinds), bool(system_japanese_input), frozenset(unavailable_ids))
+    key = _plan_key(content_id, enabled_kinds, system_japanese_input, unavailable_ids)
     if key not in cache:
         cache[key] = plans()
     return cache[key]
+
+
+def _plan_key(content_id, enabled_kinds, system_japanese_input, unavailable_ids):
+    return (content_id, frozenset(enabled_kinds), bool(system_japanese_input), frozenset(unavailable_ids))
+
+
+def kept_question_plans(cache: dict | None, content_id: str, *, enabled_kinds: Iterable[str],
+                        system_japanese_input: bool, unavailable_ids: Iterable[str] = ()) -> list | None:
+    """The plans preview_question_plans keeps in ``cache`` for these arguments, or None when it keeps none."""
+    if cache is None:
+        return None
+    return cache.get(_plan_key(content_id, enabled_kinds, system_japanese_input, unavailable_ids))
 
 
 class _LessonSentences:
@@ -191,6 +203,70 @@ def lesson_sentences_reader(item: dict, ability: str, learning_store: CourseProg
     for question in shown:
         sentences.chosen(question)
     return sentences.reader(ability)
+
+
+class PlannableUnit(NamedTuple):
+    state: dict
+    kinds: tuple[str, ...]
+
+
+def plannable_abilities(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,
+                        learning_store: CourseProgressReader, system_japanese_input: bool,
+                        abilities: Iterable[str], unavailable_ids: Iterable[str] = (),
+                        facts: PassFacts | None = None) -> dict | None:
+    """{ability: PlannableUnit(its unit state, the kinds its selection chooses from)} of those of ``abilities`` that iter_question_plans(item, ...) with the same
+    arguments (no unit_states, no avoid_templates) yields a plan for, without planning; None when this cannot
+    be told without planning.
+
+    It follows iter_question_plans step by step up to the selection, and asks only whether the selection
+    would choose a task (learning_practice_policy.has_practice_candidate), which does not depend on the
+    history, the sentences met or the plans made before it. None for a lesson without a template table (the
+    legacy builders), a lesson of the batch route (its gate) and an asked unit without a rating (its plan may
+    be an open probe). Read only.
+    """
+    if item["id"] in frozenset(unavailable_ids):
+        return {}
+    enabled = set(enabled_kinds)
+    pending = queries.pending_abilities(item["id"])
+    admitted = item.get("enrolled_abilities", item.get("abilities", []))
+    if set(admitted) <= pending:
+        return {}
+    served = {KIND_ABILITIES[kind] for kind in enabled if kind in KIND_ABILITIES}
+    if not any(ability in served for ability in admitted if ability not in pending):
+        return {}
+    if (item.get("checkpoint") or {}).get(ROUTE_KEY) == ROUTE:
+        return None
+    from .learning_practice_policy import has_practice_candidate
+    from .learning_questions import practice_templates
+    templates = practice_templates(item)
+    if templates is None:
+        return None
+    available = question_kinds(item, templates=templates)
+    wanted, found, known = set(abilities), {}, None
+    enrolled = enrolled_ids_reader(queries) if facts is None else facts.enrolled_reader()
+    for ability in admitted:
+        if ability in pending or ability not in wanted:
+            continue
+        kinds = [k for k in available if KIND_ABILITIES[k] == ability and k in enabled]
+        if not kinds:
+            continue
+        state = learning_store.get_unit(item["id"], ability)
+        if not (state or {}).get("review_count"):
+            return None
+        policy_state = dict(state)
+        policy_state["system_japanese_input"] = system_japanese_input
+        if known is None:
+            known = (known_ids(queries) if facts is None else facts.known()) | {item["id"]}
+        policy_state["known_background_ids"] = known
+        if facts is not None:
+            policy_state["early_opening"] = facts.opening(item["id"])
+        policy_state["early_allowance"] = True
+        if enrolled is not None:
+            policy_state["gloss_allowance"] = True
+            policy_state["enrolled_ids"] = enrolled
+        if has_practice_candidate(item, ability, kinds, policy_state, templates=templates, shared=True):
+            found[ability] = PlannableUnit(state, tuple(kinds))
+    return found
 
 
 def iter_question_plans(item: dict, *, enabled_kinds: Iterable[str], queries: CourseQueries,

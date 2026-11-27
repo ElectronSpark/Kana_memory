@@ -16,6 +16,7 @@ from types import MappingProxyType
 
 from .domain import WORD_SKILLS, HANDWRITING_SKILLS, LISTENING_SKILLS, _utc, question_identities
 from .learning_content import learning_item_views
+from .shared_tables import tree_copy
 from .kana_question_policy import direction_allowed, question_allowed
 from .study_lines import next_sections, section_line
 from .study_routes import CORE_LIBRARY_ID, CORE_ROUTE_ID, CORE_ROUTE_TITLE, ROUTES_SETTING
@@ -227,6 +228,13 @@ class _StudyPathRead:
         if type(count) is not int or count < 1:
             raise ValueError("请输入大于零的小节数量。")
         return self.service._plan_next(count, self.overview(route_id), line)
+
+
+# The child lists of a route tree's levels, outermost first (shared_tables.tree_copy).
+ROUTE_LEVELS = ("stages", "units", "sections", "entries")
+# _overview copies the route's nodes and shares its static values; False deep-copies the whole tree (the
+# reference the equivalence test compares with).
+OVERVIEW_TREE_COPY = True
 
 
 def validate_path_state(value):
@@ -860,7 +868,10 @@ class StudyPathService:
 
     def _overview(self, states, route_id=None):
         rid = self._route_key(route_id)
-        result = deepcopy(self.path if rid == CORE_ROUTE_ID else self._route_view(rid).tree)
+        tree = self.path if rid == CORE_ROUTE_ID else self._route_view(rid).tree
+        # The route's own nodes are this overview's (the learner's states and counts are set on them); the
+        # static values below them are the route's, shared read-only (shared_tables.tree_copy).
+        result = tree_copy(tree, ROUTE_LEVELS) if OVERVIEW_TREE_COPY else deepcopy(tree)
         sections = []
         for stage in result["stages"]:
             stage_sections = []

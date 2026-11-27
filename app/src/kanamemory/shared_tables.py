@@ -86,3 +86,32 @@ def read_only(value):
 def share(value):
     """``value`` as a cache hands it out: itself, or under the test suite's guard its read-only copy."""
     return read_only(value) if GUARD else value
+
+
+_ATOMS = frozenset((str, int, float, bool, type(None)))   # immutable: shared as they are, also under the guard
+
+
+def tree_copy(tree, children):
+    """deepcopy(tree) as plain data for a caller that changes only the tree's nodes and their child lists.
+
+    children: the key of each level's child list, outermost first (a route tree: ("stages", "units",
+    "sections", "entries")). Every node (a dict on the path of those keys) and every child list is new,
+    with its keys in their order; every other value of a node is shared (share: itself, or under the
+    test suite's guard its read-only copy, so a caller that changes one is found). A top-level value that is
+    one of the tree's nodes (an overview's next section) is that node's copy, as deepcopy keeps it.
+    """
+    copies = {}
+
+    def node(value, level):
+        child = children[level] if level < len(children) else None
+        copy = {}
+        for key, part in value.items():
+            copy[key] = ([node(item, level + 1) for item in part] if key == child
+                         else part if type(part) in _ATOMS else share(part))
+        copies[id(value)] = copy
+        return copy
+    if not children:
+        return {key: share(part) for key, part in tree.items()}
+    top = {key: [node(item, 1) for item in part] for key, part in tree.items() if key == children[0]}
+    return {key: top[key] if key in top else copies.get(id(part)) if isinstance(part, dict) and id(part) in copies
+            else share(part) for key, part in tree.items()}

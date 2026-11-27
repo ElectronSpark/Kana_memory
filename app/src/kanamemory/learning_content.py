@@ -43,10 +43,13 @@ def learning_items(family: str | None = None) -> list[dict]:
 _SHARED_FIELDS = ("question_templates",)
 
 
-def _view(item):
+def _view(item, shared=False):
     from .material_review import has_item_review, reviewed_item
     if has_item_review(item.get("id")):
         return reviewed_item(item)  # a reviewed correction may replace fields: the full rule decides
+    if shared:
+        from .shared_tables import share
+        return {key: (_shared(value) if key in _SHARED_FIELDS else share(value)) for key, value in item.items()}
     # isolated_copy: the same independent copy as deepcopy for these plain fields, without a call per string
     # (listing the catalogue copies every small field of every lesson, several times per added lesson).
     return {key: (_shared(value) if key in _SHARED_FIELDS else isolated_copy(value)) for key, value in item.items()}
@@ -58,7 +61,7 @@ def _shared(value):
     return SharedMapping(value) if isinstance(value, dict) else deepcopy(value)
 
 
-def learning_item_views(family: str | None = None) -> list[dict]:
+def learning_item_views(family: str | None = None, *, shared: bool = False) -> list[dict]:
     """learning_items for callers that only read (design 08 section 6.5).
 
     Each item is an independent dict equal to its learning_items snapshot,
@@ -67,8 +70,15 @@ def learning_item_views(family: str | None = None) -> list[dict]:
     listing the catalogue then costs neither the copy nor the decoding.
     deepcopy(view) is the plain independent item. Never serialize a view or
     change its templates; copy it first.
+    shared=True (a caller that reads every lesson once and keeps none of them, the reviewed-example
+    index): the other fields too are the catalogue's own values, handed out through shared_tables.share
+    (read-only under the test suite's guard) instead of copied; a lesson with a reviewed correction is
+    still its reviewed copy.
     """
-    return [_view(x) for x in _ITEMS.values() if family is None or x["family"] == family]
+    return [_view(x, shared) for x in _ITEMS.values() if family is None or x["family"] == family]
+
+
+OWN_ITEM_VIEWS = learning_item_views   # the function itself (a test may replace the module's name)
 
 
 def learning_item_view(content_id: str) -> dict | None:

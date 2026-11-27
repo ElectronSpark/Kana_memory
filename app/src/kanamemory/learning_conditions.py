@@ -74,12 +74,17 @@ def _build_reviewed_index(*, copies):
     lessons, the examples and the review data (copies=False); copies=True builds it from the pack's
     independent copies, the reference the equivalence test compares with. Equal key by key."""
     from .learning_content import learning_item_views
-    from . import example_catalogue
-    items = learning_item_views()  # read only: no copy of every lesson with all its templates
+    from . import example_catalogue, learning_content
+    build = example_catalogue.bundled_example_pack
+    # Read only: no copy of every lesson with all its templates; without copies (and with the bundled
+    # pack builder, which only reads them) not of its other fields either.
+    # (A replaced builder or reader of the views, a fixture's own lessons, keeps its call without arguments.)
+    shared = (not copies and build is example_catalogue.BUNDLED_EXAMPLE_PACK
+              and learning_item_views is learning_content.OWN_ITEM_VIEWS)
+    items = learning_item_views(shared=True) if shared else learning_item_views()
     known = _reviewed_targets(items, copies=copies)
     # This applies exact retirements/replacements to original course examples
     # as well as additions. Keep only the compact ID/text index after building.
-    build = example_catalogue.bundled_example_pack
     # A replaced pack builder (a fixture's own pack) keeps its one-argument call.
     pack = (build(items, copies=False) if not copies and build is example_catalogue.BUNDLED_EXAMPLE_PACK
             else build(items))

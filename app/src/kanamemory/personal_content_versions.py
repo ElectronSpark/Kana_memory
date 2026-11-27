@@ -85,12 +85,24 @@ def setting_rows(store, prefix):
 
 
 def setting(store, key):
-    """One head/hold value (None when absent), exactly like store.get_setting(key, None)."""
+    """One head/hold value (None when absent), exactly like store.get_setting(key, None).
+
+    From the read projection's index the value is the index's own, handed out read-only (shared_tables.share;
+    a head or hold names a version id: its callers compare it or test it); SETTING_COPIES deep-copies it (the
+    reference the equivalence test compares with).
+    """
     from .personal_content_compensation import HOLD
     index = _read_index(store) if key.startswith((HEAD, HOLD)) else None
     if index is None:
         return store.get_setting(key, None)
-    return deepcopy((index.heads if key.startswith(HEAD) else index.holds).get(key))
+    value = (index.heads if key.startswith(HEAD) else index.holds).get(key)
+    if SETTING_COPIES:
+        return deepcopy(value)
+    from .shared_tables import share
+    return share(value)
+
+
+SETTING_COPIES = False
 
 
 def validate(value):

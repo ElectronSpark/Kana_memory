@@ -45,12 +45,32 @@ def _span(text, start, end):
 def _quotes(text, quotes, *, every=False):
     result = []
     for quote in quotes:
-        positions = [m.start() for m in re.finditer(re.escape(quote), text)]
+        positions = _positions(text, quote)
         if not positions:
             raise ValueError('Authored example focus is absent: ' + repr((text, quote)))
         for first in positions if every else positions[:1]:
             result.append(_span(text, first, first + len(quote)))
     return _merge_spans(text, result)
+
+
+def _positions(text, quote):
+    """The starts of the non-overlapping occurrences of ``quote`` in ``text``, left to right.
+
+    What re.finditer(re.escape(quote), text) finds: a literal pattern matches where str.find finds the
+    quote, and the next search starts after the match. An empty or non-string quote takes the expression
+    itself (an empty match advances by one; anything else fails as it did).
+    """
+    if QUOTE_FIND and isinstance(quote, str) and quote and isinstance(text, str):
+        found, start = [], text.find(quote)
+        while start >= 0:
+            found.append(start)
+            start = text.find(quote, start + len(quote))
+        return found
+    return [m.start() for m in re.finditer(re.escape(quote), text)]
+
+
+# _positions by str.find; False takes the regular expression (the reference the equivalence test compares with).
+QUOTE_FIND = True
 
 
 def _merge_spans(text, spans):

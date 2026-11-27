@@ -37,6 +37,48 @@ class NodeSelectionStatus:
         }
 
 
+_LEVELS = ("stages", "units", "sections", "entries")
+
+
+def _node_copy(overview):
+    """deepcopy(overview) as plain data for the selection, which changes only nodes and their child lists.
+
+    Every node (stage, unit, section, entry) and child list is new; a node's dict values (a section's
+    progress) are deep copies, as is every top-level value that is not a node (next_section is the copy of
+    its section, as deepcopy keeps it); the other values of a node (strings, flags, and the lists of the
+    route's static values, which the overview shares read-only: study_path.StudyPathService._overview) are
+    the overview's.
+    """
+    copies = {}
+
+    def node(value, level):
+        child = _LEVELS[level] if level < len(_LEVELS) else None
+        copy = {}
+        for key, part in value.items():
+            copy[key] = ([node(item, level + 1) for item in part] if key == child
+                         else _dict_copy(part) if isinstance(part, dict) else part)
+        copies[id(value)] = copy
+        return copy
+    stages = [node(stage, 1) for stage in overview["stages"]]
+    return {key: stages if key == "stages" else copies[id(part)] if isinstance(part, dict) and id(part) in copies
+            else deepcopy(part) for key, part in overview.items()}
+
+
+_ATOMS = (str, int, float, bool, type(None))
+
+
+def _dict_copy(value):
+    """deepcopy(value) of a dict: a flat dict of atoms (a section's progress) is copied flat."""
+    if all(type(item) in _ATOMS for item in value.values()):
+        return dict(value)
+    return deepcopy(value)
+
+
+# refresh copies the overview's nodes (_node_copy); False deep-copies it (the reference the equivalence test
+# compares with).
+NODE_COPY = True
+
+
 class StudyPathSelection:
     """Selection over one route's overview.
 
@@ -54,7 +96,7 @@ class StudyPathSelection:
 
     def refresh(self, overview):
         """Keep still-eligible choices when enrollment or the catalogue changes."""
-        snapshot = deepcopy(overview)
+        snapshot = _node_copy(overview) if NODE_COPY else deepcopy(overview)
         # Retired script-specific signs stay in the catalogue for old links,
         # but enrollment offers their one shared rule, not duplicate read flags.
         removed_sections, removed_units = set(), set()

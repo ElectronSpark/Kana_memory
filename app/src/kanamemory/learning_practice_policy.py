@@ -180,6 +180,95 @@ def _stem_gloss(unmet, stem_only, raw, enrolled):
                         for cid in unmet))
 
 
+def _known_set(item, state):
+    """The dependency gate's known set of one selection: the caller's known_background_ids and the item itself."""
+    known = state.get("known_background_ids", ())
+    known = {x for x in known if isinstance(x, str)} if isinstance(known, (list, tuple, set, frozenset)) else set()
+    known.add(item["id"])
+    return known
+
+
+def _enabled_kinds(item, ability, kinds, templates, shared):
+    """The caller's kinds that the item allows for ``ability``, in the caller's order, once each."""
+    from . import learning_questions as questions
+    if shared:
+        allowed = set(questions.question_kinds(item, ability=ability, templates=templates))
+    else:
+        allowed = set(questions.question_kinds(item, ability=ability))
+    return list(dict.fromkeys(k for k in kinds if isinstance(k, str) and k in allowed))
+
+
+def _usable_templates(item, ability, kinds, state, known, *, templates=None, shared=False):
+    """The templates of item x ability that _candidate_questions considers, in its order, lazily.
+
+    (kind, variant, raw template with its kind, requires, stem_only, practice metadata view) of every template
+    of an allowed, enabled kind that is not retired, that is a template (a dict; a legacy lesson's built
+    question), whose answer mode is available, whose practice metadata is valid and that is released for the
+    unit's reviews (Q5). Shared by _candidate_questions and has_practice_candidate.
+    """
+    from . import learning_questions as questions
+    enabled = _enabled_kinds(item, ability, kinds, templates, shared)
+    # The provider may append independently reviewed practice templates without
+    # rewriting a stored lesson or moving its original variant indices.
+    if not shared:
+        provider = getattr(questions, "practice_templates", None)
+        templates = provider(item) if provider else item.get("question_templates")
+    retired = questions.retired_practice_variants(item, templates)
+    reviews = review_count(state)
+    for kind in enabled:
+        variants = templates.get(kind, []) if isinstance(templates, dict) else None
+        sound = dict(questions.sound_variants(item, kind, known)) if kind in questions.SOUND_KINDS else None
+        if sound is not None and not sound:
+            # No variant for this learner yet (sound_variants), or no sound task for this word at all: never
+            # the bank's unknown words instead, also for a lesson without a template table (variants is None).
+            continue
+        numbers = (list(sound) if sound and (variants is None or variants)
+                   else range(len(variants) if variants is not None else 4))
+        for variant in numbers:
+            if (kind, variant) in retired:
+                continue
+            if variants is None:
+                try:
+                    raw = questions.build_learning_question(item, kind, variant=variant)
+                except (ValueError, KeyError, TypeError):
+                    continue
+            else:
+                raw = sound[variant] if sound else variants[variant]
+                if not isinstance(raw, dict):
+                    continue
+            # The dependency entry is keyed by the raw template as stored.
+            requires, stem_only = questions.template_facts(item, kind, raw)
+            template = raw if variants is not None and not sound else None  # a raw template: its overlay row
+            raw = dict(raw, kind=kind)
+            from .answer_input import available
+            if not available(dict(raw, family=item.get("family"), domain=item.get("domain"),
+                                  target_id=raw.get("target_id", item.get("id"))),
+                             system_japanese=state.get("system_japanese_input") is True, template=template):
+                continue
+            meta = practice_metadata_view(raw)   # read only here and in _descriptor
+            if "practice" in raw and meta is None:
+                continue  # Malformed metadata is not a legacy escape hatch.
+            if _opens_later(meta, reviews):
+                continue  # Q5: not yet released for this unit, so not a gap either.
+            yield kind, variant, raw, requires, stem_only, meta
+
+
+def has_practice_candidate(item, ability, kinds, state, *, templates=None, shared=False):
+    """Whether select_practice_plan(item, ability, kinds, state, history, templates=, shared=) chooses a task.
+
+    It returns None exactly when _candidate_questions (without ``admit``) yields nothing, and that yields
+    something exactly when one usable template (_usable_templates) has a string prompt and answer: such a
+    template becomes an entry of the met, fallback, early, stem-gloss or relaxed pass, and whichever of them
+    is not empty yields at least one entry (a duplicate is dropped only next to the entry it duplicates). The
+    history and the order do not matter for that, so this reads the templates only up to the first such one
+    and ranks nothing. Read only, like the selection; a content gap is recorded only by a selection.
+    """
+    known = _known_set(item, state)
+    return any(isinstance(raw.get("prompt"), str) and isinstance(raw.get("answer"), str)
+               for _kind, _variant, raw, *_facts in _usable_templates(
+                   item, ability, kinds, state, known, templates=templates, shared=shared))
+
+
 def _candidate_questions(item, ability, kinds, state, admit=None, templates=None, shared=False):
     """Enabled, available, dependency-safe descriptors for one item x ability.
 
@@ -246,21 +335,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     the caller for this very lesson (course_planning plans every ability of a
     lesson from one table); it is read here, never changed.
     """
-    from . import learning_questions as questions
-    if shared:
-        allowed = set(questions.question_kinds(item, ability=ability, templates=templates))
-    else:
-        allowed = set(questions.question_kinds(item, ability=ability))
-    enabled = list(dict.fromkeys(k for k in kinds if isinstance(k, str) and k in allowed))
-    # The provider may append independently reviewed practice templates without
-    # rewriting a stored lesson or moving its original variant indices.
-    if not shared:
-        provider = getattr(questions, "practice_templates", None)
-        templates = provider(item) if provider else item.get("question_templates")
-    retired = questions.retired_practice_variants(item, templates)
-    known = state.get("known_background_ids", ())
-    known = {x for x in known if isinstance(x, str)} if isinstance(known, (list, tuple, set, frozenset)) else set()
-    known.add(item["id"])
+    known = _known_set(item, state)
     gated, early_gated, gloss_gated, fallback, relaxed, missing = [], [], [], [], [], set()
     met_any = False
     seen = {True: set(), False: set()}
@@ -268,80 +343,47 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
     # The opening of this known set as a planning pass counted it once (state["early_opening"]); None:
     # early_rules counts it for each template that asks.
     opening = state.get("early_opening") if type(state.get("early_opening")) is bool else None
-    reviews, enrolled = review_count(state), _enrolled_reader(state)
+    enrolled = _enrolled_reader(state)
     sentence_aware = callable(state.get("met_sentences"))
-    for kind in enabled:
-        variants = templates.get(kind, []) if isinstance(templates, dict) else None
-        sound = dict(questions.sound_variants(item, kind, known)) if kind in questions.SOUND_KINDS else None
-        if sound is not None and not sound:
-            # No variant for this learner yet (sound_variants), or no sound task for this word at all: never
-            # the bank's unknown words instead, also for a lesson without a template table (variants is None).
+    for kind, variant, raw, requires, stem_only, meta in _usable_templates(
+            item, ability, kinds, state, known, templates=templates, shared=shared):
+        unmet = requires - known if requires is not None else frozenset()
+        missing |= unmet
+        if not isinstance(raw.get("prompt"), str) or not isinstance(raw.get("answer"), str):
             continue
-        numbers = (list(sound) if sound and (variants is None or variants)
-                   else range(len(variants) if variants is not None else 4))
-        for variant in numbers:
-            if (kind, variant) in retired:
-                continue
-            if variants is None:
-                try:
-                    raw = questions.build_learning_question(item, kind, variant=variant)
-                except (ValueError, KeyError, TypeError):
-                    continue
-            else:
-                raw = sound[variant] if sound else variants[variant]
-                if not isinstance(raw, dict):
-                    continue
-            # The dependency entry is keyed by the raw template as stored.
-            requires, stem_only = questions.template_facts(item, kind, raw)
-            template = raw if variants is not None and not sound else None  # a raw template: its overlay row
-            raw = dict(raw, kind=kind)
-            from .answer_input import available
-            if not available(dict(raw, family=item.get("family"), domain=item.get("domain"),
-                                  target_id=raw.get("target_id", item.get("id"))),
-                             system_japanese=state.get("system_japanese_input") is True, template=template):
-                continue
-            meta = practice_metadata_view(raw)   # read only here and in _descriptor
-            if "practice" in raw and meta is None:
-                continue  # Malformed metadata is not a legacy escape hatch.
-            if _opens_later(meta, reviews):
-                continue  # Q5: not yet released for this unit, so not a gap either.
-            unmet = requires - known if requires is not None else frozenset()
-            missing |= unmet
-            if not isinstance(raw.get("prompt"), str) or not isinstance(raw.get("answer"), str):
-                continue
-            descriptor = _descriptor(raw)
-            declared = requires is not None
-            entry = {**descriptor, "kind": kind, "variant": variant,
-                     "input_mode": raw.get("input_mode", "choice"),
-                     "reviewed_practice": meta is not None, "fallback": not declared}
-            if sentence_aware:
-                entry["sentence_source"] = raw  # read by select_practice_plan only when a sentence was met
-            early = gloss = ()
-            if unmet and early_allowance:
-                from .early_rules import early_rules
-                early = early_rules(unmet, known, target=item, kind=kind, question=raw, opening=opening)
-            if unmet and not early and enrolled is not None and stem_only:
-                gloss = _stem_gloss(unmet, stem_only, raw, enrolled)
-            if early:
-                entry["early_rules"] = list(early)
-            elif gloss:
-                entry["stem_gloss"] = list(gloss)
-            elif unmet:
-                entry["relaxed"] = len(unmet)
-            else:
-                met_any = True
-            if admit is not None and not admit(entry, raw):
-                continue
-            if unmet and not early and not gloss:
-                relaxed.append(entry)
-                continue
-            if early or gloss:
-                (early_gated if early else gloss_gated).append(entry)
-                continue
-            if (descriptor["fingerprint"], kind) in seen[declared]:
-                continue
-            seen[declared].add((descriptor["fingerprint"], kind))
-            (gated if declared else fallback).append(entry)
+        descriptor = _descriptor(raw)
+        declared = requires is not None
+        entry = {**descriptor, "kind": kind, "variant": variant,
+                 "input_mode": raw.get("input_mode", "choice"),
+                 "reviewed_practice": meta is not None, "fallback": not declared}
+        if sentence_aware:
+            entry["sentence_source"] = raw  # read by select_practice_plan only when a sentence was met
+        early = gloss = ()
+        if unmet and early_allowance:
+            from .early_rules import early_rules
+            early = early_rules(unmet, known, target=item, kind=kind, question=raw, opening=opening)
+        if unmet and not early and enrolled is not None and stem_only:
+            gloss = _stem_gloss(unmet, stem_only, raw, enrolled)
+        if early:
+            entry["early_rules"] = list(early)
+        elif gloss:
+            entry["stem_gloss"] = list(gloss)
+        elif unmet:
+            entry["relaxed"] = len(unmet)
+        else:
+            met_any = True
+        if admit is not None and not admit(entry, raw):
+            continue
+        if unmet and not early and not gloss:
+            relaxed.append(entry)
+            continue
+        if early or gloss:
+            (early_gated if early else gloss_gated).append(entry)
+            continue
+        if (descriptor["fingerprint"], kind) in seen[declared]:
+            continue
+        seen[declared].add((descriptor["fingerprint"], kind))
+        (gated if declared else fallback).append(entry)
     # Opening allowance: purely additive. The passes below are computed from the fully met
     # templates exactly as without it; a task that shows a not yet taught rule (with its
     # hint) is appended after them and never hides, replaces or precedes a task that needs
@@ -373,7 +415,7 @@ def _candidate_questions(item, ability, kinds, state, admit=None, templates=None
         return
     if missing and not met_any:
         from .content_gaps import record_gap
-        record_gap(item["id"], ability, len(missing), enabled)
+        record_gap(item["id"], ability, len(missing), _enabled_kinds(item, ability, kinds, templates, shared))
     if early_extra:
         # No fully met template: a simple rule with its hint, or a stem word with its gloss, is nearer
         # than the relaxed pass.

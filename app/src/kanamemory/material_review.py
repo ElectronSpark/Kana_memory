@@ -41,8 +41,50 @@ def without_order_translations(value):
 
 
 def fingerprint(value):
-    return hashlib.sha256(json.dumps(without_order_translations(value), ensure_ascii=False, sort_keys=True,
-                                    separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(_fingerprint_text(value).encode()).hexdigest()
+
+
+def _plain_text(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _mapping_as_dict(value):
+    # A read-only mapping (question templates read on demand) is written as the dict it stands for, as the
+    # view takes it; anything else JSON cannot write fails as it does for the view.
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _fingerprint_text(value):
+    """The text fingerprint() hashes: the JSON of without_order_translations(value).
+
+    That view differs from the value only by the order_translation keys it leaves out, the read-only
+    mappings it turns into dicts and the tuples it rebuilds (which JSON writes as lists either way). So when
+    the value itself serializes (a read-only mapping written as its dict) and its text has no
+    "order_translation" anywhere (no such key at any depth), its own JSON is that text, without building
+    the view; anything else takes the view. Under the test
+    suite's guard (shared_tables.GUARD) both are made and compared, so every value the tests fingerprint
+    proves it.
+    """
+    if not FINGERPRINT_SHORTCUT:
+        return _plain_text(without_order_translations(value))
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+                          default=_mapping_as_dict)
+    except (TypeError, ValueError):
+        text = None
+    if text is None or "order_translation" in text:
+        return _plain_text(without_order_translations(value))
+    from . import shared_tables
+    if shared_tables.GUARD and text != _plain_text(without_order_translations(value)):
+        raise AssertionError("fingerprint shortcut differs from the view's text")
+    return text
+
+
+# fingerprint without building without_order_translations' view when the value needs none; False builds it
+# always (the reference the equivalence test compares with).
+FINGERPRINT_SHORTCUT = True
 
 
 def item_fingerprint(item):
