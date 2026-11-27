@@ -305,6 +305,25 @@ def template_fingerprint(raw):
     return _template_fingerprint(raw)
 
 
+def dependency_fingerprint(kind, raw):
+    """(kind, sha256) under which question_dependencies declares raw asked as kind: its own, except that a heard
+    twin (a derived kind) is declared by its stored source (template_facts reads the same entry)."""
+    if kind in DERIVED_KINDS and isinstance(raw, dict):
+        return DERIVED_KINDS[kind], _template_fingerprint(_derived_source(raw))
+    return kind, _template_fingerprint(raw)
+
+
+def derived_templates(item):
+    """{derived kind: variants} of one lesson, as practice_templates lists them (each derived kind's own
+    template provider; a kind without variants is absent). For readers that build the other kinds themselves."""
+    result = {}
+    for kind in DERIVED_KINDS:
+        variants = _provided_templates(item, KIND_REGISTRY.get(kind))
+        if variants:
+            result[kind] = variants
+    return result
+
+
 def _namespace_covers(content_id):
     """The v1 question_dependencies namespace has an entry for this item."""
     return (isinstance(content_id, str) and _DEPENDENCIES.get("schema_version") == 1

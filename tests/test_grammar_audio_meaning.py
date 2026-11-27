@@ -293,3 +293,30 @@ def test_provider_returns_fresh_objects_and_keeps_the_lesson():
     assert item == before
     assert gam.chinese_instruction("选择意思") and gam.chinese_instruction("这是什么")
     assert not gam.chinese_instruction("練習、お疲れ様でした！乾杯！")
+
+
+def test_the_route_mix_reads_the_twins_and_gates_them_by_their_source_entries():
+    """route_mix.sources reads the templates the app selects from, the heard twins included (the app's own
+    provider), and a twin's readiness row is its source's: same fingerprint, same requirements."""
+    from kanamemory import content_pack
+    from kanamemory.route_mix import sources
+    item = lesson()
+    templates = lq.practice_templates(item)
+    providers = sources._providers(lq)
+    assert KIND not in {spec.kind for spec in providers}
+    read = sources._item_templates(item, {}, {spec.template_source: {} for spec in providers}, providers,
+                                   lambda: None)
+    assert read == {kind: rows for kind, rows in templates.items() if kind not in lq.SOUND_KINDS}
+    assert lq.derived_templates(item) == {KIND: templates[KIND]}
+    sources_sha = [lq.template_fingerprint(raw) for raw in templates[SOURCE]]
+    assert [lq.dependency_fingerprint(KIND, raw) for raw in templates[KIND]] == [(SOURCE, sha) for sha in sources_sha]
+    assert lq.dependency_fingerprint(SOURCE, templates[SOURCE][0]) == (SOURCE, sources_sha[0])
+    entry = {SOURCE: {sha: {"words": [f"word:demo:w{n}"]} for n, sha in enumerate(sources_sha)}}
+    namespace = {"schema_version": 1, "items": {item["id"]: entry}}
+
+    def load(name, default):
+        return namespace if name == content_pack.QUESTION_DEPENDENCIES else default
+    for kinds, heard in (((KIND,), HEARD), ((SOURCE,), range(len(PROMPTS))), ((), ())):
+        rows = sources.read_readiness([item["id"]], {item["id"]: item}, load=load, kinds=kinds).abilities(item["id"])
+        assert {sha for sha, _ in rows["understanding"]} == set(sources_sha)  # a twin is its source's question
+        assert set(rows.get("on:understanding", ())) == {(sources_sha[n], (f"word:demo:w{n}",)) for n in heard}

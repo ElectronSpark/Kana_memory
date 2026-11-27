@@ -159,14 +159,17 @@ def _providers(questions):
     """Kinds whose templates a provider takes from a reviewed namespace bound to the exact lesson
     (today context_choice: question_kinds/vocab_context.templates, read here without its copy)."""
     sound = frozenset(questions.SOUND_KINDS)
+    derived = questions.DERIVED_KINDS
     return tuple(spec for spec in questions.KIND_REGISTRY.with_template_provider()
-                 if spec.kind not in sound and isinstance(spec.template_source, str)
+                 if spec.kind not in sound and spec.kind not in derived and isinstance(spec.template_source, str)
                  and spec.template_source not in ("sound", "none"))
 
 
 def _item_templates(item, varied, provided, providers, identity) -> dict:
     """kind -> raw templates of one lesson as learning_questions.practice_templates lists them
-    (reviewed base and extension, then provider kinds), generated sound kinds left out; read-only.
+    (reviewed base and extension, then provider kinds, then the derived kinds: the heard twins of an
+    expression lesson, made by the app's own provider, learning_questions.derived_templates), generated
+    sound kinds left out; read-only.
 
     A lesson without stored question_templates (the legacy lessons whose base the app builds, or a
     grammar lesson read from GRAMMAR_QUESTIONS) takes practice_templates itself: they are few.
@@ -194,6 +197,8 @@ def _item_templates(item, varied, provided, providers, identity) -> dict:
         variants = (bound.get("templates") or {}).get(spec.kind) if bound else None
         if isinstance(variants, list) and variants:
             templates[spec.kind] = list(variants)
+    for kind, variants in questions.derived_templates(item).items():
+        templates[kind] = list(variants)
     return templates
 
 
@@ -215,16 +220,17 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
     allowed = [kind for kind in questions.question_kinds(item, templates=templates) if kind not in sound]
     prints = {}
 
-    def fingerprint(raw):
-        key = id(raw)
+    def fingerprint(raw, kind=None):
+        # A heard twin is keyed by its stored source, as the app's gate reads it (dependency_fingerprint).
+        key = (id(raw), kind in questions.DERIVED_KINDS)
         if key not in prints:
-            prints[key] = questions.template_fingerprint(raw)
+            prints[key] = questions.dependency_fingerprint(kind, raw)[1]
         return prints[key]
     retired = {}
     for kind, variant in questions.retired_practice_variants(item, templates):
         variants = templates.get(kind) or ()
         if 0 <= variant < len(variants):
-            retired.setdefault(kind, set()).add(fingerprint(variants[variant]))
+            retired.setdefault(kind, set()).add(fingerprint(variants[variant], kind))
     try:
         entry = declared.get(cid) if cid in declared else None
     except (KeyError, TypeError):
@@ -238,14 +244,19 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
             continue
         # Q8 (design 11 section 18): only templates open at introduction count; a leveled one is out like a
         # retired one. Only templates that name a level are fingerprinted for this.
-        gone = retired.get(kind, set()) | {fingerprint(raw) for raw in templates.get(kind, ()) if _opens_later(raw)}
+        gone = retired.get(kind, set()) | {fingerprint(raw, kind) for raw in templates.get(kind, ())
+                                           if _opens_later(raw)}
         never, merged = set(), {}
         # M5 over the switched-on kinds of the ability. Device variants (no system keyboard, speech not
         # ready) would add their own choice keys here, per template; not done (design 11 section 16.10).
         choices = (choice_key(ability),) if kind in switched else ()
-        requirements = entry.get(kind)
+        # A derived kind has no entry of its own: its twins are declared by their sources (only those
+        # whose twin the lesson has), and share the source's fingerprint, so an ability counts them once.
+        source = questions.DERIVED_KINDS.get(kind)
+        live = {fingerprint(raw, kind) for raw in templates.get(kind, ())} if source else None
+        requirements = entry.get(source or kind)
         for sha, requirement in (requirements.items() if isinstance(requirements, Mapping) else ()):
-            if sha in gone or not isinstance(requirement, Mapping):
+            if sha in gone or not isinstance(requirement, Mapping) or (live is not None and sha not in live):
                 continue
             if requirement.get("oov"):
                 never.add(sha)
@@ -257,7 +268,7 @@ def _item_readiness(item, declared, varied, provided, providers, questions, soun
             background = practice.get("background_ids") if isinstance(practice, Mapping) else None
             if not isinstance(background, list):
                 continue
-            sha = fingerprint(raw)
+            sha = fingerprint(raw, kind)
             if sha in gone or sha in never:
                 continue
             merged.setdefault(sha, set()).update(shared(value, value) for value in background if isinstance(value, str))
